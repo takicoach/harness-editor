@@ -1,0 +1,33 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+test-results/
+playwright-report/
+cut-baseline.json
+cutLearning.json
+cutLearning-aggregated.json
+# transcribe 用 Python の machine-local 指定（環境ごとに違うため追跡しない）
+.supermovie-python
+
+# 既定のプロジェクト置き場（start.command / start.bat が作る。利用者の動画プロジェクト）
+projects/
+
+# claude ローカル導入ジョブの生成物（npm install --prefix 先）
+.claude-runtime/
+
+# codex の隔離設定ディレクトリ（CODEX_HOME・auth.json のリンクと codex 自身の状態）
+.codex-runtime/
+
+# 作業用ディレクトリ（設計・レビューの下書き置き場。公開物には含めない）
+.superpowers/
+.dynamic-app-dev/
+.sdd/
+
+# 学習ループ e2e のグローバルストア（テスト実行時に生成・掃除）
+tests/.learning-home/
+src/server/__fixtures__/learning-diff-tmp*/
+src/server/__fixtures__/e2e-create-project-tmp/
+src/server/__fixtures__/status-live-tmp*/
+src/server/__fixtures__/tutorial-tmp*/
+src/server/__fixtures__/.sme-inbox.json*

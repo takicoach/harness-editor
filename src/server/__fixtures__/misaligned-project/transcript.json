@@ -1,0 +1,13 @@
+{
+  "engine": "mlx-whisper",
+  "language": "ja",
+  "duration_ms": 600000,
+  "words": [
+    { "text": "ゆる", "start": 500, "end": 800, "confidence": 0.9 },
+    { "text": "素振り", "start": 800, "end": 1200, "confidence": 0.88 }
+  ],
+  "segments": [
+    { "text": "ゆる素振り", "start": 500, "end": 1200 },
+    { "text": "末尾のダミー", "start": 599000, "end": 600000 }
+  ]
+}

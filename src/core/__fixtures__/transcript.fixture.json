@@ -1,0 +1,16 @@
+{
+  "engine": "mlx-whisper",
+  "model": "whisper-large-v3-mlx",
+  "language": "ja",
+  "duration_ms": 200000,
+  "words": [
+    { "text": "ゆる", "start": 500, "end": 800, "confidence": 0.9 },
+    { "text": "素振り", "start": 800, "end": 1200, "confidence": 0.88 },
+    { "text": "長い", "start": 3400, "end": 3700, "confidence": 0.91 },
+    { "text": "アイアン", "start": 3700, "end": 4200, "confidence": 0.87 }
+  ],
+  "segments": [
+    { "text": "ゆる素振り", "start": 500, "end": 1200 },
+    { "text": "長いアイアン", "start": 3400, "end": 4200 }
+  ]
+}

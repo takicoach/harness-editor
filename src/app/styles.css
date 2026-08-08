@@ -1,0 +1,2709 @@
+/* ====================================================================
+   Harness Editor — design tokens + base + layout
+   docs/design-reference/project/styles.css を土台に Plan 2A 用へ整理
+   ==================================================================== */
+
+:root {
+  /* ダーク既定＝claude.ai 合わせのウォームチャコール（真っ黒を避け目に優しく・アイボリー文字）。 */
+  --bg-0: #141413;
+  --bg-1: #1E1D1A;
+  --bg-2: #262521;
+  --bg-3: #2E2C27;
+  --bg-4: #38352E;
+
+  --border: #322F29;
+  --border-strong: #423E36;
+  --border-focus: rgba(224, 141, 109, 0.55);
+
+  --fg-0: #F5F4EE;
+  --fg-1: #C9C6BC;
+  --fg-2: #A3A096;
+  --fg-3: #75726A;
+
+  --accent: #E08D6D;
+  --accent-soft: rgba(224, 141, 109, 0.16);
+  --accent-strong: #EBA183;
+  --accent-tint: rgba(224, 141, 109, 0.09);
+  /* Phase 2 Plan B: 画像ブロック用のオレンジ系アクセント（テロップ/SE と区別）。 */
+  --accent-2: #f0a020;
+  --accent-3: #a070e0;
+  /* Task 10 BGM トラック用グリーン系アクセント。 */
+  --accent-4: #3fb27a;
+  /* 図形トラック用コーラル系アクセント（既存4色と識別可）。 */
+  --accent-5: #e05c8a;
+
+  /* Phase 2A: タイムライン トラック種別カラー（ダーク既定）。アイコン・色ストライプ・クリップに使う。 */
+  --track-video:  #8a93a8;
+  --track-jimaku: #5a9de0;
+  --track-title:  #a07ee0;
+  --track-telop:  #e0719e;
+  --track-image:  #e08050;
+  --track-vi:     #36b3c4;
+  --track-bgm:    #60a060;
+  --track-se:     #d6b54a;
+  --track-shape:  #e05c8a;
+
+  --danger: #E5645C;
+  --danger-soft: rgba(229, 100, 92, 0.16);
+
+  /* テーマ連動の直書き色（ダーク既定値）。[data-theme="light"] で上書きする。 */
+  --scrollbar-thumb: rgba(255,255,255,0.08);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.18);
+  --warn-fg: #E5C07B;
+  --hl-fg: #FFE57A;
+
+  /* Elevation shadows（ダーク既定＝黒系ドロップシャドウ）。
+     R-6: ライトテーマでは暖色トークンに上書きし、アイボリー面で黒影が濁って浮くのを防ぐ。 */
+  --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-clip: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-fab:  0 1px 4px rgba(0, 0, 0, 0.30);
+  --shadow-pop:  0 4px 12px rgba(0, 0, 0, 0.30);
+
+  /* タイムラインのルーラー（スクラブ帯）。トラックと差別化した「浮いた操作帯」に見せる。
+     上明るく下暗い微グラデ＝物理的なバーの丸み。ダーク＝トラックより一段明るい暖色チャコール。 */
+  --ruler-bg-top: #34322C;
+  --ruler-bg-bot: #26241F;
+  --ruler-baseline: #423E36;
+
+  /* 音声波形（canvas 描画）の色。テーマで視認性が変わるため出し分ける（R-7）。
+     ダーク＝暗い背面トラックに映える明るめブルーグレー。JS 側が getComputedStyle で読む。 */
+  --wave-rms: rgba(124, 148, 180, 0.60);
+  --wave-peak: rgba(124, 148, 180, 0.30);
+
+  --font-ui: "Inter", "Noto Sans JP", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --radius-sm: 5px;
+  --radius: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+
+  --topbar-h: 52px;
+  --folder-w: 244px;
+  --folder-w-collapsed: 44px;
+  /* 右ドック（文字起こし/設定/AI タブ）の幅。orientation で切替（縦は広め・横はプレビュー優先）。 */
+  --rightdock-w: 360px;
+  --rightdock-w-collapsed: 40px;
+  /* 字幕編集モードの設定側パネル（subpanel）の幅。文字起こしの右隣に並べる。 */
+  --subtitle-settings-w: 340px;
+  --folder-col: var(--folder-w);
+  --rightdock-col: var(--rightdock-w);
+  /* Phase 2 Plan B: 4 トラック構成（動画/テロップ/画像/SE）にあわせて 152 → 192px へ拡張。 */
+  /* 内訳: tl-head(30) + tl-ruler(30) + 4*tl-track(34) = 196px + 余白 */
+  --timeline-h: 240px; /* JS 適用前のフォールバック。実値は useTimelineHeight が反映 */
+  --row-pad-y: 14px;
+}
+
+/* ===== ライトテーマ（claude.ai 合わせ＝アイボリー＆スレート）。同名トークンを上書きするだけで切替 ===== */
+:root[data-theme="light"] {
+  --bg-0: #F0EEE6;
+  --bg-1: #FAF9F5;
+  --bg-2: #F4F2EA;
+  --bg-3: #E8E6DC;
+  --bg-4: #DFDBCE;
+
+  /* ライトは明るい地の上で輪郭が溶けやすいため、ダークより1段濃い線にする（UIレビュー ライト2）。 */
+  --border: #D9D4C6;
+  --border-strong: #BFBCB0;
+  --border-focus: rgba(217, 119, 87, 0.55);
+
+  --fg-0: #141413;
+  --fg-1: #3D3D3A;
+  --fg-2: #5E5D59;
+  --fg-3: #87867F;
+
+  --accent: #D97757;
+  --accent-soft: rgba(217, 119, 87, 0.14);
+  --accent-strong: #C4623F;
+  --accent-tint: rgba(217, 119, 87, 0.10);
+  --accent-2: #D9820E;
+  --accent-3: #7E57C2;
+  --accent-4: #2E9E68;
+  --accent-5: #c84070;
+
+  /* Phase 2A: タイムライン トラック種別カラー（ライト調整値）。 */
+  --track-video:  #6b7180;
+  --track-jimaku: #3f78c8;
+  --track-title:  #7E57C2;
+  --track-telop:  #c85a86;
+  --track-image:  #c25f33;
+  --track-vi:     #2b94a3;
+  --track-bgm:    #3e8c5f;
+  --track-se:     #b08f2c;
+  --track-shape:  #c84070;
+
+  --danger: #D14B45;
+  --danger-soft: rgba(209, 75, 69, 0.12);
+
+  --scrollbar-thumb: rgba(60, 52, 44, 0.20);
+  --scrollbar-thumb-hover: rgba(60, 52, 44, 0.34);
+  --warn-fg: #9A6B00;
+  --hl-fg: #8A6D00;
+
+  /* R-6: 暖色ドロップシャドウ（warm taupe）。黒だとアイボリー面で濁って浮くため、
+     彩度低めの暖色＋弱めの不透明度でやわらかく浮かせる。 */
+  --shadow-chip: 0 1px 2px rgba(72, 56, 40, 0.14);
+  --shadow-clip: 0 1px 3px rgba(72, 56, 40, 0.20);
+  --shadow-fab:  0 1px 4px rgba(72, 56, 40, 0.22);
+  --shadow-pop:  0 4px 14px rgba(72, 56, 40, 0.18);
+
+  /* ルーラー（スクラブ帯）ライト調整値＝アイボリートラックより一段濃い暖色グレージュ。 */
+  --ruler-bg-top: #EDEBE2;
+  --ruler-bg-bot: #E1DED2;
+  --ruler-baseline: #CDCAC0;
+
+  /* 波形（R-7）ライト＝明るいトラックに映える濃いめブルーグレー。 */
+  --wave-rms: rgba(78, 106, 142, 0.55);
+  --wave-peak: rgba(78, 106, 142, 0.28);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input, select { font: inherit; color: inherit; }
+/* ダークモードで UA 既定の白背景に明色文字が乗って読めなくなるのを防ぐ */
+select {
+  background: var(--bg-2);
+  color: var(--fg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+select option { background: var(--bg-2); color: var(--fg-0); }
+::selection { background: var(--accent-soft); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: content-box; }
+
+/* ===== App shell ===== */
+.app {
+  display: grid;
+  grid-template-rows: var(--topbar-h) auto 1fr;
+  height: 100vh;
+  background: var(--bg-0);
+}
+
+/* work+timeline を統合した 2D グリッド。data-layout で grid-template-areas を切替える（DOM 不変）。 */
+.stage {
+  display: grid;
+  grid-template-columns: var(--folder-col) 1fr var(--rightdock-col);
+  gap: 1px;
+  background: var(--border);
+  min-height: 0;
+  overflow: hidden;
+  transition: grid-template-columns .22s ease;
+}
+.stage > * { background: var(--bg-1); min-height: 0; min-width: 0; }
+.stage > .fb { grid-area: folder; }
+.stage > .lc { grid-area: folder; }
+.stage > .estack { grid-area: preview; }
+.stage > .rightdock { grid-area: dock; }
+.stage > .cl { grid-area: dock; } /* プロジェクト未オープン時のフォールバック埋め込み Claude。 */
+.stage > .tl { grid-area: timeline; }
+.stage > .subpanel { grid-area: settings; }
+
+/* 標準: プレビュー主役・タイムライン全幅。 */
+[data-layout="standard"] .stage {
+  grid-template-rows: 1fr var(--timeline-h);
+  grid-template-areas: "folder preview dock" "timeline timeline timeline";
+}
+/* 全高ドック: 右ドックを全高(2行ぶち抜き)・タイムラインはプレビュー幅まで。 */
+[data-layout="tall-dock"] .stage {
+  grid-template-rows: 1fr var(--timeline-h);
+  grid-template-areas: "folder preview dock" "timeline timeline dock";
+}
+/* 字幕編集: 全高ドック(文字起こし)＋その右隣に設定側パネル(字幕選択時のみ幅を持つ)。
+   テキストベース編集と設定を横並びで同時に見られる。タイムラインはプレビュー幅まで。 */
+[data-layout="subtitle"] .stage {
+  grid-template-columns: var(--folder-col) 1fr var(--rightdock-col) 0;
+  grid-template-rows: 1fr var(--timeline-h);
+  grid-template-areas:
+    "folder preview dock settings"
+    "timeline timeline dock settings";
+}
+[data-layout="subtitle"][data-subpanel="on"] .stage {
+  grid-template-columns: var(--folder-col) 1fr var(--rightdock-col) var(--subtitle-settings-w);
+}
+/* 波形編集: カット作業向け。プレビューとタイムラインの2段組で、タイムライン段を大きく取り
+   波形を見ながら空白地帯をカットしやすくする。行高はユーザーのリサイズ値(--timeline-h)と
+   画面の46%の大きい方を採用する。 */
+[data-layout="waveform"] .stage {
+  grid-template-rows: 1fr max(var(--timeline-h), 46%);
+  grid-template-areas: "folder preview dock" "timeline timeline timeline";
+}
+
+/* ホーム（プロジェクト未選択）＝カンバンボード専用モード。
+   タイムライン行と右ドック（埋め込み Claude 含む）を消し、ボードを全幅・全高にする。
+   data-layout のプリセットより後に書いて上書きする（DOM は不変・開いた瞬間に元へ戻る）。 */
+[data-home="on"] .stage,
+[data-home="on"][data-layout] .stage {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: "preview";
+}
+/* 左サイドバーも消す: 中央カードと同じ一覧が2つ並ぶ二重表示を避ける
+   （UIレビュー ホーム3）。プロジェクトを開くと元へ戻る（DOM は不変）。 */
+[data-home="on"] .stage > .lc,
+[data-home="on"] .stage > .tl,
+[data-home="on"] .stage > .rightdock,
+[data-home="on"] .stage > .cl,
+[data-home="on"] .stage > .subpanel { display: none; }
+
+/* data 属性は documentElement に付くため、変数で各列幅を切り替える。 */
+[data-folder="closed"] { --folder-col: var(--folder-w-collapsed); }
+/* 右ドックの開閉は claudeOpen が駆動（data-claude）。閉じたら3列目を細く。 */
+[data-claude="closed"] { --rightdock-col: var(--rightdock-w-collapsed); }
+/* 縦動画は映像が細長くプレビューが横幅を使わないので右ドックを広め。横はプレビュー優先で控えめ。 */
+[data-orientation="v"] { --rightdock-w: 420px; }
+[data-orientation="h"] { --rightdock-w: 340px; }
+
+/* プレビュー列。中央 1fr の主役。中身（Preview or 状態プレースホルダ）が列全体を満たす。
+   縦横とも同一（旧・横型の下部ストリップは廃止）。 */
+.estack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+.estack > * { flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--bg-1); }
+
+/* ===== 右ドック（文字起こし / 設定 / AI タブ） ===== */
+.rightdock { display: flex; flex-direction: column; background: var(--bg-1); overflow: hidden; min-height: 0; }
+.rightdock-collapsed { align-items: center; }
+.rightdock-tabs {
+  display: flex; align-items: center; gap: 2px;
+  background: var(--bg-1); border-bottom: 1px solid var(--border);
+  padding: 0 6px; flex-shrink: 0;
+}
+.rightdock-tab {
+  padding: 12px 12px 10px; font-size: 12.5px; color: var(--fg-2); font-weight: 600;
+  border: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  background: none; cursor: pointer; white-space: nowrap;
+  transition: color .12s, border-color .12s;
+}
+.rightdock-tab:hover { color: var(--fg-0); }
+.rightdock-tab.active { color: var(--fg-0); border-bottom-color: var(--accent); }
+.rightdock-collapse, .rightdock-expand {
+  margin-left: auto; background: none; border: none; color: var(--fg-3);
+  cursor: pointer; font-size: 14px; padding: 6px; line-height: 1;
+}
+.rightdock-collapse:hover, .rightdock-expand:hover { color: var(--fg-0); }
+.rightdock-expand { margin: 6px 0; }
+.rightdock-body { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.rightdock-body > .tx, .rightdock-body > .ins, .rightdock-body > .cl { flex: 1 1 auto; min-height: 0; }
+/* ドック埋め込み Claude（aside/トグル無し・中身のみ）。 */
+.cl-embedded { display: flex; flex-direction: column; min-height: 0; height: 100%; background: var(--bg-1); }
+
+/* 字幕編集モードの設定側パネル（subpanel）。文字起こしの右隣に全高で縦 1 列に設定を表示する。 */
+.subpanel { display: flex; flex-direction: column; min-height: 0; background: var(--bg-1); }
+.subpanel-head {
+  padding: 12px 14px 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--fg-2); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.subpanel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 12px; }
+
+/* ===== Toolbar ===== */
+.tb {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+}
+.tb-l, .tb-r { display: flex; align-items: center; gap: 6px; }
+.tb-proj {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: var(--radius);
+  color: var(--fg-0); border: 1px solid transparent;
+}
+.tb-proj svg { color: var(--fg-2); }
+/* ホーム時のブランド表示（プロジェクト名の代わりにアプリ名のみ）。 */
+.tb-brand strong { font-weight: 600; font-size: 13.5px; letter-spacing: 0.02em; }
+.tb-proj-meta { display: flex; flex-direction: column; line-height: 1.1; align-items: flex-start; }
+.tb-proj-meta small { font-size: 10.5px; color: var(--fg-2); letter-spacing: 0.02em; }
+.tb-proj-meta strong { font-weight: 500; font-size: 13px; }
+.tb-divider { width: 1px; height: 22px; background: var(--border); margin: 0 6px; }
+/* レイアウト切替（標準/全高/字幕）のセグメント。 */
+.layout-switcher { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-2); border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.layout-seg { padding: 4px 10px; font-size: 11.5px; font-weight: 600; color: var(--fg-2); background: none; border: none; border-radius: calc(var(--radius-sm) - 1px); cursor: pointer; white-space: nowrap; transition: color .12s, background .12s; }
+.layout-seg:hover { color: var(--fg-0); }
+.layout-seg.active { color: var(--accent-strong); background: var(--accent-soft); box-shadow: var(--shadow-chip); }
+.tb-icon-btn {
+  width: 32px; height: 32px; display: grid; place-items: center;
+  border-radius: var(--radius); color: var(--fg-1);
+  transition: background .12s, color .12s;
+}
+.tb-icon-btn:hover:not(:disabled) { background: var(--bg-2); color: var(--fg-0); }
+.tb-icon-btn:disabled { color: var(--fg-3); cursor: not-allowed; }
+.tb-unsaved {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--fg-2); padding: 0 4px 0 8px; font-size: 12px;
+}
+.tb-unsaved .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); }
+.tb-save {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 14px; background: var(--bg-2); color: var(--fg-2);
+  border: 1px solid transparent; /* enabled 時の枠と同幅にして高さブレを防ぐ */
+  border-radius: var(--radius); font-weight: 500; font-size: 12.5px;
+}
+.tb-save:disabled { cursor: not-allowed; }
+
+/* ===== 書き出し（render）ボタン / 進捗 ===== */
+.tb-render { display: flex; align-items: center; }
+.tb-render-btn {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 16px; background: var(--accent); color: #fff;
+  border-radius: var(--radius); font-weight: 600; font-size: 12.5px;
+  cursor: pointer; transition: background .12s, opacity .12s;
+}
+.tb-render-btn:hover:not(:disabled) { background: var(--accent-strong); }
+.tb-render-btn:disabled { background: var(--bg-2); color: var(--fg-3); cursor: not-allowed; }
+/* running / done / error は同じ帯（コンパクトなインライン表示）。 */
+.tb-render-running,
+.tb-render-done,
+.tb-render-error {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px 5px 10px; border-radius: var(--radius);
+  background: var(--bg-2); font-size: 12px; color: var(--fg-1);
+  max-width: 280px;
+}
+/* running はリング＋折り返すラベルぶん少しだけ広く取る（文字を省略しないため）。 */
+.tb-render-running { max-width: 340px; padding: 5px 6px 5px 8px; }
+/* done も同様。reveal エラー文が入ると 1 行に収まらないので折り返しを許す。 */
+.tb-render-done { max-width: 340px; flex-wrap: wrap; }
+/* トースト内の補足文（reveal エラー等）。ラベルと違い省略せず折り返す。 */
+.tb-render-note {
+  flex: 1 1 100%; min-width: 0; font-size: 11px; line-height: 1.4;
+  white-space: normal; overflow-wrap: anywhere;
+}
+
+/* ===== 書き出し進捗リング（横長バーの置き換え・2026-08-08） ===== */
+.tb-render-ring-wrap { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+.tb-render-ring-dial {
+  position: relative; flex: 0 0 auto; width: 40px; height: 40px;
+  display: grid; place-items: center;
+}
+.tb-render-ring { display: block; }
+.tb-render-ring-track { stroke: var(--border); }
+.tb-render-ring-value {
+  stroke: var(--accent);
+  transform: rotate(-90deg); transform-origin: 50% 50%;
+  transition: stroke-dashoffset .25s ease;
+}
+/* 進捗不定の区間は弧を回して「動いている」ことを示す。 */
+.tb-render-ring.indeterminate { animation: tb-render-spin 1.1s linear infinite; }
+.tb-render-ring.indeterminate .tb-render-ring-value { transition: none; }
+.tb-render-ring-pct {
+  position: absolute; font-size: 10px; font-weight: 700; line-height: 1;
+  color: var(--fg-0); font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+/* ラベルは省略しない（旧バー表示で「書き出…」と切れていたのが本改修の動機）。 */
+.tb-render-ring-label {
+  min-width: 0; line-height: 1.35; white-space: normal; overflow-wrap: anywhere;
+}
+.tb-render-progress {
+  position: relative; display: flex; align-items: center; gap: 7px;
+  min-width: 0; overflow: hidden;
+}
+/* percent バー: linear-gradient で軽量に。ラベルの下に敷く帯。 */
+.tb-render-progress { flex: 1 1 auto; }
+.tb-render-bar {
+  flex: 0 0 auto; height: 6px; min-width: 4px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  transition: width .2s ease;
+}
+.tb-render-spinner {
+  flex: 0 0 auto; width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: tb-render-spin .7s linear infinite;
+}
+@keyframes tb-render-spin { to { transform: rotate(360deg); } }
+.tb-render-label {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.tb-render-error .tb-render-label { color: var(--danger); }
+.tb-render-reveal {
+  padding: 4px 10px; background: var(--accent); color: #fff;
+  border-radius: var(--radius-sm); font-size: 11.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+.tb-render-reveal:hover { background: var(--accent-strong); }
+.tb-render-x {
+  flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center;
+  border-radius: var(--radius-sm); color: var(--fg-2); font-size: 15px; line-height: 1;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.tb-render-x:hover { background: var(--bg-1); color: var(--fg-0); }
+
+/* ===== Folder browser ===== */
+/* 左カラム: プロジェクト／素材タブの器。 */
+.lc { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); background: var(--bg-1); }
+.lc > .fb { flex: 1 1 auto; min-height: 0; border-right: none; }
+.lc-tabs { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.lc-tab { flex: 1 1 0; padding: 6px 4px; font-size: 12px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--fg-2); cursor: pointer; }
+.lc-tab:hover { background: var(--bg-2); }
+.lc-tab.active { background: var(--accent-soft); color: var(--fg-0); border-color: var(--border); }
+
+/* 素材ライブラリ。 */
+.material-lib { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; overflow: hidden; position: relative; }
+/* Finder からのファイルドロップ受付中のハイライトと案内 */
+.material-lib.ml-dragover::after {
+  content: ''; position: absolute; inset: 4px; border-radius: var(--radius-md);
+  border: 2px dashed var(--accent); background: var(--accent-soft);
+  pointer-events: none; z-index: 5;
+}
+.ml-drop-hint {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 6; pointer-events: none;
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  background: var(--fg-0); color: var(--bg-1);
+  font-size: 11.5px; font-weight: 700; white-space: nowrap;
+}
+.ml-upload-status {
+  flex: 0 0 auto; padding: 4px 10px;
+  font-size: 11px; color: var(--accent-strong); background: var(--accent-soft);
+}
+.ml-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; flex: 0 0 auto; }
+.ml-tab { padding: 4px 10px; font-size: 11px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--fg-2); cursor: pointer; }
+.ml-tab:hover { background: var(--bg-2); }
+.ml-tab.active { background: var(--accent-soft); color: var(--fg-0); border-color: var(--accent); }
+/* 空状態は「次にやること」を教える（見出し＋ヒント＋フォルダを開く）。 */
+.ml-empty { padding: 20px 16px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.ml-empty-title { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--fg-1); }
+.ml-empty-hint { margin: 0; font-size: 11.5px; color: var(--fg-3); line-height: 1.6; }
+.ml-open-folder {
+  margin-top: 6px; padding: 5px 12px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--fg-1); cursor: pointer; font-size: 11.5px; font-weight: 600;
+}
+.ml-open-folder:hover { border-color: var(--border-strong); background: var(--bg-3); }
+
+.ml-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; overflow-y: auto; min-height: 0; }
+.ml-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; cursor: grab; }
+.ml-row:hover { background: var(--bg-2); }
+.ml-row.selected { box-shadow: 0 0 0 2px var(--fg-0); }
+.ml-row.playing { background: var(--bg-3, rgba(255,255,255,0.06)); }
+.ml-row-wave { opacity: 0.7; }
+.ml-row-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
+.ml-row-state { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.ml-insert { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-1); color: var(--fg-2); cursor: pointer; }
+.ml-insert:hover { background: var(--bg-3); }
+
+.ml-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; overflow-y: auto; min-height: 0; }
+.ml-cell { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-1); cursor: grab; overflow: hidden; text-align: left; position: relative; }
+.ml-cell:hover { border-color: var(--fg-3); }
+.ml-cell.selected { box-shadow: 0 0 0 2px var(--fg-0); }
+.ml-thumb { aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; background: var(--bg-2); overflow: hidden; }
+.ml-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ml-thumb-video { font-size: 12px; color: var(--fg-3); }
+.ml-thumb-video-el { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--bg-1); }
+.ml-cell-name { font-size: 11px; padding: 0 6px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
+.ml-cell-insert { cursor: pointer; font-size: 11px; padding: 2px 8px; border-radius: var(--radius, 6px); background: var(--bg-2); color: var(--fg-1); border: 1px solid var(--border); position: absolute; right: 6px; bottom: 6px; opacity: 0; }
+.ml-cell:hover .ml-cell-insert, .ml-cell.selected .ml-cell-insert { opacity: 1; }
+.ml-cell-insert:hover { background: var(--bg-3, rgba(255,255,255,0.06)); }
+
+/* 素材ドラッグのゴースト。 */
+.material-ghost { position: fixed; z-index: 1000; pointer-events: none; padding: 4px 8px; font-size: 11px; border-radius: 6px; background: var(--bg-4); color: var(--fg-0); box-shadow: var(--shadow-pop); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border-strong); }
+
+.fb { display: flex; flex-direction: column; background: var(--bg-1); border-right: 1px solid var(--border); overflow: hidden; }
+.fb-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 12px; height: 44px; border-bottom: 1px solid var(--border); gap: 8px;
+}
+.fb-head h2 {
+  margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--fg-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 8px;
+}
+.fb-collapse {
+  width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: var(--radius-sm); color: var(--fg-2);
+}
+.fb-collapse:hover { background: var(--bg-2); color: var(--fg-0); }
+[data-folder="closed"] .fb-head { padding: 11px 0; justify-content: center; }
+.fb-list { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.fb-section-title {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 14px 6px; font-size: 10.5px;
+  letter-spacing: 0.08em; color: var(--fg-3); font-weight: 600;
+}
+.fb-counts { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); text-transform: none; }
+.fb-item {
+  display: grid; grid-template-columns: 42px 1fr auto;
+  align-items: center; gap: 8px;
+  padding: 7px 12px 7px 10px; border-left: 2px solid transparent;
+  cursor: pointer; transition: background .1s;
+}
+.fb-item:hover { background: var(--bg-2); }
+.fb-item.active { background: var(--accent-tint); border-left-color: var(--accent); }
+.fb-item.active .fb-item-name { color: var(--fg-0); }
+.fb-thumb {
+  width: 42px; height: 42px; background: #000; border-radius: 4px;
+  display: grid; place-items: center; overflow: hidden; position: relative;
+}
+.fb-thumb-inner { background: linear-gradient(180deg, #1a2330 0%, #0c1118 100%); position: absolute; inset: 0; }
+.fb-thumb.h { aspect-ratio: 16/9; height: 24px; width: 42px; }
+.fb-thumb.sq { width: 39px; height: 39px; }
+.fb-item-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.fb-item-name {
+  font-size: 12.5px; color: var(--fg-1); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fb-item-meta {
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+}
+.fb-item-meta .sep { opacity: 0.5; }
+.fb-orientation {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 1px 5px 1px 4px; background: var(--bg-3); border-radius: 3px;
+  font-size: 9.5px; font-family: var(--font-mono); color: var(--fg-1);
+}
+.fb-orientation.v { color: #88C5FF; }
+.fb-orientation.h { color: #FFB95E; }
+.fb-orientation.sq { color: #B98AFF; }
+.fb-active-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+/* AI 作業中（.sme/status.json の activity あり）の行強調。
+   作業中=アクセント色リング＋淡いシャドウでゆっくり明滅、stale（中断?）=グレーで静止。 */
+.fb-item.fb-working {
+  border-left-color: var(--accent);
+  border-radius: 4px;
+  animation: fb-working-pulse 2.2s ease-in-out infinite;
+}
+.fb-item.fb-working.stale {
+  border-left-color: var(--fg-3);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  animation: none;
+}
+.fb-activity {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10.5px; font-weight: 700; color: var(--accent);
+  white-space: nowrap; overflow: hidden;
+}
+.fb-activity .status-spinner { width: 8px; height: 8px; }
+.fb-activity.stale { color: var(--fg-3); font-weight: 500; }
+.fb-activity-label { overflow: hidden; text-overflow: ellipsis; }
+@keyframes fb-working-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px var(--accent), 0 0 10px rgba(217, 119, 87, 0.35); }
+  50% { box-shadow: inset 0 0 0 1px var(--accent), 0 0 3px rgba(217, 119, 87, 0.12); }
+}
+
+.fb-mini { display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 6px; }
+.fb-mini-item {
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  display: grid; place-items: center; background: var(--bg-2); cursor: pointer;
+}
+.fb-mini-item.active { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.fb-mini-item:hover { background: var(--bg-3); }
+.fb-mini-item.fb-working {
+  box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 8px rgba(217, 119, 87, 0.4);
+  animation: fb-working-pulse 2.2s ease-in-out infinite;
+}
+.fb-mini-item.fb-working.stale { box-shadow: inset 0 0 0 1.5px var(--border-strong); animation: none; }
+
+/* ===== Preview ===== */
+.pv { display: flex; flex-direction: column; background: var(--bg-1); padding: 16px; gap: 12px; overflow: hidden; }
+.pv-stage {
+  position: relative; flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  background: #000; border-radius: var(--radius-md); overflow: hidden; min-height: 0;
+}
+.pv-stage > * { max-width: 100%; max-height: 100%; }
+.pv-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+}
+.pv-foot-info { display: flex; align-items: center; gap: 12px; }
+.pv-reload-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+  background: transparent; border: 1px solid var(--border); border-radius: 5px;
+  padding: 3px 8px; cursor: pointer;
+}
+.pv-reload-btn:hover { color: var(--fg-1); border-color: var(--border-strong); background: var(--bg-2); }
+
+/* ===== Transcript (read-only in Plan 2A) ===== */
+.tx { display: flex; flex-direction: column; background: var(--bg-1); overflow: hidden; }
+.tx-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--border); gap: 16px;
+}
+.tx-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.tx-head .count { color: var(--fg-2); font-family: var(--font-mono); font-size: 11.5px; margin-left: 8px; }
+.tx-head-hint { font-size: 10.5px; color: var(--fg-3); text-align: right; line-height: 1.4; }
+.tx-misalign {
+  margin: 10px 16px 0; padding: 8px 12px; border-radius: 6px;
+  background: rgba(255, 200, 60, 0.10); border: 1px solid rgba(255, 200, 60, 0.35);
+  color: var(--fg-2); font-size: 12px; line-height: 1.6;
+}
+.tx-misalign {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+}
+.tx-misalign-btn {
+  padding: 6px 14px; border-radius: 5px; font-size: 12px; font-weight: 600;
+  background: var(--accent, #4a9eff); color: #fff; border: 0; cursor: pointer;
+}
+.tx-misalign-btn.ghost {
+  background: transparent; color: var(--fg-2); border: 1px solid var(--border);
+}
+.tx-misalign-btn:hover { filter: brightness(1.1); }
+.tx-misalign-completed { background: rgba(60, 200, 120, 0.10); border-color: rgba(60, 200, 120, 0.4); }
+.tx-misalign-failed { background: rgba(255, 80, 80, 0.10); border-color: rgba(255, 80, 80, 0.4); }
+.tx-list { flex: 1; overflow-y: auto; padding: 6px 0 40px; }
+.tx-row {
+  display: grid; grid-template-columns: 56px 1fr; align-items: start; gap: 14px;
+  padding: var(--row-pad-y) 20px; border-left: 2px solid transparent;
+  cursor: pointer; transition: background .12s;
+}
+.tx-row:hover { background: var(--bg-2); }
+.tx-row.selected { background: var(--accent-tint); border-left-color: var(--accent); }
+.tx-time { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-2); padding-top: 4px; }
+.tx-row.selected .tx-time { color: var(--accent-strong); }
+.tx-text { font-size: 15px; line-height: 1.75; color: var(--fg-0); white-space: pre-line; }
+
+/* ===== Inspector ===== */
+.ins { display: flex; flex-direction: column; background: var(--bg-1); overflow: hidden; }
+/* 中央に設定を出しているときの「← じまく一覧へ戻る」。選択解除で一覧へ戻す。 */
+.ins-back {
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-2); color: var(--fg-1);
+  border: 1px solid var(--border); cursor: pointer;
+  font-size: 11.5px; font-weight: 600;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.ins-back:hover { background: var(--bg-3); color: var(--fg-0); border-color: var(--border-strong); }
+/* 設定ヘッダのタイトル（何を編集中か）。戻る導線の右に置く。 */
+.ins-title { font-size: 12.5px; font-weight: 700; color: var(--fg-0); letter-spacing: .01em; }
+.ins-tabs { display: flex; align-items: center; gap: 10px; background: var(--bg-1); border-bottom: 1px solid var(--border); padding: 0 6px; flex-shrink: 0; }
+.ins-tab {
+  padding: 13px 12px 11px; font-size: 12.5px; color: var(--fg-2); font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+}
+.ins-tab:hover { color: var(--fg-0); }
+.ins-tab.active { color: var(--fg-0); border-bottom-color: var(--accent); }
+.ins-body { flex: 1; overflow-y: auto; position: relative; }
+
+/* ===== Timeline ===== */
+.tl {
+  display: flex; flex-direction: column; background: var(--bg-1);
+  border-top: 1px solid var(--border); overflow: hidden; position: relative;
+  --lane-row-h: 34px;   /* 1 レーンの高さ。他トラック(34px)と一致させ 1 レーン時を不変に */
+  --lane-inset: 4px;    /* ブロックの上下インセット（1レーン内の上下余白） */
+  --track-label-w: 88px; /* Task 4: トラック見出し幅を 88px へ拡張（TrackHeader アイコン分） */
+  /* Task 4: トラック種別カラートークンは :root / [data-theme=light] で定義（テーマ連動のため） */
+}
+/* タイムライン上端の水平リサイズハンドル。tl 内側は 4px に抑え .tl-head のボタン上端
+   （22px ボタンが 30px ヘッドに縦中央寄せ＝上端 ~4px）に被らない。上方向（プレビュー側）
+   へ 3px はみ出して掴みやすくする。 */
+.tl-resizer {
+  position: absolute; top: -3px; left: 0; right: 0; height: 7px;
+  cursor: row-resize; z-index: 20; touch-action: none;
+}
+/* 常時見えるグリップ（中央の小さなピル）。「ここを掴めば高さを変えられる」の目印。 */
+.tl-resizer::before {
+  content: ''; position: absolute; left: 50%; top: 2px; transform: translateX(-50%);
+  width: 44px; height: 4px; border-radius: 999px;
+  background: var(--border-strong); transition: background .12s, width .12s;
+}
+.tl-resizer:hover::before, .tl-resizer:active::before { background: var(--accent); width: 64px; }
+.tl-resizer::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 2px;
+  background: transparent; transition: background .12s;
+}
+.tl-resizer:hover::after { background: var(--accent); }
+.tl-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 14px; border-bottom: 1px solid var(--border); height: 30px;
+  position: relative; /* .tl-tool-hint（押せない理由）のアンカー */
+}
+.tl-head h2 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-2); }
+.tl-body {
+  flex: 1; display: block;
+  overflow-x: auto; overflow-y: auto;
+  position: relative; min-height: 0;
+}
+
+/* ===== 共通: ローディング / エラー / プレースホルダ ===== */
+.sme-center {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+  color: var(--fg-2); padding: 24px; text-align: center;
+}
+.sme-center p { margin: 0; font-size: 12.5px; }
+.sme-center p.hint { color: var(--fg-3); font-size: 11.5px; }
+.sme-error { color: var(--danger); }
+.sme-spinner {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--bg-3); border-top-color: var(--accent);
+  animation: sme-spin .8s linear infinite;
+}
+@keyframes sme-spin { to { transform: rotate(360deg); } }
+.sme-warnings {
+  margin: 10px 16px; padding: 8px 10px;
+  background: rgba(242, 179, 59, 0.10); border: 1px solid rgba(242, 179, 59, 0.28);
+  border-radius: var(--radius); font-size: 11.5px; color: var(--warn-fg);
+}
+.sme-warnings ul { margin: 4px 0 0; padding-left: 16px; }
+
+/* ====================================================================
+   Plan 2B-1 — 編集 UI（文字起こし編集・単語チップ・インスペクタ設定）
+   ==================================================================== */
+
+
+/* ===== Transcript — 行（編集対応） ===== */
+.tx-row { grid-template-columns: 56px 1fr 28px; }
+.tx-row-act {
+  width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: var(--radius-sm); color: var(--fg-3); opacity: 0;
+  transition: opacity .12s, background .12s, color .12s;
+}
+.tx-row:hover .tx-row-act, .tx-row.selected .tx-row-act { opacity: 1; }
+.tx-row-act:hover { background: var(--bg-3); color: var(--danger); }
+.tx-row.cut .tx-text { color: var(--danger); text-decoration: line-through; opacity: 0.65; }
+.tx-row.cut .tx-body { opacity: 0.6; }
+
+/* ===== Transcript — 単語チップ ===== */
+.tx-body { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+/* 単語チップの用途説明（選択行の先頭に1行）。チップが「押すとカット」だと分かるように。 */
+.tx-chip-caption { width: 100%; font-size: 10.5px; color: var(--fg-3); margin-bottom: 2px; }
+.tx-chip {
+  padding: 3px 7px; background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 13.5px; color: var(--fg-0);
+  cursor: pointer; transition: background .1s, border-color .1s;
+}
+.tx-chip:hover { background: var(--bg-4); border-color: var(--border-strong); }
+.tx-chip.cut {
+  color: var(--danger); background: var(--danger-soft);
+  text-decoration: line-through; text-decoration-thickness: 1.5px; opacity: 0.8;
+}
+.tx-chip.highlight { background: rgba(255, 200, 60, 0.16); color: var(--hl-fg); }
+.tx-text-edit {
+  width: 100%; background: var(--bg-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); padding: 6px 8px; font-size: 15px;
+  color: var(--fg-0); resize: vertical; line-height: 1.6;
+}
+.tx-text-edit:focus { outline: none; border-color: var(--accent); }
+.tx-row-tools {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+/* 分割/次と結合/音声処理など、行内の主要操作。脇役に見えない程度の存在感を持たせる。 */
+.tx-mini-btn {
+  padding: 4px 12px; font-size: 11.5px; font-weight: 600; color: var(--fg-1);
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); transition: background .1s, color .1s, border-color .1s;
+}
+.tx-mini-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-0); }
+.tx-mini-btn:disabled { color: var(--fg-3); cursor: not-allowed; }
+
+/* ===== Inspector — テロップ設定 ===== */
+.ins-section { padding: 16px 16px; border-bottom: 1px solid var(--border); }
+.ins-section:last-child { border-bottom: 0; }
+.ins-label {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; font-size: 11px; color: var(--fg-2);
+  letter-spacing: 0.02em;
+}
+.ins-num-field { display: inline-flex; align-items: baseline; gap: 2px; }
+.ins-num-field input {
+  width: 60px; text-align: right;
+  background: var(--bg-2); color: var(--fg-0);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 2px 6px; font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.ins-num-field input:focus { outline: none; border-color: var(--accent); }
+/* スライダー併用のためスピナー矢印は隠す（見た目をすっきり） */
+.ins-num-field input::-webkit-inner-spin-button,
+.ins-num-field input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.ins-num-field input[type="number"] { -moz-appearance: textfield; }
+.ins-num-suffix { font-size: 11px; color: var(--fg-2); }
+.ins-pack-hint { margin: 6px 0 0; font-size: 11px; color: var(--fg-3); }
+.ins-pack-error { margin: 6px 0 0; font-size: 11px; color: var(--danger); }
+.ins-hint { color: var(--fg-3); font-size: 12px; margin-top: 6px; }
+.ins-volume-presets { display: flex; gap: 6px; margin-top: 8px; }
+.ins-volume-preset {
+  flex: 1; padding: 4px 0; font-size: 12px; cursor: pointer;
+  background: var(--bg-2); color: var(--fg-1);
+  border: 1px solid var(--border); border-radius: var(--radius, 6px);
+}
+.ins-volume-preset:hover { background: var(--bg-3, rgba(255,255,255,0.06)); }
+.seg { display: flex; gap: 2px; background: var(--bg-2); border-radius: var(--radius-sm); padding: 2px; }
+.seg button {
+  flex: 1; padding: 6px 4px; font-size: 11.5px; color: var(--fg-2);
+  border-radius: var(--radius-sm); transition: background .1s, color .1s;
+}
+.seg button:hover { color: var(--fg-0); }
+.seg button.active { background: var(--accent); color: #fff; }
+.hl-row { display: flex; gap: 6px; }
+.hl-input {
+  flex: 1; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 8px; font-size: 12px; color: var(--fg-0);
+}
+.hl-input:focus { outline: none; border-color: var(--accent); }
+.num-row { display: flex; gap: 8px; }
+.num-field { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.num-field label { font-size: 10px; color: var(--fg-3); font-family: var(--font-mono); }
+.num-field input {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 5px 7px; font-size: 12px;
+  color: var(--fg-0); font-family: var(--font-mono); width: 100%;
+}
+.num-field input:focus { outline: none; border-color: var(--accent); }
+.pos-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 132px; }
+.pos-pad button {
+  aspect-ratio: 1; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); transition: background .1s;
+}
+.pos-pad button:hover { background: var(--bg-3); }
+.pos-pad button.active { background: var(--accent-soft); border-color: var(--accent); }
+.ins-empty { padding: 24px 16px; color: var(--fg-3); font-size: 12px; text-align: center; }
+
+/* ===== Toolbar — 未保存・保存 ===== */
+.tb-unsaved.dirty .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+/* 保存有効時はアクセント枠の強調（塗りコーラルは書き出しに独占させる）。 */
+.tb-save.enabled { background: var(--accent-soft); color: var(--accent-strong); border: 1px solid var(--accent); }
+.tb-save.enabled:hover { background: var(--accent-tint); border-color: var(--accent-strong); }
+/* 不透明必須: 半透明の danger-soft 単体だと下のタブ文字が透けて重なり読めない
+   （2026-07-24 実機FB）。不透明面（--bg-1）に薄い赤を重ねた2層背景＋影＋前面化。 */
+.tb-save-error {
+  position: fixed; right: 12px; top: 60px; max-width: 320px;
+  padding: 10px 12px;
+  background: linear-gradient(0deg, var(--danger-soft), var(--danger-soft)), var(--bg-1);
+  border: 1px solid var(--danger); border-radius: var(--radius);
+  font-size: 11.5px; line-height: 1.6; color: var(--danger);
+  z-index: 120; box-shadow: var(--shadow-pop);
+}
+
+/* ====================================================================
+   Plan 2B-2 — タイムライン（ルーラー・トラック・つまみ・ドラッグ）
+   ==================================================================== */
+
+/* ===== タイムライン ヘッダのツール（ズーム・総尺ラベル） ===== */
+.tl-head-tools { display: flex; align-items: center; gap: 10px; }
+.tl-total {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2);
+}
+.tl-total strong { color: var(--fg-0); font-weight: 600; }
+.tl-zoom { display: flex; align-items: center; gap: 2px; }
+.tl-zoom button {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  border-radius: var(--radius-sm); color: var(--fg-2);
+  background: var(--bg-2); font-size: 13px; line-height: 1;
+}
+.tl-zoom button:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-0); }
+.tl-zoom button:disabled { color: var(--fg-3); cursor: not-allowed; }
+
+/* ===== タイムライン本体（横スクロールするコンテナ） ===== */
+/* スクロールする内側。幅 = 原本全長 × pxPerFrame（インライン style で指定）。 */
+.tl-scroll { position: relative; min-height: 100%; }
+
+/* ===== ルーラー（スクラブ帯） ===== */
+/* トラックと差別化した「浮いた操作帯」。左右ドラッグで再生位置を動かす場所だと視覚的に伝える:
+   微グラデ＋2px ベースライン＋ ew-resize カーソル＋ホバー/スクラブ中の accent フィードバック。 */
+.tl-ruler {
+  position: sticky; top: 0; z-index: 7;
+  height: 30px;
+  border-bottom: 2px solid var(--ruler-baseline);
+  background: linear-gradient(var(--ruler-bg-top), var(--ruler-bg-bot));
+  cursor: ew-resize;
+  transition: border-color .12s, filter .12s;
+}
+/* ホバー＝「ここは触れる」合図。帯をわずかに持ち上げ、ベースラインに accent を薄く差す。 */
+.tl-ruler:hover { filter: brightness(1.06); border-bottom-color: color-mix(in srgb, var(--ruler-baseline) 55%, var(--accent)); }
+/* スクラブ中＝ベースラインを accent で強調。 */
+.tl-ruler:active { border-bottom-color: var(--accent); }
+.tl-tick {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1px solid var(--border-strong);
+}
+/* minor 目盛りは短く（上寄り）＝major の時刻ラベル線と主従をつける。 */
+.tl-tick.minor { bottom: 20px; border-left-color: var(--border); }
+.tl-tick-label {
+  position: absolute; top: 5px; left: 4px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--fg-2);
+  white-space: nowrap; pointer-events: none;
+}
+
+/* ===== トラック共通 ===== */
+.tl-track {
+  position: relative; height: 34px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+/* じまく・テロップ・画像・SE・サブ動画・BGM・図形はレーン数に応じて高さを自動拡張
+   （--lane-count はコンポーネントが inline 指定）。 */
+.tl-track-image,
+.tl-track-se,
+.tl-track-vi,
+.tl-track-telop,
+.tl-track-jimaku,
+.tl-track-bgm,
+.tl-track-shape {
+  height: calc(var(--lane-count, 1) * var(--lane-row-h));
+}
+/* Task 6: 可変行高。動画を主役に高く、テキスト系はコンパクト、音/素材系は中。
+   レーン式トラックは --lane-row-h を上書き（クリップ高・レーン縦位置が連動）。
+   非レーンの動画は height を直接指定（中の帯・波形・サムネが追従）。 */
+.tl-track-cut { height: var(--tl-track-cut-h, 58px); }
+.tl-track-jimaku,
+.tl-track-telop { --lane-row-h: 36px; }
+.tl-track-image { --lane-row-h: 40px; }
+.tl-track-vi    { --lane-row-h: 46px; }
+.tl-track-bgm   { --lane-row-h: 44px; }
+.tl-track-se    { --lane-row-h: 38px; }
+.tl-track-shape { --lane-row-h: 40px; }
+/* Task 5: TrackHeader — flex + カラーストライプ + アイコン + 名前 */
+.tl-track-label {
+  position: sticky; left: 0; z-index: 4;
+  display: flex; align-items: center; gap: 5px; height: 100%;
+  width: var(--track-label-w); box-sizing: border-box;
+  padding: 0 8px 0 12px; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.02em; color: var(--fg-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--bg-2); border-right: 1px solid var(--border);
+  pointer-events: none;
+}
+.tl-track-label::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--c, var(--fg-3)); border-radius: 0 2px 2px 0;
+}
+.tl-track-icon {
+  flex-shrink: 0; width: 12px; height: 12px; opacity: 0.75;
+  color: var(--c, var(--fg-2));
+}
+.tl-track-name { overflow: hidden; text-overflow: ellipsis; }
+/* Task 5: 種別ごとのカラー変数。CutTrack は tl-track-cut クラスを使うので別途設定 */
+.tl-track-cut    .tl-track-label { --c: var(--track-video);  }
+.tl-track-video  .tl-track-label { --c: var(--track-video);  }
+.tl-track-jimaku .tl-track-label { --c: var(--track-jimaku); }
+.tl-track-telop  .tl-track-label { --c: var(--track-telop);  }
+.tl-track-image  .tl-track-label { --c: var(--track-image);  }
+.tl-track-vi     .tl-track-label { --c: var(--track-vi);     }
+.tl-track-bgm    .tl-track-label { --c: var(--track-bgm);    }
+.tl-track-se     .tl-track-label { --c: var(--track-se);     }
+.tl-track-shape  .tl-track-label { --c: var(--track-shape);  }
+/* Task 7: クリック可能なトラック見出し（メイン動画選択）。 */
+.tl-track-label-clickable { cursor: pointer; pointer-events: auto; }
+.tl-track-label-selected { color: var(--accent); font-weight: 600; }
+/* ルーラー左の余白セル。トラック見出し（--track-label-w）と幅・背景を揃え、左カラムを上下連続させる。 */
+.tl-ruler-gutter {
+  position: sticky; left: 0; z-index: 6;
+  width: var(--track-label-w); height: 100%;
+  background: var(--bg-2); border-right: 1px solid var(--border);
+  pointer-events: none; cursor: default;
+}
+
+/* ===== 動画トラック ＝ 原本全長の帯＋カットブロック ===== */
+/* left はガター（--track-label-w）ぶんオフセットする。カット帯・つまみは frameToXMapped
+   （ガター込みの絶対 X）で置かれるため、背面の帯・波形・サムネもガター起点で揃えないと
+   frame=0 の位置がズレる（波形ズレの主因）。width 側は JS でガター無しの長さを渡す。 */
+.tl-video-base {
+  position: absolute; top: 7px; bottom: 7px; left: var(--track-label-w);
+  background: var(--bg-3); border-radius: var(--radius-sm);
+}
+.tl-cut {
+  position: absolute; top: 5px; bottom: 5px;
+  background: var(--danger-soft);
+  background-image: repeating-linear-gradient(
+    45deg, transparent, transparent 4px,
+    rgba(229, 100, 92, 0.45) 4px, rgba(229, 100, 92, 0.45) 8px
+  );
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+.tl-cut.pulse { animation: tl-pulse .5s ease; }
+@keyframes tl-pulse { 50% { box-shadow: 0 0 0 4px var(--danger-soft); } }
+
+/* ===== テロップトラック ＝ テロップブロック ===== */
+/* Task 6: 統一クリップ体裁（border-radius / gradient / box-shadow / selection ring） */
+.tl-telop {
+  position: absolute;
+  height: calc(var(--lane-row-h) - 2 * var(--lane-inset));
+  /* 磨き込み: グラデの“浮き”をやめ、画像/サブ動画/BGM と同じフラットなトラック色ベタ塗りに統一。 */
+  background: var(--track-jimaku);
+  border: 1px solid var(--bg-0);
+  border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow-clip);
+  cursor: grab; z-index: 1;
+}
+.tl-telop:active { cursor: grabbing; }
+.tl-telop:hover { filter: brightness(1.12); }
+/* 選択リングは白（--fg-0）に統一（画像/サブ動画/BGM/SE と同じ）。 */
+.tl-telop.selected { box-shadow: 0 0 0 2px var(--accent), var(--shadow-clip); filter: brightness(1.06); z-index: 3; }
+/* 手動追加（装飾）テロップ＝テロップカラーのベタ塗り。じまくは青系のまま。 */
+.tl-telop.manual { background: var(--track-telop); }
+.ins-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-1); cursor: pointer; }
+.ins-check input { cursor: pointer; }
+.tl-telop-text {
+  position: absolute; inset: 0; padding: 0 16px;
+  display: flex; align-items: center;
+  font-size: 10px; color: var(--fg-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* ===== 波形（動画トラック背面） ===== */
+/* canvas 裏バッファ幅はバケット数。CSS 幅は原本全長（引き伸ばし）。
+   left はガター起点（.tl-video-base と同じ理由・波形ズレの主因修正）。 */
+.tl-waveform {
+  position: absolute; top: 7px; left: var(--track-label-w); z-index: 0;
+  pointer-events: none; opacity: 0.9;
+}
+
+/* Phase 2B: クリップ内に敷く波形（BGM/SE 共用）。クリップ本体が position:absolute＝containing block。 */
+.tl-clip-waveform {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  z-index: 0; opacity: 0.5; pointer-events: none;
+}
+
+/* Phase 2B: 動画トラックの疎サムネ（フィルムストリップ）。波形と同層・半透明＝サムネ＋波形の重ね。
+   left は 0 のまま（.tl-video-base / .tl-waveform と違い、子サムネが frameToXMapped の
+   ガター込み絶対 X を自前で持つため、コンテナ自体はトラック左端＝座標原点に合わせる）。 */
+.tl-filmstrip { position: absolute; inset: 7px 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.tl-filmstrip-thumb {
+  position: absolute; top: 0; bottom: 0; height: 100%;
+  object-fit: cover; opacity: 0.55; border-right: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+/* ===== 双方向ハイライト帯（全トラック縦断・原本座標） ===== */
+.tl-hl-marker {
+  position: absolute; top: 0; bottom: 0; z-index: 1;
+  background: var(--accent-tint); opacity: 0.45;
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+/* ===== ハイライトされた単語チップ ===== */
+.tx-chip.hl {
+  box-shadow: 0 0 0 2px var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+/* ===== つまみ（グリップ） ===== */
+.tl-handle {
+  position: absolute; top: 0; bottom: 0; width: 10px;
+  display: grid; place-items: center;
+  cursor: ew-resize; z-index: 3;
+}
+.tl-handle.start { left: -5px; }
+.tl-handle.end { right: -5px; }
+.tl-handle::after {
+  content: ''; width: 3px; height: 60%;
+  background: var(--fg-1); border-radius: 2px;
+  transition: background .1s, width .1s, box-shadow .1s;
+}
+.tl-handle:hover::after,
+.tl-handle.active::after {
+  width: 5px; background: var(--accent-strong);
+  box-shadow: 0 0 6px var(--accent);
+}
+.tl-handle.selected::after { background: var(--accent); }
+
+/* ===== 再生ヘッド ===== */
+.tl-playhead {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1.5px solid var(--accent-strong);
+  pointer-events: none; z-index: 8;
+}
+.tl-playhead::before {
+  content: ''; position: absolute; top: -1px; left: -4px;
+  border: 4px solid transparent; border-top-color: var(--accent-strong);
+}
+.tl-playhead-chip {
+  position: absolute; top: -2px; left: 6px;
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--accent); color: #fff;
+  font-size: var(--fs-note); font-variant-numeric: tabular-nums;
+  pointer-events: none; white-space: nowrap;
+}
+
+/* ===== 吸着ガイド線 ＋ ラベル ===== */
+.tl-snapline {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1px dashed var(--accent); pointer-events: none; z-index: 6;
+}
+.tl-snapline-label {
+  position: absolute; top: 2px; left: 4px;
+  padding: 1px 5px;
+  /* 配色ルール: 時刻チップ＝サーモン / 操作・情報系＝反転色。
+     再生ヘッドの時刻チップ（サーモン）と重なっても見分けられる。 */
+  background: var(--fg-0); color: var(--bg-1);
+  border-radius: var(--radius-sm); font-size: 9.5px; white-space: nowrap;
+}
+
+/* ===== ドラッグ中ツールチップ ===== */
+.tl-tooltip {
+  position: absolute; z-index: 10; transform: translate(-50%, -120%);
+  padding: 3px 8px; background: var(--bg-4); color: var(--fg-0);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 10px; white-space: nowrap;
+  pointer-events: none;
+}
+.tl-tooltip .delta { color: var(--accent-strong); margin-left: 6px; }
+
+/* ===== タイムライン空状態 ===== */
+.tl-empty {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  color: var(--fg-3); font-size: 11.5px;
+}
+
+/* ===== 焼き込み変換バナー（スリム・控えめ・1行） ===== */
+.conv-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 5px 14px; background: var(--warn-bg, var(--bg-2));
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+/* タイトル＋説明を 1 行に並べて高さを抑える。説明は溢れたら省略。 */
+.conv-banner-text { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; }
+.conv-banner-text strong { font-size: 12px; color: var(--warn-fg); white-space: nowrap; }
+.conv-banner-text span { font-size: 11.5px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-banner-error { color: var(--danger); white-space: nowrap; }
+.conv-banner-btn {
+  flex-shrink: 0; padding: 4px 12px; border-radius: var(--radius-sm);
+  background: var(--danger); color: #fff; border: none; cursor: pointer;
+  font-size: 11.5px; font-weight: 600;
+}
+.conv-banner-btn:disabled { opacity: 0.6; cursor: progress; }
+
+/* ===== Preview overlay（テロップ直接ドラッグ・spec §9） ===== */
+.pv-overlay { position: absolute; inset: 0; pointer-events: none; }
+/* 描画モードではオーバーレイ全面をポインターイベント受付にする（pointer-events:none を上書き）。 */
+.pv-overlay.pv-drawing { pointer-events: auto; }
+.pv-safe {
+  position: absolute; pointer-events: none;
+  border: 1px dashed rgba(232, 234, 237, 0.22); border-radius: 2px;
+}
+.pv-platform {
+  position: absolute; pointer-events: none;
+  background: rgba(229, 100, 92, 0.10);
+  border-top: 1px dashed rgba(229, 100, 92, 0.4);
+}
+.pv-guide { position: absolute; pointer-events: none; background: rgba(59, 158, 255, 0.35); }
+.pv-guide.v { width: 1px; }
+.pv-guide.h { height: 1px; }
+.pv-guide.hit { background: var(--accent-strong); box-shadow: 0 0 4px var(--accent); }
+.pv-telop-box {
+  position: absolute; pointer-events: none;
+  border: 1.5px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent-tint);
+}
+.pv-telop-grab {
+  position: absolute; left: 0; top: 0; right: 0;
+  pointer-events: auto; cursor: move;
+}
+.pv-handle {
+  position: absolute; width: 14px; height: 14px; pointer-events: auto;
+  background: var(--accent); border: 2px solid #fff; border-radius: 50%;
+}
+.pv-handle.nw { left: -8px; top: -8px; cursor: nwse-resize; }
+.pv-handle.ne { right: -8px; top: -8px; cursor: nesw-resize; }
+.pv-handle.sw { left: -8px; bottom: -8px; cursor: nesw-resize; }
+.pv-handle.se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+
+/* ===== テロップ追加ボタン ===== */
+.tx-add-row { padding: 8px 14px 14px; }
+.tx-add-btn {
+  width: 100%; padding: 9px; border-radius: var(--radius);
+  background: var(--bg-2); border: 1px dashed var(--border-strong);
+  color: var(--fg-1); cursor: pointer; font-size: 11.5px; font-weight: 600;
+}
+.tx-add-btn:hover { background: var(--bg-3); color: var(--fg-0); border-color: var(--accent); }
+.tx-add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== タイムライン吸着トグル ===== */
+.tl-snap-toggle {
+  padding: 3px 9px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--fg-3); cursor: pointer; font-size: 10.5px; font-weight: 600;
+}
+/* ON はチェック印＋薄い塗りで「状態」を示す（塗りコーラルの CTA と区別する）。 */
+.tl-snap-toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.tl-snap-toggle.on::before { content: '✓ '; }
+.tl-snap-toggle:hover { border-color: var(--border-strong); }
+/* カット確認モードは通常再生と混同しないよう ON を警告色にする。 */
+.tl-cuts-bypass.on { background: rgba(220, 90, 70, 0.18); border-color: #d05a46; color: #e07a63; }
+
+/* --- Phase 2B: SE トラック（音源長ぶんの波形クリップ。旧ピンを置換）--- */
+.tl-se-clip {
+  position: absolute;
+  height: calc(var(--lane-row-h) - 2 * var(--lane-inset));
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--track-se) 36%, var(--bg-2)),
+    color-mix(in srgb, var(--track-se) 22%, var(--bg-2)));
+  border: 1px solid var(--track-se);
+  border-radius: var(--radius); overflow: visible;
+  box-shadow: var(--shadow-clip);
+  cursor: grab; z-index: 2;
+}
+/* コンテンツ（波形・ラベル）は内側でクリップ。端つまみは overflow:visible で親から外へ出る。 */
+.tl-se-clip-content {
+  position: absolute; inset: 0; overflow: hidden; border-radius: var(--radius);
+  pointer-events: none;
+}
+.tl-se-clip:active { cursor: grabbing; }
+.tl-se-clip:hover { filter: brightness(1.12); }
+.tl-se-clip.selected { box-shadow: 0 0 0 2px var(--accent), var(--shadow-clip); filter: brightness(1.06); z-index: 3; }
+.tl-se-clip.flagged { border-color: var(--danger); }
+.tl-se-label {
+  position: absolute; inset: 0; padding: 0 6px; z-index: 1;
+  display: flex; align-items: center; font-size: 9px; color: var(--fg-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+
+/* SE 端つまみ（左端/右端リサイズ）。BGM の tl-bgm-handle をミラー。 */
+.tl-se-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; z-index: 2; }
+.tl-se-handle-start { left: -3px; }
+.tl-se-handle-end { right: -3px; }
+.tl-se-handle::after {
+  content: ""; position: absolute; top: 22%; bottom: 22%; left: 50%;
+  width: 2px; transform: translateX(-50%); border-radius: 1px;
+  background: var(--fg-1); opacity: 0; transition: opacity .12s ease;
+  pointer-events: none;
+}
+.tl-track-se:hover .tl-se-handle::after { opacity: 0.5; }
+.tl-se-handle:hover::after { opacity: 1; }
+
+/* SE フェード三角（CSS border トリック）。BGM の tl-bgm-fade-* をミラー。
+   border-top-width は BGM と同じ calc(var(--lane-row-h) - 2 * var(--lane-inset) - 2px) を使う。 */
+.tl-se-fade-in {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* border-right-width は inline style で上書きされる（フェード長に連動）。 */
+  border-right-width: 0;
+  border-top-width: calc(var(--lane-row-h) - 2 * var(--lane-inset) - 2px);
+  border-bottom-width: 0;
+  border-left-width: 0;
+  border-top-color: rgba(0, 0, 0, 0.35);
+  border-right-color: transparent;
+  pointer-events: none; /* ヒットは tl-se-fade-hit が担う */
+  z-index: 2;
+}
+.tl-se-fade-out {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* border-left-width は inline style で上書きされる（フェード長に連動）。 */
+  border-left-width: 0;
+  border-top-width: calc(var(--lane-row-h) - 2 * var(--lane-inset) - 2px);
+  border-bottom-width: 0;
+  border-right-width: 0;
+  border-top-color: rgba(0, 0, 0, 0.35);
+  border-left-color: transparent;
+  pointer-events: none; /* ヒットは tl-se-fade-hit が担う */
+  z-index: 2;
+}
+
+/* SE フェードつまみ透明ヒット矩形（常時表示）。
+   fade=0 でも掴めるよう、区間つまみ（tl-se-handle: 端 ±3px）の内側 6px から配置。 */
+.tl-se-fade-hit {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 8px;
+  cursor: ew-resize;
+  pointer-events: all;
+  background: transparent;
+  z-index: 3; /* 区間つまみ z-index:2 より上で確実に取る */
+}
+.tl-se-fade-in-hit  { left: 6px; }
+.tl-se-fade-out-hit { right: 6px; }
+
+/* --- Phase 2: ＋SE ボタン --- */
+.tl-se-add {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--fg-0);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tl-se-add:hover:not(:disabled) {
+  background: var(--border);
+}
+.tl-se-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --- Phase 2: 画像トラック --- */
+.tl-image-block {
+  position: absolute;
+  height: calc(var(--lane-row-h) - 2 * var(--lane-inset));
+  background: var(--track-image);
+  border: 1px solid var(--bg-0);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-clip);
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--fg-0);
+  overflow: visible; /* 端つまみ（±3px はみ出し）をヒットテスト可能に。ラベルは自前で clip */
+  white-space: nowrap;
+  cursor: grab;
+  z-index: 1;
+}
+.tl-image-block:hover {
+  filter: brightness(1.15);
+}
+.tl-image-block.selected {
+  box-shadow: 0 0 0 2px var(--accent);
+  filter: brightness(1.06);
+  z-index: 3;
+}
+.tl-image-block.flagged {
+  background: var(--danger);
+}
+.tl-image-label {
+  pointer-events: none;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.tl-image-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 2;
+}
+.tl-image-handle-start { left: -3px; }
+.tl-image-handle-end { right: -3px; }
+
+/* --- 図形トラック（ShapeTrack）--- */
+.tl-shape {
+  position: absolute;
+  height: calc(var(--lane-row-h) - 2 * var(--lane-inset));
+  background: var(--track-shape);
+  border: 1px solid var(--bg-0);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-clip);
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--fg-0);
+  overflow: visible; /* 端つまみ（±3px はみ出し）をヒットテスト可能に。ラベルは自前で clip */
+  white-space: nowrap;
+  cursor: grab;
+  z-index: 1;
+}
+.tl-shape:hover { filter: brightness(1.15); }
+.tl-shape.selected { box-shadow: 0 0 0 2px var(--accent); filter: brightness(1.06); z-index: 3; }
+.tl-shape.flagged { background: var(--danger); }
+.tl-shape-label { pointer-events: none; text-overflow: ellipsis; overflow: hidden; }
+.tl-shape-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; z-index: 2; }
+.tl-shape-handle-start { left: -3px; }
+.tl-shape-handle-end { right: -3px; }
+.tl-shape-handle::after {
+  content: ""; position: absolute; top: 22%; bottom: 22%; left: 50%;
+  width: 2px; transform: translateX(-50%); border-radius: 1px;
+  background: var(--fg-1); opacity: 0; transition: opacity .12s ease;
+  pointer-events: none;
+}
+.tl-track-shape:hover .tl-shape-handle::after { opacity: 0.5; }
+.tl-shape-handle:hover::after { opacity: 1; }
+
+/* --- M6: サブ動画トラック（VideoInsertTrack） --- */
+.tl-vi-block {
+  position: absolute;
+  height: calc(var(--lane-row-h) - 2 * var(--lane-inset));
+  background: var(--track-vi);
+  border: 1px solid var(--bg-0);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-clip);
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--fg-0);
+  overflow: visible; /* 端つまみ（±3px はみ出し）をヒットテスト可能に。ラベルは自前で clip */
+  white-space: nowrap;
+  cursor: grab;
+  z-index: 1;
+}
+.tl-vi-block:hover { filter: brightness(1.15); }
+.tl-vi-block.selected { box-shadow: 0 0 0 2px var(--accent); filter: brightness(1.06); z-index: 3; }
+.tl-vi-block.flagged { background: var(--danger); }
+.tl-vi-label { pointer-events: none; text-overflow: ellipsis; overflow: hidden; }
+.tl-vi-speed-badge {
+  pointer-events: none;
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 1px 4px;
+  font-size: 9px;
+  line-height: 1.4;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.35);
+  color: var(--fg-0);
+  opacity: 0.85;
+}
+/* Task 9: メイン動画トラック速度バッジ（.tl-vi-speed-badge と同型）。 */
+.tl-main-speed-badge {
+  pointer-events: none;
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 1px 4px;
+  font-size: 9px;
+  line-height: 1.4;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.35);
+  color: var(--fg-0);
+  opacity: 0.85;
+}
+.tl-vi-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; z-index: 2; }
+.tl-vi-handle-start { left: -3px; }
+.tl-vi-handle-end { right: -3px; }
+
+/* --- Task 10: BGM トラック（BgmTrack）／自動レーン対応（2026-06-15） --- */
+.tl-bgm-block {
+  position: absolute;
+  height: calc(var(--lane-row-h) - 2 * var(--lane-inset));
+  background: var(--track-bgm);
+  border: 1px solid var(--bg-0);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-clip);
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--fg-0);
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: grab;
+  z-index: 1;
+}
+.tl-bgm-block:hover { filter: brightness(1.15); }
+.tl-bgm-block.selected { box-shadow: 0 0 0 2px var(--accent); filter: brightness(1.06); z-index: 3; }
+.tl-bgm-block.flagged { background: var(--danger); }
+.tl-bgm-label { position: relative; z-index: 1; pointer-events: none; text-overflow: ellipsis; overflow: hidden; }
+.tl-bgm-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; z-index: 2; }
+.tl-bgm-handle-start { left: -3px; }
+.tl-bgm-handle-end { right: -3px; }
+
+/* 端つまみの気付きやすさ: 端に縦グリップを描く。既定は控えめ、トラック/つまみ hover で明示。
+   幅・位置（±3px）は触らず視認性だけ足すため、本体ドラッグとの当たり分けは不変。 */
+.tl-image-handle::after, .tl-vi-handle::after, .tl-bgm-handle::after {
+  content: ""; position: absolute; top: 22%; bottom: 22%; left: 50%;
+  width: 2px; transform: translateX(-50%); border-radius: 1px;
+  background: var(--fg-1); opacity: 0; transition: opacity .12s ease;
+  pointer-events: none;
+}
+.tl-track-image:hover .tl-image-handle::after,
+.tl-track-vi:hover .tl-vi-handle::after,
+.tl-track-bgm:hover .tl-bgm-handle::after { opacity: 0.5; }
+.tl-image-handle:hover::after, .tl-vi-handle:hover::after, .tl-bgm-handle:hover::after { opacity: 1; }
+
+/* フェードつまみ三角（CSS border トリック）。
+   fadeIn: 左上の右向き三角。borderRight でフェード幅を表現。
+   fadeOut: 右上の左向き三角。borderLeft でフェード幅を表現。
+   height は border-top-width で制御（ブロック高 - 2px）。 */
+.tl-bgm-fade-in {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* border-right-width は inline style で上書きされる（フェード長に連動）。 */
+  border-right-width: 0;
+  border-top-width: calc(var(--lane-row-h) - 2 * var(--lane-inset) - 2px);
+  border-bottom-width: 0;
+  border-left-width: 0;
+  border-top-color: rgba(0, 0, 0, 0.35);
+  border-right-color: transparent;
+  pointer-events: none; /* ヒットは tl-bgm-fade-hit が担う */
+  z-index: 2;
+}
+.tl-bgm-fade-out {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* border-left-width は inline style で上書きされる（フェード長に連動）。 */
+  border-left-width: 0;
+  border-top-width: calc(var(--lane-row-h) - 2 * var(--lane-inset) - 2px);
+  border-bottom-width: 0;
+  border-right-width: 0;
+  border-top-color: rgba(0, 0, 0, 0.35);
+  border-left-color: transparent;
+  pointer-events: none; /* ヒットは tl-bgm-fade-hit が担う */
+  z-index: 2;
+}
+
+/* フェードつまみ透明ヒット矩形（常時表示）。
+   fade=0 でも掴めるよう、区間つまみ（tl-bgm-handle: 端 ±3px）の内側 6px から配置。
+   三角の pointer-events:none と組み合わせてヒット責任を一本化する。 */
+.tl-bgm-fade-hit {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 8px;
+  cursor: ew-resize;
+  pointer-events: all;
+  background: transparent;
+  z-index: 3; /* 区間つまみ z-index:2 より上で確実に取る */
+}
+.tl-bgm-fade-in-hit  { left: 6px; }
+.tl-bgm-fade-out-hit { right: 6px; }
+
+/* --- Phase 2: ＋画像ボタン / ＋サブ動画ボタン / ＋BGM ボタン --- */
+.tl-image-add,
+.tl-vi-add,
+.tl-bgm-add {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--fg-0);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tl-image-add:hover:not(:disabled),
+.tl-vi-add:hover:not(:disabled),
+.tl-bgm-add:hover:not(:disabled) {
+  background: var(--border);
+}
+.tl-image-add:disabled,
+.tl-vi-add:disabled,
+.tl-bgm-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ===== 範囲選択帯（カット前・青系で赤ハッチのカットと区別） ===== */
+.tl-cut-selection {
+  position: absolute; top: 0; bottom: 0; z-index: 2;
+  background: var(--accent-soft); opacity: 0.5;
+  border-left: 2px solid var(--accent-strong);
+  border-right: 2px solid var(--accent-strong);
+  pointer-events: none;
+}
+
+/* 範囲選択カットの確定フローティングボタン（選択帯の中央上に浮く） */
+.tl-cut-fab {
+  position: absolute;
+  /* 再生ヘッドの時刻チップ（top:-2px・z-index:8）と重ならないよう一段下＋前面に置く */
+  top: 22px;
+  z-index: 9;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.tl-cut-fab-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  /* 時刻チップ（アクセント色）と同色で溶けないよう反転配色にする */
+  background: var(--fg-0);
+  border: 1px solid var(--accent-strong);
+  color: var(--bg-1);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-fab);
+}
+.tl-cut-fab-btn:hover {
+  background: var(--accent-strong);
+  color: #fff;
+}
+.tl-cut-fab-hint {
+  pointer-events: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg-3);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+/* 「カット」ボタン（タイムラインツール群・吸着トグルと同系の小ボタン） */
+.tl-cut-confirm {
+  padding: 3px 9px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--fg-3); cursor: pointer; font-size: 10.5px; font-weight: 600;
+}
+.tl-cut-confirm:not([aria-disabled="true"]) { color: var(--accent-strong); border-color: var(--accent); }
+.tl-cut-confirm:hover:not([aria-disabled="true"]) { border-color: var(--border-strong); }
+/* aria-disabled: 見た目は無効だがクリックは受け付け、押せない理由をヒント表示する */
+.tl-cut-confirm[aria-disabled="true"] { color: var(--fg-3); cursor: not-allowed; opacity: 0.5; }
+/* 「カットを開ける」文脈（選択がカット内側に完全内包時。復活を示す緑系） */
+.tl-cut-confirm.open-mode:not([aria-disabled="true"]) { color: #3d9a5f; border-color: #3d9a5f; }
+.tl-split {
+  padding: 3px 9px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--fg-3); cursor: pointer; font-size: 10.5px; font-weight: 600;
+}
+.tl-split:hover:not([aria-disabled="true"]) { border-color: var(--border-strong); }
+.tl-split[aria-disabled="true"] { color: var(--fg-3); cursor: not-allowed; opacity: 0.5; }
+
+/* ツールバーのグループ区切り（表示系 | 破壊系 | 追加系 | ズーム） */
+.tl-sep { width: 1px; height: 14px; background: var(--border-strong); flex-shrink: 0; }
+
+/* JKL トランスポートの存在を示す小さなキーヒント（hover で操作説明） */
+.tl-transport-hint {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+  color: var(--fg-3); cursor: help; user-select: none; flex-shrink: 0;
+}
+.tl-transport-hint:hover { color: var(--fg-1); }
+
+/* 早送り・巻き戻し中の速度バッジ（等速では出さない） */
+.tl-rate-badge {
+  padding: 2px 7px; border-radius: var(--radius-sm);
+  background: var(--accent-soft); color: var(--accent-strong);
+  border: 1px solid var(--accent);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  white-space: nowrap; flex-shrink: 0;
+}
+
+/* 押せないボタンの理由ヒント（ツールバー直下・4秒で自動消滅） */
+.tl-tool-hint {
+  position: absolute; top: 30px; right: 14px; z-index: 20;
+  padding: 5px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-4); color: var(--fg-0);
+  border: 1px solid var(--border-strong); box-shadow: var(--shadow-pop);
+  font-size: 11px; white-space: nowrap;
+}
+
+/* 「＋ 追加」— 塗りコーラルは画面内で「書き出し」に独占させるため、
+   こちらはアクセント枠の強調ボタンに留める（UIレビュー エディタ4）。 */
+.tl-add-menu-btn {
+  padding: 3px 12px; border-radius: var(--radius-sm);
+  background: var(--accent-soft); border: 1px solid var(--accent);
+  color: var(--accent-strong); cursor: pointer; font-size: 10.5px; font-weight: 700;
+}
+.tl-add-menu-btn:hover { background: var(--accent-tint); border-color: var(--accent-strong); }
+
+/* --- Phase 1.5: 外部変更バナー --- */
+.ext-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border);
+}
+.ext-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--fg-0);
+}
+.ext-banner-text strong { font-weight: 600; }
+.ext-banner-btn {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 12px;
+  color: var(--fg-0);
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ext-banner-btn:hover { filter: brightness(1.1); }
+
+/* --- 同梱部品の更新（⚠ バッジのメニュー内・旧 常設バナーから移設） --- */
+.tb-pack-upgrade {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 6px 12px 8px; font-size: 12px; color: var(--fg-0);
+}
+.tb-pack-hint { padding: 0 12px 10px; font-size: 11px; color: var(--fg-3); }
+.pack-upgrade-btn {
+  height: 26px; padding: 0 14px; font-size: 11.5px; font-weight: 600;
+  color: var(--accent-strong); background: var(--accent-soft);
+  border: 1px solid var(--accent); border-radius: 6px; cursor: pointer;
+  white-space: nowrap;
+}
+.pack-upgrade-btn:not(:disabled):hover { background: var(--accent-tint); border-color: var(--accent-strong); }
+.pack-upgrade-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* --- テロップパック: 導入 CTA + スタイルピッカー --- */
+.ins-pack-cta { display: flex; flex-direction: column; gap: 8px; }
+.ins-pack-cta p { margin: 0; font-size: 11.5px; color: var(--fg-3); }
+.ins-pack-install {
+  padding: 7px 12px; border-radius: var(--radius-sm);
+  background: var(--accent); border: 1px solid var(--accent-strong);
+  color: #fff; font-weight: 600; font-size: 12px; cursor: pointer;
+}
+.ins-pack-install:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* --- インスペクタ共通の小物（CSS 未定義監査 2026-07-09 で発見された素の要素たち） --- */
+/* 色スウォッチ（図形の色 / シーン転換の色）: サイズ未指定だと潰れて見えない */
+.ins-shape-colors, .swatch-row { display: flex; gap: 6px; margin-top: 6px; }
+.ins-shape-color-btn, .swatch {
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer; padding: 0;
+}
+.ins-shape-color-btn.active, .swatch.active { outline: 2px solid var(--fg-0); outline-offset: 1px; }
+/* 「全カットに一括適用」などの汎用アクションボタン */
+.hl-btn {
+  padding: 5px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--fg-1); cursor: pointer; font-size: 11.5px; font-weight: 600;
+}
+.hl-btn:hover { border-color: var(--border-strong); color: var(--fg-0); }
+/* 再生速度プリセットの行（.ins-volume-presets と同型） */
+.ins-vi-speed-presets { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+/* サブ動画: 素材の実尺表示（プローブ済みのファイルのみ数値が入る） */
+.ins-vi-source-len {
+  margin: 4px 0 0; font-size: 11px; color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+/* サブ動画: 区間が素材の終端を越えているときの警告（イン点・速度由来） */
+.ins-vi-overflow-warn {
+  margin: 6px 0 0; font-size: 11px; color: var(--warn-fg); line-height: 1.5;
+}
+/* 数値の現在値表示（速度・位置・大きさ・回転） */
+.ins-vi-speed-value,
+.ins-seg-scale-value, .ins-seg-posx-value, .ins-seg-posy-value, .ins-seg-rotation-value,
+.ins-ml-scale-value, .ins-ml-posx-value, .ins-ml-posy-value, .ins-ml-rotation-value {
+  color: var(--fg-0); font-variant-numeric: tabular-nums;
+}
+/* キーフレーム一覧: 1点ずつカード化して視認しやすく */
+.ins-kf-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ins-kf-point {
+  padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-2); display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+}
+.ins-kf-point-title { font-size: 11px; font-weight: 700; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+.ins-kf-fields { display: flex; flex-direction: column; gap: 4px; align-self: stretch; }
+.ins-style-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px;
+}
+.ins-style-item {
+  text-align: left; padding: 6px 8px; border-radius: var(--radius-sm);
+  background: transparent; color: var(--fg-1); font-size: 12px; cursor: pointer;
+}
+.ins-style-item:hover { background: var(--bg-2); }
+.ins-style-item.active { background: var(--accent-soft); color: var(--fg-0); font-weight: 600; }
+.ins-pos-apply-all {
+  margin-top: 6px; width: 100%; padding: 6px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--fg-1);
+  font-size: 11.5px; cursor: pointer;
+}
+.ins-pos-apply-all:hover { border-color: var(--border-strong); }
+
+/* スタイルの適用範囲トグル（グリッドの上に常設） */
+.ins-style-scope { margin-bottom: 4px; }
+.ins-style-scope-hint {
+  margin: 0 0 6px; font-size: 11px; color: var(--fg-3); line-height: 1.4;
+}
+
+/* テロップスタイル選択グリッド（パック導入済み時） */
+.ins-style-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.ins-style-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 0 4px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #000;
+  cursor: pointer;
+  overflow: hidden;
+}
+.ins-style-cell.active {
+  border-color: var(--accent, #7aa2ff);
+}
+/* セル内の描画ステージ：固定アスペクト＋はみ出しを隠す */
+.ins-style-cell-stage {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: #000;
+}
+/* 下端中央アンカーで拡大表示（空の上半分はステージ外へ隠れる）。
+   height のズーム率は視認性で調整可。aspect-ratio はインライン --comp-aspect で歪み防止。 */
+.swatch-fit {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 360%;
+  aspect-ratio: var(--comp-aspect, 0.5625);
+}
+.ins-style-cell-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  box-sizing: border-box;
+  color: #cfcfcf;
+  font-size: 10px;
+  opacity: 0.7;
+  text-align: center;
+}
+.ins-style-cell-cap {
+  font-size: 9px;
+  color: #cfcfcf;
+  opacity: 0.8;
+  text-align: center;
+  padding: 0 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===== Claude panel ===== */
+.cl { display: flex; flex-direction: column; background: var(--bg-1); overflow: hidden; }
+.cl-collapsed { align-items: center; }
+.cl-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 12px; height: 44px; border-bottom: 1px solid var(--border); gap: 8px;
+}
+.cl-head h2 {
+  margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--fg-1); white-space: nowrap;
+}
+.cl-toggle {
+  width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: var(--radius-sm); color: var(--fg-2); font-size: 14px;
+}
+.cl-toggle:hover { background: var(--bg-2); color: var(--fg-0); }
+.cl-collapsed .cl-toggle { margin-top: 11px; }
+
+/* feat/simplified-ai-tab: 在席2段表示・指示履歴・入力欄・上下2段折りたたみの CSS
+   （.cl-history / .cl-upper / .cl-term-head / .cl-agent-* / .cl-dedicated-recruit /
+   .cl-agent-warn / .cl-item* / .cl-input / .cl-textarea / .cl-send）は
+   AI タブが AiTerminal のみになったため削除。.cl-setup-note だけは
+   TutorialOverlay の MCP ステップが引き続き使うため残す（下記）。 */
+.cl-setup-note { margin: 4px 0 0; font-size: 11px; color: var(--fg-3); }
+
+/* 飾りテロップ専用セクション */
+.deco { border-top: 1px solid var(--border); display: flex; flex-direction: column; }
+.deco-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; }
+.deco-head h2 { font-size: 13px; margin: 0; display: flex; align-items: center; gap: 8px; }
+.deco-head .count { font-size: 11px; color: var(--fg-3); }
+.deco-add-btn { font-size: 12px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); color: var(--fg-1); cursor: pointer; }
+.deco-add-btn:hover { background: var(--bg-3); }
+.deco-list { display: flex; flex-direction: column; gap: 4px; padding: 0 12px 12px; }
+.deco-empty { font-size: 12px; color: var(--fg-3); margin: 4px 0; }
+.deco-row { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.deco-row:hover { background: var(--bg-2); }
+.deco-row.selected { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.deco-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); min-width: 40px; }
+.deco-text { font-size: 13px; color: var(--fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* プレビュー下「＋タイトル」ボタン */
+.pv-add{ display:flex; justify-content:center; }
+.pv-add-btn{ font-size:12.5px; padding:7px 14px; border-radius:8px; border:1px dashed var(--accent-2); background:var(--bg-2); color:var(--accent-2); cursor:pointer; }
+.pv-add-btn:hover{ background:var(--bg-3); }
+
+/* ===== プレビュー上クリック選択ヒット領域 ===== */
+.pv-hit{ position:absolute; cursor:pointer; border-radius:4px; }
+.pv-hit:hover{ outline:1.5px dashed var(--accent); outline-offset:1px; background:var(--accent-tint); }
+
+/* ===== TitleSettingsTab ===== */
+.ins-title-actions { display: flex; flex-direction: column; gap: 8px; }
+.ins-title-del { color: var(--danger); }
+.ins-title-del:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+
+/* ===== ツールバー ダッキング コントロール ===== */
+.tb-ducking { display: flex; align-items: center; gap: 6px; }
+.tb-duck-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--fg-1); cursor: pointer; font-size: 12px; }
+.tb-duck-toggle.on { background: var(--accent-soft, rgba(80,140,255,0.18)); }
+.tb-duck-toggle:disabled { opacity: 0.5; cursor: default; }
+.tb-duck-strength { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tb-duck-lv { padding: 4px 8px; border: 0; background: transparent; color: var(--fg-1); cursor: pointer; font-size: 12px; }
+.tb-duck-lv.active { background: var(--accent); color: #fff; font-weight: 600; }
+.tb-duck-lv:disabled { opacity: 0.45; cursor: default; }
+
+/* ===== 設定メニュー 波形の高さ（ダッキング強度と同じセグメント見た目） ===== */
+.tb-waveform-pref { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tb-waveform-pref-btn { padding: 4px 10px; border: 0; background: transparent; color: var(--fg-1); cursor: pointer; font-size: 12px; }
+.tb-waveform-pref-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* ===== 設定メニュー 自動保存トグル（ダッキング ON/OFF と同じ見た目） ===== */
+.tb-auto-save-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--fg-1); cursor: pointer; font-size: 12px; }
+.tb-auto-save-toggle.on { background: var(--accent-soft, rgba(80,140,255,0.18)); }
+
+/* ===== タイムライン つなぎ目マーク（JoinMarkers）===== */
+.tl-join-markers { position: absolute; top: 0; left: 0; right: 0; height: 0; pointer-events: none; }
+.tl-join-mark {
+  position: absolute; top: -6px; width: 13px; height: 13px; transform: translateX(-50%) rotate(45deg);
+  background: var(--bg-4); border: 1.5px solid var(--fg-2); border-radius: 2px; cursor: pointer; pointer-events: auto; padding: 0;
+  box-shadow: var(--shadow-clip);
+  transition: width .1s, height .1s, top .1s, background .1s, border-color .1s, box-shadow .1s;
+  /* 頭マーカー(left:88px=0フレーム位置)はルーラー(.tl-ruler z-index:7・sticky)の
+     0フレーム目盛りと重なる。z-index:8 でルーラーより前面に出し、実ポインタで
+     クリック可能にする（近接の z-index は範囲選択 6/7 のみで安全）。 */
+  z-index: 8;
+}
+/* ホバー＝クリックできる合図。 */
+.tl-join-mark:hover { border-color: var(--accent); filter: brightness(1.08); }
+/* シーン転換 設定済み＝コーラルで塗る（枠は一段暗くして輪郭を出す）。 */
+.tl-join-mark.set { background: var(--accent-5); border-color: color-mix(in srgb, var(--accent-5) 70%, #000); }
+/* 選択中＝拡大＋青(accent)塗り＋ fg-0 縁取り＋ accent ハロー。
+   旧 white outline はライトの明るい帯で不可視だったため廃止（両テーマで確実に浮く表現へ）。 */
+.tl-join-mark.selected {
+  width: 16px; height: 16px; top: -8px;
+  background: var(--accent); border-color: var(--fg-0);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  z-index: 9;
+}
+/* 設定済み＋選択中＝コーラル塗りは保ちつつ、拡大＋縁取り＋ハローで「選択」を重ねる。 */
+.tl-join-mark.set.selected { background: var(--accent-5); }
+
+/* ===== 残す区間（keptSegments）・速度バッジ・カット0件ヒント ===== */
+.tl-kept-segment { position: absolute; top: 0; bottom: 0; cursor: pointer; }
+.tl-kept-segment.selected { outline: 2px solid var(--accent, #4af); outline-offset: -2px; }
+.tl-seg-speed-badge { position: absolute; top: 2px; left: 4px; font-size: 10px; padding: 0 4px; border-radius: 4px; background: rgba(0,0,0,.55); color: #fff; pointer-events: none; }
+.tl-cut-hint { font-size: 11px; color: var(--fg-3); margin: 4px 0 0; position: absolute; left: var(--track-label-w, 96px); top: 50%; transform: translateY(-50%); pointer-events: none; }
+
+/* ===== 区間キーフレームの diamond マーカー（KeyframeMarkers・C-1） ===== */
+.kf-markers { position: absolute; top: 0; bottom: 0; left: 0; width: 0; pointer-events: none; }
+.kf-marker { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; padding: 0; border: none; background: transparent; cursor: pointer; pointer-events: auto; }
+.kf-marker-diamond { display: block; width: 8px; height: 8px; margin: 2px auto; background: var(--accent, #4af); transform: rotate(45deg); border: 1px solid rgba(0,0,0,.4); }
+
+/* ===== 差分レビューパネル（書き出し後の学習ループ） ===== */
+.diff-review-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); padding: 24px;
+}
+.diff-review-panel {
+  width: min(560px, 100%); max-height: 80vh; overflow: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px; border-radius: var(--radius-lg);
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop); color: var(--fg-1);
+}
+.diff-review-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.diff-review-head strong { font-size: 14px; color: var(--fg-0); }
+.diff-review-summary { font-size: 11.5px; color: var(--fg-2); }
+.diff-review-section h4 { margin: 0 0 6px; font-size: 12px; color: var(--fg-1); }
+.diff-review-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.diff-review-row label {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 5px 8px; border-radius: var(--radius-sm); background: var(--bg-2);
+  border: 1px solid var(--border); font-size: 11.5px;
+}
+.diff-review-row input[type="checkbox"] { flex-shrink: 0; }
+.diff-badge {
+  flex-shrink: 0; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600;
+  color: #fff;
+}
+.diff-badge-added-cut { background: var(--accent-strong); }
+.diff-badge-restored-cut { background: var(--warn-fg); color: var(--bg-0); }
+.diff-badge-changed { background: var(--accent-strong); }
+.diff-badge-added { background: var(--accent-strong); }
+.diff-badge-removed { background: var(--warn-fg); color: var(--bg-0); }
+.diff-review-time { flex-shrink: 0; font-family: var(--font-mono); color: var(--fg-2); }
+.diff-review-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
+.diff-review-word { display: inline-flex; gap: 4px; }
+.diff-word-before { color: var(--danger); }
+.diff-word-arrow { color: var(--fg-3); }
+.diff-word-after { color: var(--fg-0); font-weight: 600; }
+.diff-review-distill {
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  background: var(--warn-bg, var(--bg-2)); border: 1px solid var(--border-strong);
+  color: var(--warn-fg); font-size: 11.5px; line-height: 1.5;
+}
+.diff-review-result { margin: 0; font-size: 12px; color: var(--fg-1); }
+/* 学習の適用範囲・昇格条件の補足（本文より一段弱い注記） */
+.diff-review-scope-note {
+  margin: 4px 0 0; font-size: 11px; color: var(--fg-3); line-height: 1.5;
+}
+.diff-review-foot { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ==== UI リフレッシュ 2026-07-04: 文字階層・折り返し・数字 ==== */
+:root {
+  --fs-head: 13px;   /* セクション見出し（太字で使う） */
+  --fs-body: 12px;   /* 本文・ボタン */
+  --fs-note: 11px;   /* 補足（--fg-2 で使う） */
+}
+
+/* ボタン・タブ・見出しの途中折り返しを禁止 */
+button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
+  white-space: nowrap;
+}
+
+/* 日本語本文は単語（文節）途中で折らない。長すぎる行は折り返し自体は許可 */
+.tx-list, .rightdock, .fb-list {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* タイムコード・尺表示は等幅数字 */
+.tx-time, .tl-total, .pv-foot, .tl-ruler {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==== ドロップダウン共通（⚙設定 / ＋追加 / ⚠警告） ==== */
+.dd { position: relative; }
+.dd-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+  min-width: 220px; padding: 6px;
+  background: var(--bg-2); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: var(--shadow-pop);
+}
+.dd-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border: 0; background: none; border-radius: 6px;
+  color: var(--fg-0); font-size: var(--fs-body); text-align: left; cursor: pointer;
+}
+.dd-item:hover:not(:disabled) { background: var(--bg-3); }
+.dd-item:disabled { color: var(--fg-3); cursor: default; }
+.dd-section { padding: 8px 10px 4px; font-size: var(--fs-note); color: var(--fg-2); font-weight: 600; }
+
+.tb-warn-badge {
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--warn-fg);
+  background: none; color: var(--warn-fg); font-size: var(--fs-note); font-weight: 600; cursor: pointer;
+}
+.tb-warn-menu { min-width: 320px; max-height: 50vh; overflow-y: auto; }
+.tb-warn-list { margin: 0; padding: 0 10px 8px 26px; font-size: var(--fs-body); color: var(--fg-1); }
+.tb-warn-list li { margin: 4px 0; }
+
+/* ===== Preview 図形ツール（左肩の縦ミニツールバー） ===== */
+.pv-shapes {
+  position: absolute; top: 10px; left: 10px; z-index: 20;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow-chip);
+}
+/* ツール群の小見出し。アイコンだけの縦列が「何のツールか」を名乗る（UIレビュー エディタ5）。 */
+.pv-shapes-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--fg-3); text-align: center; user-select: none;
+}
+.pv-shape-btn {
+  display: grid; place-items: center; width: 28px; height: 28px;
+  border: 0; border-radius: 6px; background: none; color: var(--fg-1); cursor: pointer;
+}
+.pv-shape-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-0); }
+.pv-shape-btn.active { background: var(--accent); color: #fff; }
+.pv-shape-btn:disabled { color: var(--fg-3); cursor: default; }
+
+/* ===== 右パネル「音声」折りたたみグループ ===== */
+.tx-audio-group { border-bottom: 1px solid var(--border); }
+.tx-audio-group > summary {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; cursor: pointer; list-style: none;
+  font-size: var(--fs-head); font-weight: 600;
+}
+.tx-audio-group > summary::-webkit-details-marker { display: none; }
+.tx-audio-group > summary::before { content: '▸'; margin-right: 6px; color: var(--fg-2); }
+.tx-audio-group[open] > summary::before { content: '▾'; }
+.tx-audio-badges { display: flex; gap: 10px; font-size: var(--fs-note); color: var(--fg-2); font-weight: 400; }
+.fb-thumb .ml-thumb-video-el { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+/* ─── ホーム カードグリッド（HomeDashboard） ─── */
+.home { display: flex; flex-direction: column; background: var(--bg-1); min-height: 0; overflow: hidden; }
+.home-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 18px 22px 10px; flex-shrink: 0;
+}
+.home-head h1 { margin: 0; font-size: var(--fs-head); font-weight: 600; color: var(--fg-0); }
+.home-count { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+/* 新規作成ボタン（ヘッダ・空状態共通） */
+.home-create-btn {
+  padding: 6px 14px; border-radius: var(--radius-md); cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  font-size: 12px; font-weight: 700; align-self: center;
+}
+.home-create-btn:hover { filter: brightness(1.08); }
+.sme-center .home-create-btn { margin-top: 12px; }
+.home-create-dialog { gap: 12px; }
+
+/* 外付け等からリンクで取り込む導線（コピー取り込みボタンの隣） */
+.home-create-link-btn {
+  padding: 6px 12px; border-radius: var(--radius-md); cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-1);
+  font-size: 12px; font-weight: 600; align-self: center;
+}
+.home-create-link-btn:hover { border-color: var(--accent); color: var(--fg-0); }
+.sme-center .home-create-link-btn { margin-top: 8px; }
+.home-create-link-note {
+  font-size: 11.5px; color: var(--fg-2); word-break: break-all;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 9px;
+}
+
+/* ===== 外部フォルダから動画を選ぶファイラ（MediaPicker） ===== */
+.mp-dialog { width: min(560px, 100%); }
+.mp-note { font-size: 11.5px; color: var(--fg-2); margin: 0; }
+.mp-roots { display: flex; gap: 6px; flex-wrap: wrap; }
+.mp-root {
+  padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-2); color: var(--fg-2);
+  font-size: 11.5px; font-weight: 600;
+}
+.mp-root:hover { border-color: var(--border-strong); color: var(--fg-0); }
+.mp-root.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.mp-path {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;
+}
+.mp-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 46vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px;
+  background: var(--bg-0);
+}
+.mp-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer;
+  background: transparent; border: 1px solid transparent; color: var(--fg-1);
+  font-size: 12px; text-align: left;
+}
+.mp-row:hover { background: var(--bg-2); border-color: var(--border); }
+.mp-icon { flex-shrink: 0; font-size: 12px; }
+.mp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-size { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); }
+.mp-up { color: var(--fg-2); }
+.mp-empty { padding: 10px 8px; font-size: 11.5px; color: var(--fg-3); }
+.mp-error { margin: 6px 8px; }
+
+/* リンク切れバナーと、張り替え確認の相違点リスト */
+.vl-banner-btn { white-space: nowrap; }
+
+/* 高速書き出し（カットだけ）の案内と、検算にひっかかった完了表示 */
+.export-fast-note {
+  font-size: 11.5px; color: var(--fg-1); line-height: 1.6;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius-sm); padding: 8px 10px;
+}
+.tb-render-label.warn { color: #e0a63f; cursor: help; }
+.vl-warn-list { margin: 0; padding-left: 18px; font-size: 12px; color: var(--fg-1); }
+
+.home-create-file-note { font-size: 11.5px; color: var(--fg-2); word-break: break-all; }
+.home-create-large-note {
+  font-size: 11.5px;
+  color: var(--fg-1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 6px;
+  padding: 6px 8px;
+  line-height: 1.5;
+}
+.home-create-label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg-1); }
+.home-create-name {
+  font-size: 13px; padding: 8px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-0);
+}
+.home-create-error { margin: 0; font-size: 11.5px; }
+.home-create-progress {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--fg-2);
+}
+
+/* ビュー切替（パネル/カンバン）。ヘッダ右端のセグメントボタン。 */
+.home-view-switch {
+  margin-left: auto; display: inline-flex;
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+}
+.home-view-btn { padding: 4px 12px; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; font-size: 11.5px; font-weight: 600; }
+.home-view-btn.active { background: var(--accent-soft); color: var(--accent-strong); }
+
+/* パネルビュー: Notion 風ギャラリー。カードが横並びで折り返す。 */
+.home-grid {
+  flex: 1; overflow-y: auto; min-height: 0;
+  display: grid; gap: 14px; padding: 6px 22px 22px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-content: start;
+}
+.home-grid .home-card { background: var(--bg-2); }
+
+/* カンバンボード: ステータス5列（制作フロー順）。狭い画面では横スクロール。 */
+.home-kanban {
+  flex: 1; min-height: 0;
+  display: flex; gap: 12px; padding: 6px 22px 22px;
+  overflow-x: auto;
+}
+.home-col {
+  flex: 1 1 0; min-width: 210px; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.home-col.empty { opacity: 0.55; }
+.home-col-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.home-col-label { font-size: 12px; font-weight: 700; color: var(--fg-1); }
+.home-col-count {
+  min-width: 20px; text-align: center; padding: 1px 6px; border-radius: 999px;
+  background: var(--bg-3); color: var(--fg-2);
+  font-family: var(--font-mono); font-size: 11px;
+}
+/* 編集中列は AI が動いている場所なのでヘッダをアクセントで強調する。 */
+.home-col[data-status="editing"] .home-col-label { color: var(--accent-strong); }
+.home-col-cards {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; padding: 10px;
+}
+.home-card {
+  display: flex; flex-direction: column; position: relative; flex: 0 0 auto;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); cursor: pointer;
+  transition: border-color .12s, box-shadow .12s, transform .08s;
+}
+.home-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-pop); }
+.home-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.home-card.dimmed { opacity: 0.55; }
+.home-card.dimmed:hover { opacity: 0.8; }
+/* バッジのドロップダウンが隠れないよう、カード自体はクリップしない（角丸はサムネ側で吸収）。 */
+.home-card-thumb {
+  position: relative; width: 100%; background: #000;
+  display: grid; place-items: center; overflow: hidden;
+  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+}
+/* サムネは向きに関わらず 16:9 固定（UIレビュー ホーム1）。縦・正方形の動画は
+   中央に収めて左右をレターボックスにし、カードの高さと情報位置を全カードで揃える。
+   video は絶対配置で箱に固定する（grid の暗黙行が動画の内在高さに広がり、
+   height:100% が効かず縦動画がはみ出すため）。 */
+.home-card-thumb { aspect-ratio: 16 / 9; }
+.home-card-thumb .ml-thumb-video-el {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+}
+.home-card-thumb.v .ml-thumb-video-el,
+.home-card-thumb.sq .ml-thumb-video-el { object-fit: contain; }
+.home-card-thumb-empty { position: absolute; inset: 0; background: linear-gradient(180deg, #1a2330 0%, #0c1118 100%); }
+.home-card-body { display: flex; flex-direction: column; gap: 5px; padding: 10px 11px 12px; }
+/* バッジはサムネ左上へ重ねる（カード基準の absolute。サムネの overflow:hidden の
+   外なのでドロップダウンはクリップされない）。情報の位置を全カードで揃える。 */
+.home-card-badge-wrap {
+  align-self: flex-start;
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+}
+.home-card-badge-wrap .status-badge {
+  /* ステータス色の下に暗色の下敷きを重ね、明るい映像の上でも文字が沈まないようにする。 */
+  background: linear-gradient(var(--status-bg, var(--bg-3)), var(--status-bg, var(--bg-3))), rgba(12, 12, 12, 0.55);
+  backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+.home-card-name {
+  font-size: 13px; font-weight: 600; color: var(--fg-0);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.home-card-meta {
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3);
+}
+.home-card-meta .sep { opacity: 0.5; }
+.home-badge-menu { top: calc(100% + 4px); left: 0; }
+
+/* ─── ステータスバッジ／ドット（色分け） ─── */
+.status-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; line-height: 1.5;
+  border: 1px solid transparent; cursor: pointer;
+  color: var(--status-fg, var(--fg-1));
+  background: var(--status-bg, var(--bg-3));
+  border-color: var(--status-bd, var(--border));
+}
+.status-badge-label { white-space: nowrap; }
+.status-spinner {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid currentColor; border-top-color: transparent;
+  animation: sme-spin .7s linear infinite; flex-shrink: 0;
+}
+.fb-status-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  flex-shrink: 0; margin-right: 2px; vertical-align: middle;
+  background: var(--status-fg, var(--fg-3));
+}
+/* 各ステータスの色（バッジ・ドット共用の CSS 変数） */
+.status-idle      { --status-fg: var(--fg-2); --status-bg: var(--bg-3); --status-bd: var(--border); }
+.status-editing   { --status-fg: #4d9fff; --status-bg: rgba(77, 159, 255, 0.14); --status-bd: rgba(77, 159, 255, 0.30); }
+.status-rendered  { --status-fg: var(--accent-4); --status-bg: rgba(63, 178, 122, 0.14); --status-bd: rgba(63, 178, 122, 0.30); }
+.status-review    { --status-fg: var(--accent-2); --status-bg: rgba(240, 160, 32, 0.16); --status-bd: rgba(240, 160, 32, 0.32); }
+.status-published { --status-fg: var(--accent-3); --status-bg: rgba(160, 112, 224, 0.16); --status-bd: rgba(160, 112, 224, 0.32); }
+.status-activity  { --status-fg: var(--accent); --status-bg: var(--accent-soft); --status-bd: var(--border-focus); }
+.status-stale     { --status-fg: var(--fg-3); --status-bg: var(--bg-3); --status-bd: var(--border); }
+
+@keyframes sme-spin { to { transform: rotate(360deg); } }
+
+/* ─── ステータス書き込み失敗トースト ─── */
+.sme-toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  z-index: 2000; max-width: 420px;
+  padding: 10px 16px; border-radius: var(--radius-md);
+  background: var(--bg-4); color: var(--fg-0);
+  border: 1px solid var(--danger, var(--border-strong));
+  box-shadow: var(--shadow-pop); font-size: 12.5px;
+}
+
+.fb-item-name { display: flex; align-items: center; gap: 6px; }
+.fb-item-name-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ─── 書き出しプリセットダイアログ（ExportDialog） ─── */
+.export-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); padding: 24px;
+}
+.export-dialog {
+  width: min(420px, 100%); max-height: 80vh; overflow: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px; border-radius: var(--radius-lg);
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop); color: var(--fg-1);
+}
+.export-head { font-size: 14px; font-weight: 700; color: var(--fg-0); }
+.export-presets { display: flex; flex-direction: column; gap: 6px; }
+.export-preset {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--bg-2);
+}
+.export-preset:hover { border-color: var(--border-strong); }
+.export-preset.is-active { border-color: var(--accent); background: var(--accent-dim, var(--bg-3)); }
+.export-preset-label { flex: 1; font-size: 12.5px; color: var(--fg-0); }
+.export-preset-meta { font-size: 11px; color: var(--fg-2); }
+.export-custom-note { font-size: 11.5px; color: var(--fg-2); padding: 2px 4px; }
+.export-details-toggle {
+  align-self: flex-start; font-size: 11.5px; color: var(--fg-2);
+  background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline;
+}
+.export-details-toggle:hover { color: var(--fg-0); }
+.export-details { display: flex; flex-direction: column; gap: 8px; }
+.export-detail-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.export-detail-row span { width: 56px; color: var(--fg-2); }
+.export-detail-row select { flex: 1; }
+.export-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.export-cancel, .export-start {
+  font-size: 12px; padding: 7px 14px; border-radius: var(--radius-md); cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-1);
+}
+.export-start { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.export-start:hover { filter: brightness(1.08); }
+
+/* ─── 重ジョブ負荷確認ダイアログ（HeavyJobConfirmDialog） ─── */
+.hjc-overlay {
+  position: fixed; inset: 0; z-index: 1300;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); padding: 24px;
+}
+.hjc-dialog {
+  width: min(380px, 100%);
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px; border-radius: var(--radius-lg);
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop); color: var(--fg-1);
+}
+.hjc-text { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--fg-0); }
+.hjc-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.hjc-dismiss, .hjc-confirm {
+  font-size: 12px; padding: 7px 14px; border-radius: var(--radius-md); cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-1);
+}
+.hjc-confirm { background: var(--warn-fg); border-color: var(--warn-fg); color: #1a1a1a; font-weight: 700; }
+.hjc-confirm:hover { filter: brightness(1.08); }
+
+/* ─── 2点アニメ設定（MotionSettings） ─── */
+.ins-motion select { width: 100%; }
+.ins-motion-intensity { margin-top: 8px; }
+.ins-motion-details-toggle {
+  margin-top: 8px; font-size: 11px; color: var(--fg-2);
+  background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline;
+}
+.ins-motion-details-toggle:hover { color: var(--fg-0); }
+.ins-motion-details { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.ins-motion-endpoint {
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.ins-motion-endpoint-title { font-size: 11px; font-weight: 700; color: var(--fg-1); }
+.ins-motion-detail-row { display: flex; align-items: center; gap: 6px; }
+.ins-motion-detail-label { width: 96px; font-size: 10.5px; color: var(--fg-2); flex: none; }
+.ins-motion-detail-row input[type="range"] { flex: 1; min-width: 0; }
+.ins-motion-detail-clear {
+  flex: none; width: 18px; height: 18px; line-height: 1; font-size: 11px;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg-2);
+  color: var(--fg-2); cursor: pointer; padding: 0;
+}
+
+/* ===== 初回チュートリアル「はじめての1本」 ===== */
+/* オーバーレイ全体はクリック透過（吹き出しのみ操作可）。ユーザーを閉じ込めない。 */
+.tut { position: fixed; inset: 0; z-index: 900; pointer-events: none; }
+/* 照準くり抜き: 対象矩形の外側全体を box-shadow で暗くする。 */
+.tut-hole {
+  position: fixed; border-radius: 10px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55), 0 0 0 2px var(--accent);
+  transition: left .18s ease, top .18s ease, width .18s ease, height .18s ease;
+}
+/* 照準なしステップの全面薄暗幕。 */
+.tut-dim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); }
+
+.tut-bubble {
+  position: fixed; width: 360px; max-width: calc(100vw - 24px);
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  border-radius: 14px; padding: 16px 16px 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+.tut-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.tut-text { margin: 0; font-size: 13px; line-height: 1.8; color: var(--fg-0); white-space: pre-line; }
+
+/* マスコット: CSS 描画のクレイ風の顔（画像不使用）。 */
+.tut-mascot {
+  flex: none; position: relative; width: 44px; height: 44px; border-radius: 46% 54% 52% 48%;
+  background: radial-gradient(circle at 32% 28%, var(--accent-strong), var(--accent) 68%);
+  box-shadow: inset -3px -4px 6px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+.tut-eye {
+  position: absolute; top: 16px; width: 6px; height: 8px; border-radius: 50%;
+  background: #2b2118; animation: tut-blink 4s infinite;
+}
+.tut-eye.l { left: 12px; }
+.tut-eye.r { right: 12px; }
+.tut-mouth {
+  position: absolute; left: 50%; top: 27px; transform: translateX(-50%);
+  width: 12px; height: 6px; border-radius: 0 0 12px 12px;
+  border: 2px solid #2b2118; border-top: 0;
+}
+@keyframes tut-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+.tut-mascot.party { animation: tut-bounce .6s ease infinite alternate; }
+.tut-mascot.party .tut-mouth { height: 8px; width: 14px; background: #2b2118; }
+@keyframes tut-bounce { from { transform: translateY(0) rotate(-4deg); } to { transform: translateY(-4px) rotate(4deg); } }
+
+.tut-mcp { display: flex; flex-direction: column; gap: 6px; }
+.tut-mcp-ok { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--accent-4); }
+
+.tut-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tut-progress { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); }
+.tut-actions { display: flex; gap: 8px; }
+.tut-skip {
+  padding: 5px 10px; border-radius: var(--radius-sm); border: 0;
+  background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11.5px;
+}
+.tut-skip:hover { color: var(--fg-1); }
+.tut-next {
+  padding: 5px 16px; border-radius: var(--radius-sm);
+  background: var(--accent); border: 1px solid var(--accent-strong);
+  color: #fff; cursor: pointer; font-size: 12px; font-weight: 700;
+}
+.tut-next:hover { background: var(--accent-strong); }
+.tut-close {
+  position: absolute; top: 6px; right: 8px; width: 20px; height: 20px;
+  border: 0; background: transparent; color: var(--fg-3);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 0;
+}
+.tut-close:hover { color: var(--fg-0); }
+
+/* 紙吹雪（テロップ追加のお祝い）。 */
+.tut-confetti { position: fixed; inset: 0; overflow: hidden; }
+.tut-confetti i {
+  position: absolute; top: -12px; width: 8px; height: 12px; border-radius: 2px;
+  animation-name: tut-fall; animation-timing-function: ease-in; animation-fill-mode: forwards;
+}
+@keyframes tut-fall {
+  to { transform: translateY(105vh) rotate(540deg); opacity: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tut-confetti { display: none; }
+  .tut-mascot.party { animation: none; }
+  .tut-eye { animation: none; }
+}
+
+/* チュートリアル再実行の導線（ホーム: ？ボタン / ⚙メニュー項目）。 */
+.tb-tutorial-btn { font-size: 13px; font-weight: 700; }
+
+/* ===== チュートリアル図鑑（HelpModal） ===== */
+/* ExportDialog のオーバーレイ構造を踏襲・横2ペイン、狭幅は1カラムアコーディオン。 */
+.help-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); padding: 24px;
+}
+.help-dialog {
+  width: min(760px, 100%); max-height: 84vh;
+  display: flex; flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop); color: var(--fg-1); overflow: hidden;
+}
+.help-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--bg-2); border-bottom: 1px solid var(--border); flex: none;
+}
+.help-title { font-size: 13px; font-weight: 700; color: var(--fg-0); }
+.help-count { font-size: 10.5px; color: var(--fg-3); }
+.help-replay-btn {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-soft); color: var(--accent-strong);
+  border: 1px solid var(--border-focus); border-radius: var(--radius);
+  padding: 4px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+}
+.help-replay-btn:hover { filter: brightness(1.08); }
+.help-close {
+  width: 22px; height: 22px; border: 0; background: transparent; color: var(--fg-3);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 0;
+}
+.help-close:hover { color: var(--fg-0); }
+
+.help-body { display: flex; min-height: 0; flex: 1 1 auto; overflow: hidden; }
+.help-list-pane {
+  width: 220px; flex: none; background: var(--bg-1); border-right: 1px solid var(--border);
+  padding: 8px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto;
+}
+.help-search {
+  display: flex; align-items: center; gap: 6px; background: var(--bg-2);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 9px;
+  color: var(--fg-3); font-size: 11.5px;
+}
+.help-search-input {
+  border: 0; background: transparent; color: var(--fg-0); font-size: 11.5px;
+  flex: 1; min-width: 0; outline: none;
+}
+.help-chips { display: flex; gap: 4px; flex-wrap: wrap; padding: 2px 0 4px; }
+.help-chip {
+  font-size: 10px; padding: 3px 9px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--fg-2);
+  cursor: pointer;
+}
+.help-chip.on { background: var(--accent-soft); border-color: var(--border-focus); color: var(--accent-strong); }
+.help-list { display: flex; flex-direction: column; gap: 2px; }
+.help-group { display: flex; flex-direction: column; }
+.help-item-wrap { display: flex; flex-direction: column; }
+.help-cat-heading {
+  font-size: 9.5px; color: var(--fg-3); letter-spacing: 0.08em;
+  padding: 6px 9px 2px;
+}
+.help-item {
+  width: 100%; display: flex; gap: 8px; align-items: center; padding: 7px 9px;
+  border-radius: var(--radius); font-size: 11.5px; color: var(--fg-1);
+  border: 1px solid transparent; background: none; cursor: pointer; text-align: left;
+}
+.help-item:hover { background: var(--bg-2); }
+.help-item.active { background: var(--bg-3); border-color: var(--border-strong); color: var(--fg-0); }
+.help-item-no {
+  width: 18px; height: 18px; border-radius: 50%; background: var(--bg-4); color: var(--fg-2);
+  font-size: 9.5px; display: flex; align-items: center; justify-content: center; flex: none;
+}
+.help-item.active .help-item-no { background: var(--accent); color: #fff; font-weight: 700; }
+.help-item-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.help-empty { font-size: 11.5px; color: var(--fg-3); padding: 10px 9px; }
+
+.help-detail-pane {
+  flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto;
+}
+.help-img {
+  width: 100%; height: 220px; object-fit: cover; object-position: top;
+  border-radius: var(--radius-md); border: 1px solid var(--border-strong); background: var(--bg-3);
+}
+.help-cap-row { display: flex; align-items: center; gap: 8px; }
+.help-cap { font-size: 13px; font-weight: 700; color: var(--fg-0); }
+.help-detail-chip {
+  font-size: 10px; padding: 3px 9px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--fg-2);
+}
+.help-desc { font-size: 11.5px; line-height: 1.7; color: var(--fg-1); margin: 0; }
+.help-nav { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
+.help-nav-btn {
+  background: var(--bg-2); border: 1px solid var(--border-strong); color: var(--fg-1);
+  border-radius: var(--radius); padding: 5px 14px; font-size: 11px; cursor: pointer;
+}
+.help-nav-btn:hover:not(:disabled) { background: var(--bg-3); }
+.help-nav-btn:disabled { opacity: 0.4; cursor: default; }
+.help-next { border-color: var(--border-focus); color: var(--accent-strong); }
+.help-nav-count { color: var(--fg-3); font-size: 10px; }
+
+/* 狭幅（目安 640px 未満）: 1カラム・リスト全幅＋選択項目直下にアコーディオン展開。 */
+.help-accordion {
+  display: none; flex-direction: column; gap: 8px; margin: 6px 4px 4px;
+  padding: 8px; border-radius: var(--radius-md);
+  background: var(--bg-3); border: 1px solid var(--border-strong);
+}
+.help-accordion .help-img { height: 140px; object-position: top; }
+.help-accordion .help-cap-row { display: none; }
+.help-accordion .help-nav { margin-top: 0; }
+
+@media (max-width: 640px) {
+  .help-dialog { width: 100%; max-height: 92vh; }
+  .help-body { flex-direction: column; overflow-y: auto; }
+  .help-list-pane { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); overflow-y: visible; }
+  .help-detail-pane { display: none; }
+  .help-accordion { display: flex; }
+}
+
+/* ---- 埋め込み AI ターミナル（AiTerminal.tsx）---- */
+.clt { display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
+.clt-term { flex: 1; min-height: 220px; background: #101418; border-radius: var(--radius-md); overflow: hidden; }
+/* AI タブのツール切替（使えるツールが2つ以上のときだけ描画される） */
+.clt-tools { display: flex; gap: 6px; padding: 4px 6px 0; }
+.clt-tool {
+  padding: 2px 10px; font-size: 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent; color: var(--fg-2); cursor: pointer;
+}
+.clt-tool:hover:not(:disabled) { color: var(--fg-1); border-color: var(--border-strong); }
+.clt-tool-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.clt-tool:disabled { opacity: 0.5; cursor: progress; }
+.clt-note { margin: 4px 6px 0; font-size: 11px; color: var(--fg-2); line-height: 1.5; }
+.clt-note-warn { color: var(--warn-fg); }
+.clt-setup { padding: 10px; }
+.clt-install-btn, .clt-waiting-btn {
+  padding: 6px 12px; border-radius: var(--radius); cursor: pointer;
+  background: var(--bg-2); border: 1px solid var(--border-strong); color: var(--fg-0);
+}
+.clt-install-btn:hover, .clt-waiting-btn:hover:not(:disabled) { background: var(--bg-3); }
+.clt-waiting-btn:disabled { opacity: 0.5; cursor: default; }
+.clt-installing { padding: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg-1); }
+.clt-install-log {
+  max-height: 120px; overflow-y: auto; font-size: 11px; opacity: .8;
+  background: var(--bg-2); border-radius: var(--radius); padding: 6px 8px; white-space: pre-wrap;
+}
+.clt-install-manual { font-size: 12px; opacity: .8; }
+.clt-env-note { font-size: 11px; color: var(--warn-fg); }
+.clt-actions { display: flex; gap: 8px; }
+.clt-exit { padding: 8px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }

@@ -1,0 +1,2 @@
+# Windows のバッチファイルは CRLF でないと cmd.exe が誤動作するため固定する
+*.bat text eol=crlf

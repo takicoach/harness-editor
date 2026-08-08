@@ -1,0 +1,51 @@
+{
+  "name": "harness-editor",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "edit": "vite",
+    "dev": "vite",
+    "start": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "learn": "node --import tsx src/learning/bin.ts",
+    "aggregate-cuts": "node --import tsx src/server/aggregateCutLearningBin.ts",
+    "docs:gifs": "node scripts/record-guide-gifs.mjs",
+    "docs:help-shots": "node scripts/capture-help-shots.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@remotion/player": "4.0.489",
+    "@remotion/transitions": "4.0.489",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "esbuild": "^0.25.0",
+    "node-pty": "^1.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "4.0.489",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "chokidar": "^4.0.3",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.23.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.4.3",
+    "vitest": "^3.2.7"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
+  }
+}

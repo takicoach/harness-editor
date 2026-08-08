@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Harness Editor</title>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/src/preview/runtime/react.ts",
+          "react-dom": "/src/preview/runtime/react-dom.ts",
+          "react/jsx-runtime": "/src/preview/runtime/jsx-runtime.ts",
+          "react/jsx-dev-runtime": "/src/preview/runtime/jsx-dev-runtime.ts",
+          "remotion": "/src/preview/runtime/remotion.ts"
+        }
+      }
+    </script>
+    <script>
+      // React マウント前に data-theme を確定させ、ダーク→ライトのちらつきを防ぐ。
+      // キー 'sme-theme' は src/core/theme.ts の THEME_STORAGE_KEY と一致させること。
+      (function () {
+        try {
+          var t = localStorage.getItem('sme-theme');
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/app/main.tsx"></script>
+  </body>
+</html>
