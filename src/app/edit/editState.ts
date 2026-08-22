@@ -1,4 +1,4 @@
-import type { CutRegion, DuckingSettings, EditorProject, EditorBgmClip, EditorImage, EditorSe, EditorShape, EditorTelop, EditorTitle, EditorVideoInsert, MainLayout, SegmentLayout, SceneTransition, TelopPosition } from '../../core/types';
+import type { CutOrderAnchor, CutRegion, DuckingSettings, EditorProject, EditorBgmClip, EditorImage, EditorSe, EditorShape, EditorTelop, EditorTitle, EditorVideoInsert, MainLayout, SegmentLayout, SceneTransition, TelopPosition } from '../../core/types';
 import { DEFAULT_DUCKING } from './duckingSettings';
 import { DEFAULT_MAIN_LAYOUT } from '../../core/mainLayout';
 import type { LayoutKeyframe } from '../../core/layoutKeyframes';
@@ -26,6 +26,17 @@ export interface EditState {
   telops: EditorTelop[];
   /** 原本タイムラインから削除する区間。 */
   cutRegions: CutRegion[];
+  /**
+   * 再生順アンカー（cutData.ts の配列順スナップショット・読み取り専用）。
+   * カット並び替え編集の順序はここから再導出する（cutRegions は原素材順しか表せない）。
+   * 未設定なら従来どおり原素材順（恒等順列）。
+   */
+  cutOrder?: CutOrderAnchor[];
+  /**
+   * 原素材の総フレーム数（不変）。並び替え写像を UI 側で再導出するのに必要。
+   * createEditState が必ず設定する（未設定なら並び替えは恒等に縮退する）。
+   */
+  originalTotalFrames?: number;
   /** 原本フレームアンカーの効果音（編集の正）。 */
   se: EditorSe[];
   /** 原本フレームアンカーの挿入画像（編集の正）。 */
@@ -36,6 +47,14 @@ export interface EditState {
   bgm: EditorBgmClip[];
   /** インスペクタ・タイムラインで選択中の対象（未選択は null）。 */
   selection: Selection | null;
+  /**
+   * テロップの複数選択集合（プライマリ＝`selection` は温存し、その上に重ねる）。
+   * 不変条件は {@link normalizeMultiSelection} に集約する。**空、またはサイズ 2 以上で
+   * プライマリを含む**のどちらかしか取らない（サイズ 1 の「複数選択」は作らない）。
+   * 履歴スナップショットの一部なので selection と同様に Undo/Redo で巻き戻り、
+   * dirty 判定（{@link samePersistedContent}）では無視する。
+   */
+  multiTelopIds: number[];
   /** 分割で新テロップへ割り当てる次の ID。 */
   nextTelopId: number;
   /** 新規 SE へ割り当てる次の ID。 */
@@ -128,6 +147,9 @@ export function createEditState(project: EditorProject, ducking: DuckingSettings
   return {
     telops,
     cutRegions,
+    // 並び替え（再生順）は編集対象ではないが、写像の再導出に必要なので状態へ持ち回す。
+    cutOrder: project.cutOrder,
+    originalTotalFrames: project.videoConfig.durationFrames,
     se,
     images,
     videoInserts,
@@ -137,6 +159,8 @@ export function createEditState(project: EditorProject, ducking: DuckingSettings
     // タイトルはテロップへ一本化済み。titles は常に空（旧タイトル機能は撤去）。
     titles: [],
     selection: null,
+    // 読込・再読込では複数選択を必ず空にする（前プロジェクトの ID を持ち越さない）。
+    multiTelopIds: [],
     nextTelopId: maxTelopId + 1,
     nextSeId: maxSeId + 1,
     nextImageId: maxImageId + 1,
@@ -169,6 +193,7 @@ export function initialEditState(project: Pick<EditorProject, 'mainSpeed' | 'seg
     videoInserts: [],
     bgm: [],
     selection: null,
+    multiTelopIds: [],
     nextTelopId: 1,
     nextSeId: 1,
     nextImageId: 1,
@@ -187,6 +212,83 @@ export function initialEditState(project: Pick<EditorProject, 'mainSpeed' | 'seg
     segmentLayouts: {},
     layoutKeyframes: [],
   };
+}
+
+/**
+ * 複数選択集合 `multiTelopIds` の不変条件を強制する中央正規化（設計書 §1）。
+ *
+ * 1. 集合は空、または**サイズ 2 以上でプライマリ（`selection.id`）を含む**
+ * 2. 全 ID が `telops` に実在する（不在 ID は除去・重複も除去）
+ * 3. `selection.kind !== 'telop'`（未選択含む）のとき集合は空
+ * 4. 上を満たせなくなったら集合を空にする（例: 分割で選択が新断片へ移る → 複数選択解除）
+ *
+ * テロップ配列や選択を変えうる全経路の後段でこれを通す。整合性維持を個々の op へ
+ * 散らすと、新しい op を足したときに不正状態（消えた ID が残る・プライマリが集合外）が
+ * 生まれる。`useEditSession` の apply / setTransient でも通しているため、選択種別を
+ * 変えるだけの経路（SE や画像のクリック等）も自動的に集合クリアされる。
+ *
+ * 変更が無ければ **同一 state 参照**を返す（無駄な再レンダー・空 Undo を作らない）。
+ */
+export function normalizeMultiSelection(state: EditState): EditState {
+  // 部分オブジェクトを EditState へキャストする既存テストがあるため防御的に読む。
+  const ids: number[] = state.multiTelopIds ?? [];
+  if (ids.length === 0) return state;
+  const primary = state.selection?.kind === 'telop' ? state.selection.id : null;
+  if (primary === null) return { ...state, multiTelopIds: [] };
+  const existing = new Set(state.telops.map((t) => t.id));
+  const seen = new Set<number>();
+  const next: number[] = [];
+  for (const id of ids) {
+    if (!existing.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    next.push(id);
+  }
+  if (next.length < 2 || !seen.has(primary)) return { ...state, multiTelopIds: [] };
+  const unchanged = next.length === ids.length && next.every((id, i) => id === ids[i]);
+  return unchanged ? state : { ...state, multiTelopIds: next };
+}
+
+/** 複数選択を解除する（もともと空なら同一参照）。 */
+export function clearMultiSelection(state: EditState): EditState {
+  if ((state.multiTelopIds ?? []).length === 0) return state;
+  return { ...state, multiTelopIds: [] };
+}
+
+/**
+ * 修飾キー＋クリックによる複数選択のトグル（設計書 §1）。
+ * 最後にクリックしたテロップがプライマリ（`selection`）になる。
+ *
+ * - テロップ未選択・他種選択中なら、修飾キー付きでも単なる単一選択として扱う。
+ * - 唯一の選択テロップを解除しようとした場合は何もしない（未選択状態は作らない）。
+ * - 解除でサイズ 1 になったら不変条件により集合は空へ落ちる（＝単一選択へ戻る）。
+ */
+export function toggleMultiTelopSelection(state: EditState, telopId: number): EditState {
+  if (!state.telops.some((t) => t.id === telopId)) return state;
+  const primary = state.selection?.kind === 'telop' ? state.selection.id : null;
+  if (primary === null) {
+    return normalizeMultiSelection({
+      ...state,
+      selection: { kind: 'telop', id: telopId },
+      multiTelopIds: [],
+    });
+  }
+  // 集合が空のときは「プライマリ 1 個だけが選ばれている」とみなして開始する。
+  const current = (state.multiTelopIds ?? []).length === 0 ? [primary] : [...state.multiTelopIds];
+  if (!current.includes(telopId)) {
+    return normalizeMultiSelection({
+      ...state,
+      selection: { kind: 'telop', id: telopId },
+      multiTelopIds: [...current, telopId],
+    });
+  }
+  const rest = current.filter((id) => id !== telopId);
+  const last = rest[rest.length - 1];
+  if (last === undefined) return state; // 唯一の選択の解除 → 何もしない
+  return normalizeMultiSelection({
+    ...state,
+    selection: { kind: 'telop', id: telopId === primary ? last : primary },
+    multiTelopIds: rest,
+  });
 }
 
 /** 区間速度マップの浅い等値比較。 */
@@ -465,6 +567,7 @@ export function toEditorProject(state: EditState, base: EditorProject): EditorPr
     transcript: base.transcript,
     telops: state.telops,
     cutRegions: state.cutRegions,
+    cutOrder: base.cutOrder,
     se: state.se,
     images: state.images,
     videoInserts: state.videoInserts,

@@ -13,6 +13,17 @@ export const MAX_PX_PER_FRAME = 12;
  */
 export const TRACK_LABEL_GUTTER_PX = 88;
 
+/**
+ * ドラッグとクリックを分けるポインタ移動量のしきい値（px・画面座標）。
+ * これ以下しか動いていなければ「クリック」とみなす。
+ *
+ * **フレーム値ではなく生の px で測ること。** 吸着後のフレーム値で比較すると、
+ * 掴んだ端が吸着点の近くにあるとき実際に動かしても値が変わらず「動いていない」と
+ * 誤判定する（吸着 ON の小ドラッグが無反応になる）。逆にズームアウト時
+ * （pxPerFrame < 1）は 1px の揺れが数フレームの差になり、クリックがドラッグに化ける。
+ */
+export const CLICK_MOVE_THRESHOLD_PX = 5;
+
 export function frameToX(frame: number, pxPerFrame: number): number {
   return TRACK_LABEL_GUTTER_PX + frame * pxPerFrame;
 }

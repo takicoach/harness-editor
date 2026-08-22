@@ -1,8 +1,8 @@
 import { useRef } from 'react';
-import { frameToXMapped, widthMapped } from './timelineGeometry';
+import { frameToXMapped, widthMapped, CLICK_MOVE_THRESHOLD_PX } from './timelineGeometry';
 import { regionKey } from './cutPulse';
 import { Waveform } from './Waveform';
-import type { CutRegion } from '../../core/types';
+import type { CutOrdering, CutRegion } from '../../core/types';
 import type { DisplayMap } from '../../core/timelineDisplayMap';
 import { TrackHeader } from './TrackHeader';
 import { useFilmstrip, STRIP_THUMB_PX } from './useFilmstrip';
@@ -10,9 +10,6 @@ import { KeyframeMarkers } from '../panels/KeyframeMarkers';
 import { playbackToOriginal } from '../../core/segmentLayout';
 import type { LayoutKeyframe } from '../../core/layoutKeyframes';
 import { waveformCanvasHeight, waveformGain, waveformTrackHeight, type WaveformPref } from '../layout/waveformPref';
-
-/** ドラッグと区別するためのクリック距離しきい値（px）。これ以上動いたらクリックとみなさない。 */
-const CLICK_MOVE_THRESHOLD_PX = 5;
 
 /** つまみ識別子。動画トラックではカット区間の片端を表す。 */
 export interface CutHandleId {
@@ -50,6 +47,8 @@ interface CutTrackProps {
   mainVideoSelected?: boolean;
   /** メイン動画の再生速度（Task 9）。1 以外のとき速度バッジを表示する。 */
   mainSpeed?: number;
+  /** カット並び替えの対応表（再生↔原本の写像用）。恒等順列・未指定なら従来の単調モデル。 */
+  ordering?: CutOrdering;
   /** 残す区間（速度選択用）。原本座標で描画する。 */
   keptSegments?: { id: number; originalStart: number; originalEnd: number; playbackStart?: number; playbackEnd?: number }[];
   /** 区間 id → 個別倍率（バッジ表示用）。 */
@@ -103,6 +102,7 @@ export function CutTrack({
   onSelectMainVideo,
   mainVideoSelected,
   mainSpeed,
+  ordering,
   keptSegments,
   segmentSpeeds,
   layoutKeyframes,
@@ -217,8 +217,9 @@ export function CutTrack({
         <KeyframeMarkers
           layoutKeyframes={layoutKeyframes}
           cutRegions={cutRegions}
+          ordering={ordering}
           fps={fps ?? 30}
-          frameToX={(playbackFrame) => frameToXMapped(playbackToOriginal(playbackFrame, cutRegions), pxPerFrame, map)}
+          frameToX={(playbackFrame) => frameToXMapped(playbackToOriginal(playbackFrame, cutRegions, ordering), pxPerFrame, map)}
           onSeek={onSeekPlayback}
         />
       )}

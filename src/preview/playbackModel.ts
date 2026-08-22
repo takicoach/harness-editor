@@ -1,4 +1,5 @@
-import { applyCuts, playbackTotalFrames } from '../core/cutEngine';
+import { playbackTotalFrames } from '../core/cutEngine';
+import { buildCutOrdering, reorderSe, reorderStartEnd } from '../core/cutOrder';
 import { projectTelops } from '../core/telopEngine';
 import { projectTitles } from '../core/titleEngine';
 import { clampSe, projectSe } from '../core/seAnchor';
@@ -94,6 +95,11 @@ export interface PlaybackModel {
   titles: TitleSegment[];
   /** タイトル帯の標準スタイル（最終書き出しと一致する位置・フォント描画用）。 */
   titleStyle: TitleStyle;
+  /**
+   * テロップ下端オフセット（px・TELOP_CONFIG.bottomOffset 由来／読めなければ null）。
+   * プレビューの選択枠アンカーと当たり判定をプロジェクト実描画位置へ合わせるために carry する。
+   */
+  telopBottomOffset: number | null;
   /** 再生タイムラインへ射影済みの効果音。 */
   se: SePlayback[];
   /** 再生タイムラインへ射影済みの挿入画像。 */
@@ -221,8 +227,10 @@ export function applySpeed(
 /** EditorProject からカット適用済みの再生モデルを組み立てる。 */
 export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   const original = project.videoConfig.durationFrames;
-  const keptSegments = applyCuts(original, project.cutRegions);
-  const joins = computeJoins(original, project.cutRegions);
+  // 並び替え（cutData.ts の配列順）を再導出する。恒等順列なら applyCuts の出力と同一。
+  const ordering = buildCutOrdering(original, project.cutRegions, project.cutOrder);
+  const keptSegments = ordering.segments;
+  const joins = computeJoins(original, project.cutRegions, ordering);
   const playbackDurationInFrames = Math.max(1, playbackTotalFrames(original, project.cutRegions));
 
   // sceneTransitions（at=原本フレーム）を再生フレームへ解決し overlaps を構築する。
@@ -234,15 +242,17 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   const durationInFrames = Math.max(1, finalTotalFrames(playbackDurationInFrames, overlaps));
 
   // 再生座標の各要素を collapse で最終座標へ写す（overlaps 空なら恒等）。
-  const projectedTelops = projectTelops(project.telops, project.cutRegions);
+  // 各要素は projectX で「単調（原素材順）再生座標」になるため、reorder で並び替え後の
+  // 再生座標へ写してから collapse する（恒等順列なら reorder は恒等）。
+  const projectedTelops = reorderStartEnd(projectTelops(project.telops, project.cutRegions), ordering);
   const telops = collapseTelops(projectedTelops, overlaps);
 
-  const projectedTitles = projectTitles(project.titles, project.cutRegions);
+  const projectedTitles = reorderStartEnd(projectTitles(project.titles, project.cutRegions), ordering);
   const titles = collapseTitles(projectedTitles, overlaps);
 
   // serializeProject と同型: clampSe→projectSe の順で射影し、縮退区間（endFrame<=startFrame）を除外。
   const { se: clampedSe } = clampSe(project.se, project.cutRegions);
-  const projectedSe: SePlayback[] = projectSe(clampedSe, project.cutRegions)
+  const projectedSe: SePlayback[] = reorderSe(projectSe(clampedSe, project.cutRegions), ordering)
     .filter((s) => (s.endFrame ?? 0) > s.startFrame)
     .map((s) => ({
       id: s.id,
@@ -260,7 +270,7 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   // 「事前 clamp 済み」を前提にしているため再生フレーム 0 へ寄ってしまい、保存時の
   // 結果（clamp 後の値）と乖離する。プレビュー＝保存と一致させるためここで clamp する。
   const { images: clampedImages } = clampImages(project.images, project.cutRegions);
-  const projectedImages: ImagePlayback[] = projectImages(clampedImages, project.cutRegions).map((i) => ({
+  const projectedImages: ImagePlayback[] = reorderStartEnd(projectImages(clampedImages, project.cutRegions), ordering).map((i) => ({
     id: i.id,
     playbackStart: i.startFrame,
     playbackEnd: i.endFrame,
@@ -279,7 +289,7 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   const images = collapseImages(projectedImages, overlaps);
 
   const { videoInserts: clampedVi } = clampVideoInserts(project.videoInserts ?? [], project.cutRegions);
-  const projectedVi: VideoInsertPlayback[] = projectVideoInserts(clampedVi, project.cutRegions).map((v) => ({
+  const projectedVi: VideoInsertPlayback[] = reorderStartEnd(projectVideoInserts(clampedVi, project.cutRegions), ordering).map((v) => ({
     id: v.id,
     playbackStart: v.startFrame,
     playbackEnd: v.endFrame,
@@ -296,18 +306,19 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   // サブ動画と同型: clampBgm→projectBgm の順で射影し、縮退区間（endFrame<=startFrame）を除外。
   const { bgm: clampedBgm } = clampBgm(project.bgm ?? [], project.cutRegions);
   const projectedBgm = projectBgm(clampedBgm, project.cutRegions).filter((c) => c.endFrame > c.startFrame);
-  const duckedBgm = applyDuckingToBgm(
+  // ダッキングは単調再生座標で計算し（cutRegions 基準のため）、そのあと並び替えを掛ける。
+  const duckedBgm = reorderStartEnd(applyDuckingToBgm(
     projectedBgm,
     project.transcript.words,
     project.cutRegions,
     project.videoConfig.fps,
     project.ducking,
-  );
+  ), ordering);
   const bgm = collapseBgm(duckedBgm, overlaps);
 
   // 画像・サブ動画と同型: clampShapes→projectShapes の順で射影し、縮退区間を除外。
   const { shapes: clampedShapes } = clampShapes(project.shapes ?? [], project.cutRegions);
-  const projectedShapes: ShapeSegment[] = projectShapes(clampedShapes, project.cutRegions)
+  const projectedShapes: ShapeSegment[] = reorderStartEnd(projectShapes(clampedShapes, project.cutRegions), ordering)
     .filter((s) => s.endFrame > s.startFrame)
     .map((s) => ({ ...s, opacity: s.opacity }));
   const shapes = collapseShapes(projectedShapes, overlaps);
@@ -326,6 +337,7 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
     telops,
     titles,
     titleStyle: project.videoConfig.titleStyle,
+    telopBottomOffset: project.videoConfig.telopBottomOffset ?? null,
     se,
     images,
     videoInserts,

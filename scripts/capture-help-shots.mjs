@@ -22,7 +22,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEMO_CLIP = join(REPO, 'scripts', 'guide-assets', 'demo-golf.mp4');
 const OUT_DIR = join(REPO, 'src', 'app', 'help', 'img');
 const FIXTURE = join(REPO, 'src', 'server', '__fixtures__', 'sample-project');
-const PORT = 2109;
+const PORT = Number(process.env.SME_PORT ?? 2109); // 実エディタ稼働中でも別ポートで収録できるように（isolated e2e と同じ流儀）
 const BASE = `http://localhost:${PORT}`;
 const DEMO_PROJECT = 'ゴルフドリル解説';
 
@@ -128,10 +128,12 @@ const SHOTS = {
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     // I-4: 旧 UI の `.cl-setup`（別ターミナル手順の案内カード）は撤去済み。埋め込み
     // ターミナル（ClaudeTerminal）のフェーズは撮影機のマシンに claude が入っているか
-    // どうかで need-install/starting/connected と分岐するため、フェーズに関わらず
-    // 必ず存在するルート要素 `.clt` を待ってから AI タブ全体を撮る。
-    await page.locator('.clt').waitFor({ timeout: 10_000 });
-    await sleep(600);
+    // どうかで need-install/starting/connected と分岐する。撮影機には claude が
+    // 入っている前提で、接続完了（待機ボタン表示）の直後に撮る。**起動画面の描画は
+    // 待たない**こと — 実 claude セッションの起動画面には撮影マシンのアカウント名・
+    // プラン・利用モデルが表示されるため、長く待つと公開物に写り込む。
+    await page.locator('.clt-waiting-btn').waitFor({ timeout: 60_000 });
+    await sleep(300);
     return page.locator('.rightdock');
   },
 
@@ -186,18 +188,12 @@ const SHOTS = {
   async aiModes(page) {
     await openDemoProject(page);
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
-    // I-4: 旧 UI の接続ガイド（`.cl-setup-steps li` / `.cl-setup-mode-label`）は撤去済み。
-    // 「A. 全体待機 / B. この動画専属」の2モードは、いまは在席欄（`.cl-agent-status`。
-    // 全体待機は AI タブの「待機を開始」ボタン、専属は在席欄の展開）に分かれて出る。
-    // 専属側の導線（詳細開閉）を開いた状態で在席欄を撮る。
-    await page.locator('.cl-agent-status').waitFor({ timeout: 10_000 });
-    const recruit = page.locator('.cl-dedicated-recruit');
-    if (await recruit.count() > 0) {
-      await recruit.locator('summary').click();
-      await sleep(300);
-    }
-    await sleep(300);
-    return page.locator('.cl-agent-status');
+    // 簡素化 AI タブ（埋め込みターミナルのみ）では在席欄 `.cl-agent-status` は存在しない。
+    // 全体待機の入口である「待機を開始」ボタン（claude 接続後にのみ出る）を含めて
+    // ターミナル下部を撮る。接続に時間がかかる環境があるため待ちは長め。
+    await page.locator('.clt-waiting-btn').waitFor({ timeout: 60_000 });
+    await sleep(400);
+    return clipAround(page, [page.locator('.clt-waiting-btn')], 48);
   },
 
   async render(page) {

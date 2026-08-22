@@ -6,6 +6,7 @@ function baseState(): EditState {
   return {
     telops: [], cutRegions: [], se: [], images: [], videoInserts: [], bgm: [],
     titles: [], selection: null,
+    multiTelopIds: [],
     nextTelopId: 1, nextSeId: 1, nextImageId: 1, nextVideoInsertId: 1, nextBgmId: 1, nextTitleId: 1,
     shapes: [], nextShapeId: 1,
     sceneTransitions: [], nextTransitionId: 1,
@@ -52,6 +53,13 @@ describe('splitTitleAt', () => {
     expect(r.titles[1]).toMatchObject({ originalStart: 75, text: 'AB' });
     expect(r.titles[1]!.id).toBe(s.nextTitleId);
   });
+  it('分割後は右（後半）断片を選択する（cutOps.splitTelopAt と同仕様）', () => {
+    const s = insertTitle(baseState(), 0, 30, 9000);
+    const r = splitTitleAt(s, 1, 75);
+    expect(r.selection).toEqual({ kind: 'title', id: r.titles[1]!.id });
+    // 左（元 id）ではないこと＝分割直後の打ち替え先が左に据え置かれないこと。
+    expect(r.selection).not.toEqual({ kind: 'title', id: r.titles[0]!.id });
+  });
   it('範囲外なら no-op', () => {
     const s = insertTitle(baseState(), 0, 30, 9000);
     expect(splitTitleAt(s, 1, 1000).titles).toHaveLength(1);
@@ -71,7 +79,7 @@ describe('moveTitle', () => {
   const base = (over = {}) => ({
     telops: [], cutRegions: [], se: [], images: [], videoInserts: [], bgm: [],
     titles: [{ id: 1, originalStart: 100, originalEnd: 220, text: 'T' }],
-    selection: null, nextTelopId: 1, nextSeId: 1, nextImageId: 1,
+    selection: null, multiTelopIds: [], nextTelopId: 1, nextSeId: 1, nextImageId: 1,
     nextVideoInsertId: 1, nextBgmId: 1, nextTitleId: 2,
     shapes: [], nextShapeId: 1,
     sceneTransitions: [], nextTransitionId: 1,

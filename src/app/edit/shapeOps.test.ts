@@ -141,15 +141,36 @@ describe('moveShape', () => {
     expect(s.y2).toBeCloseTo(0.8);
   });
 
-  it('クランプにより 0 未満は 0 になる', () => {
+  it('境界に当たっても平行移動を保つ（端点独立クランプで変形しない）', () => {
+    // 2026-08-19 契約変更（裁定 P1-8）: 旧実装は端点を独立にクランプしていたため、
+    // 境界に当たると図形が潰れた（(0.1,0.1)-(0.5,0.5) が両端 0 の点になる）。
+    // 新実装は先に許容 dx/dy を求めて両端へ同量を当てる＝形と大きさは不変。
     let st = addShape(base(), 'line', 0.1, 0.1, 0.5, 0.5, 0);
     const id = st.shapes[0]!.id;
     st = moveShape(st, id, -0.5, -0.5);
     const s = st.shapes[0]!;
-    expect(s.x1).toBe(0);
-    expect(s.y1).toBe(0);
-    expect(s.x2).toBeCloseTo(0);
-    expect(s.y2).toBeCloseTo(0);
+    expect(s.x1).toBeCloseTo(0);
+    expect(s.y1).toBeCloseTo(0);
+    expect(s.x2).toBeCloseTo(0.4);
+    expect(s.y2).toBeCloseTo(0.4);
+  });
+
+  it('右下の境界でも平行移動を保つ', () => {
+    let st = addShape(base(), 'rect', 0.6, 0.5, 0.8, 0.9, 0);
+    const id = st.shapes[0]!.id;
+    st = moveShape(st, id, 0.5, 0.5);
+    const s = st.shapes[0]!;
+    expect(s.x2).toBeCloseTo(1);
+    expect(s.x1).toBeCloseTo(0.8);
+    expect(s.y2).toBeCloseTo(1);
+    expect(s.y1).toBeCloseTo(0.6);
+  });
+
+  it('既に境界に張り付いていて動けないなら同一 state 参照を返す（空 Undo 防止）', () => {
+    let st = addShape(base(), 'rect', 0, 0, 0.4, 0.4, 0);
+    const id = st.shapes[0]!.id;
+    expect(moveShape(st, id, -0.2, -0.2)).toBe(st);
+    expect(moveShape(st, id, 0, 0)).toBe(st);
   });
 
   it('非有限値・不在 ID は state をそのまま返す', () => {
@@ -178,6 +199,15 @@ describe('setShapePoints', () => {
     const id = st.shapes[0]!.id;
     expect(setShapePoints(st, id, Number.NaN, 0, 1, 1)).toBe(st);
     expect(setShapePoints(st, 999, 0, 0, 1, 1)).toBe(st);
+  });
+
+  it('クランプ後の 4 点が同値なら同一 state 参照を返す（no-op を commit しない）', () => {
+    let st = addShape(base(), 'rect', 0.2, 0.2, 0.6, 0.6, 0);
+    const id = st.shapes[0]!.id;
+    expect(setShapePoints(st, id, 0.2, 0.2, 0.6, 0.6)).toBe(st);
+    // クランプ後に同値になる場合（範囲外→境界）も同一参照。
+    st = setShapePoints(st, id, 0, 0.2, 1, 0.6);
+    expect(setShapePoints(st, id, -3, 0.2, 9, 0.6)).toBe(st);
   });
 });
 

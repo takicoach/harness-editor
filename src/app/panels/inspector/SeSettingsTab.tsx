@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../../core/cutOrder';
 import { useAudition } from '../../audio/useAudition';
 import { assetPathFor, assetUrl } from '../materialList';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
@@ -23,7 +24,7 @@ interface SeSettingsTabProps {
 export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersions, onEdit }: SeSettingsTabProps) {
   const audition = useAudition();
   // 再生（カット後）フレームでユーザーに見せる。カット区間内なら null。
-  const playbackFrame = originalToPlayback(se.originalStart, state.cutRegions);
+  const playbackFrame = originalToPlayback(se.originalStart, state.cutRegions, cutOrderingOf(state));
   const shown = playbackFrame ?? se.originalStart;
   const editable = playbackFrame !== null;
   // volume 未指定 SE は ハーネス形式の再生既定（volume ?? 1）と一致させる。
@@ -59,7 +60,7 @@ export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersi
   function commitFrame(): void {
     const frame = parseSecField(frameStr, shown, fps);
     if (frame === null) { setFrameStr(frameToSec(shown, fps).toFixed(2)); return; }
-    onEdit(moveSe(state, se.id, playbackToOriginal(frame, state.cutRegions)));
+    onEdit(moveSe(state, se.id, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state))));
   }
 
   return (

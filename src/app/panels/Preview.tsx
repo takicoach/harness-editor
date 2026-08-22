@@ -210,6 +210,7 @@ export const Preview = forwardRef<PlayerRef, PreviewProps>(function Preview(
           onEdit={onEdit}
           playerRef={ref as RefObject<PlayerRef | null>}
           drawingKind={drawingKind}
+          telopBottomOffset={model.telopBottomOffset}
           mainSpeed={model.mainSpeed}
           speedSegments={model.speedSegments}
           playbackOverlaps={model.playbackOverlaps}

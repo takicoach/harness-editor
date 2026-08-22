@@ -1,4 +1,4 @@
-import type { CutRegion } from '../../core/types';
+import type { CutOrdering, CutRegion } from '../../core/types';
 import type { LayoutKeyframe } from '../../core/layoutKeyframes';
 import { originalToPlayback } from '../../core/cutEngine';
 
@@ -7,6 +7,8 @@ interface KeyframeMarkersProps {
   layoutKeyframes: LayoutKeyframe[];
   /** カット後→元フレーム変換に使う（カット区間内の KF はスキップする）。 */
   cutRegions: CutRegion[];
+  /** カット並び替えの対応表。未指定なら従来の単調モデル。 */
+  ordering?: CutOrdering;
   fps: number;
   /** frame(再生タイムライン座標) → タイムライン x 座標(px)。 */
   frameToX: (playbackFrame: number) => number;
@@ -22,6 +24,7 @@ interface KeyframeMarkersProps {
 export function KeyframeMarkers({
   layoutKeyframes,
   cutRegions,
+  ordering,
   fps,
   frameToX,
   onSeek,
@@ -31,7 +34,7 @@ export function KeyframeMarkers({
   return (
     <div className="kf-markers">
       {layoutKeyframes.map((kf, i) => {
-        const playback = originalToPlayback(kf.originalFrame, cutRegions);
+        const playback = originalToPlayback(kf.originalFrame, cutRegions, ordering);
         if (playback === null) return null;
         const seconds = (kf.originalFrame / fps).toFixed(2);
         return (

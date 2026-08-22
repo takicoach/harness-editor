@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import type { EditorProject } from '../core/types';
 import type { ProjectFingerprint, SaveRequest, SaveResponse } from '../shared/types';
 import { putJson } from './fetchJson';
-import { createEditState, toEditorProject, samePersistedContent, type EditState } from './edit/editState';
+import { createEditState, toEditorProject, samePersistedContent, normalizeMultiSelection, type EditState } from './edit/editState';
 import { loadDuckingSettings } from './edit/duckingSettings';
 import {
   canRedo,
@@ -19,14 +19,47 @@ import type { SaveMeta } from './useEditorProject';
 /** 保存処理の状態。 */
 type SaveStatus = 'idle' | 'saving' | 'error';
 
+/**
+ * 次の状態そのもの、または「直前の状態から次の状態を作る関数」。
+ *
+ * 呼び出し側の多くは `apply(someOp(state, ...))` のようにレンダー時クロージャの `state` を
+ * 素材にする。これは同一レンダー中に複数回状態を更新する経路（例: pointerdown で
+ * setTransient して選択を変え、pointerup で apply する）では、再レンダーが挟まる保証が
+ * ない限り「古い state で上書きして直前の更新を取り消す」危険がある。
+ * 関数形を渡せば常に履歴の最新状態を素材にできるので、その不整合を構造的に断てる。
+ *
+ * **関数形は純関数であること**（React の setState updater と同じ契約。StrictMode の
+ * 開発ビルドでは 2 回呼ばれるため、副作用を書くと二重に走る）。
+ */
+export type EditStateOrUpdater = EditState | ((prev: EditState) => EditState);
+
+/**
+ * 関数形なら最新状態へ適用し、値形ならそのまま返す。
+ *
+ * 併せて複数選択集合の不変条件を中央で強制する（`normalizeMultiSelection`）。
+ * 選択種別を変えるだけの経路（SE・画像・BGM クリック等）は多数あり、そのすべてへ
+ * 「集合をクリアする」を書き足すと必ず取りこぼす。ここを通せば apply / setTransient の
+ * どちらから来ても不正状態（他種選択なのに集合が残る／消えた ID が残る）にならない。
+ * 正規化は冪等で、変化が無ければ同一参照を返すため二重適用しても副作用はない。
+ */
+function resolveNext(next: EditStateOrUpdater, prev: EditState): EditState {
+  return normalizeMultiSelection(typeof next === 'function' ? next(prev) : next);
+}
+
 /** 編集セッションが UI へ公開する API。 */
 export interface EditSession {
   /** 現在の編集状態。 */
   state: EditState;
-  /** 履歴へ積みながら状態を更新する（編集操作はすべてこれを通す）。 */
-  apply: (next: EditState) => void;
-  /** 履歴を積まずに状態を更新する（選択変更などの非編集操作用）。 */
-  setTransient: (next: EditState) => void;
+  /**
+   * 履歴へ積みながら状態を更新する（編集操作はすべてこれを通す）。
+   * 同一レンダー中に複数回更新しうる経路では関数形 `apply((s) => op(s, ...))` を使うこと。
+   */
+  apply: (next: EditStateOrUpdater) => void;
+  /**
+   * 履歴を積まずに状態を更新する（選択変更などの非編集操作用）。
+   * 同上、関数形を渡せば古いクロージャで上書きする事故を防げる。
+   */
+  setTransient: (next: EditStateOrUpdater) => void;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -111,8 +144,8 @@ export function useEditSession(
   fingerprintRef.current = fingerprint;
   savedContentRef.current = savedContent;
 
-  const apply = useCallback((next: EditState) => {
-    setHistory((h) => (h ? pushState(h, next) : h));
+  const apply = useCallback((next: EditStateOrUpdater) => {
+    setHistory((h) => (h ? pushState(h, resolveNext(next, current(h))) : h));
     setSaveError(null);
     // 直近の保存が失敗（error）していても、新しい編集は「新しい保存対象」であり
     // 同じ失敗コンテンツへの盲目的リトライではない。次の自動保存/手動保存が
@@ -120,12 +153,12 @@ export function useEditSession(
     setSaveStatus((s) => (s === 'error' ? 'idle' : s));
   }, []);
 
-  const setTransient = useCallback((next: EditState) => {
+  const setTransient = useCallback((next: EditStateOrUpdater) => {
     // 履歴の現在状態だけを差し替える（index は動かさない）。選択変更などに使う。
     setHistory((h) => {
       if (!h) return h;
       const states = [...h.states];
-      states[h.index] = next;
+      states[h.index] = resolveNext(next, current(h));
       return { states, index: h.index };
     });
   }, []);

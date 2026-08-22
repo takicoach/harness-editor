@@ -10,7 +10,19 @@ export {
   playbackToOriginal,
   addCutRegion,
   removeCutRegion,
+  monotoneToOrdered,
+  orderedToMonotone,
 } from './cutEngine';
+export {
+  cutOrderFromCutData,
+  orderCutSegments,
+  buildCutOrdering,
+  cutOrderingOf,
+  reorderStartEnd,
+  unreorderStartEnd,
+  reorderSe,
+  unreorderSe,
+} from './cutOrder';
 export { anchorTelops, projectTelops, clampTelops, type ClampResult } from './telopEngine';
 export { splitSegment, mergeSegments } from './segmentOps';
 export { buildWordChips } from './wordChips';

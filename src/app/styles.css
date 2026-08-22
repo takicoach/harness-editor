@@ -1949,6 +1949,21 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 .pv-hit{ position:absolute; cursor:pointer; border-radius:4px; }
 .pv-hit:hover{ outline:1.5px dashed var(--accent); outline-offset:1px; background:var(--accent-tint); }
 
+/* ===== 図形のプレビュー操作（選択枠・ハンドル・ヒット領域） ===== */
+/* ヒット層は SVG。層自体は透過（pointer-events:none）で、図形の形にだけ当たりを付ける
+   （線は stroke 帯＝点と線分の距離・矩形/楕円は内部）。 */
+.pv-shape-hits{ position:absolute; inset:0; pointer-events:none; overflow:visible; }
+.pv-shape-hits [data-sme-shape-hit]{ cursor:move; }
+.pv-shape-box{
+  position:absolute; pointer-events:none;
+  border:1.5px dashed var(--accent); border-radius:2px;
+}
+.pv-shape-handle{
+  position:absolute; width:12px; height:12px; margin-left:-6px; margin-top:-6px;
+  pointer-events:auto; cursor:pointer;
+  background:var(--accent); border:2px solid #fff; border-radius:50%;
+}
+
 /* ===== TitleSettingsTab ===== */
 .ins-title-actions { display: flex; flex-direction: column; gap: 8px; }
 .ins-title-del { color: var(--danger); }

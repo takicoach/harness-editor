@@ -237,6 +237,10 @@ export function saveProjectToDir(dir: string, req: SaveRequest): SaveResponse {
   // 更新されないため、stale な null を真にしてしまうとデータ損失が起きる。
   const projectForSerialize: EditorProject = {
     ...(req.project as EditorProject),
+    // 再生順アンカー（並び替え）はクライアントが編集しない読み取り専用の情報。
+    // 上と同じ理由でサーバ側の disk 再読込値を正とし、旧クライアントの未送信で
+    // 並び順が失われないようにする。
+    cutOrder: current.project.cutOrder,
     seDataSource: current.project.seDataSource,
     insertImageDataSource: current.project.insertImageDataSource,
     videoInsertDataSource: current.project.videoInsertDataSource,

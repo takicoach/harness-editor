@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
 import { formatClock, frameToSec, parseSecField } from '../../../shared/format';
 import type { EditorShape, ShapeThickness } from '../../../core/types';
@@ -24,8 +25,8 @@ interface ShapeSettingsTabProps {
  * 図形選択時のインスペクタ本体（受入基準: 色6プリセット/太さ3段/不透明度スライダー/表示区間/CTA）。
  */
 export function ShapeSettingsTab({ shape, state, fps, shapeInstalled, installing, installErrors, dirty, onInstall, onEdit }: ShapeSettingsTabProps) {
-  const playbackStart = originalToPlayback(shape.originalStart, state.cutRegions);
-  const playbackEnd = originalToPlayback(shape.originalEnd, state.cutRegions);
+  const playbackStart = originalToPlayback(shape.originalStart, state.cutRegions, cutOrderingOf(state));
+  const playbackEnd = originalToPlayback(shape.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   const shownStart = playbackStart ?? shape.originalStart;
   const shownEnd = playbackEnd ?? shape.originalEnd;
   const editable = playbackStart !== null && playbackEnd !== null;
@@ -39,12 +40,12 @@ export function ShapeSettingsTab({ shape, state, fps, shapeInstalled, installing
   function commitStart(): void {
     const frame = parseSecField(startStr, shownStart, fps);
     if (frame === null) { setStartStr(frameToSec(shownStart, fps).toFixed(2)); return; }
-    onEdit(retimeShape(state, shape.id, playbackToOriginal(frame, state.cutRegions), shape.originalEnd));
+    onEdit(retimeShape(state, shape.id, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state)), shape.originalEnd));
   }
   function commitEnd(): void {
     const frame = parseSecField(endStr, shownEnd, fps);
     if (frame === null) { setEndStr(frameToSec(shownEnd, fps).toFixed(2)); return; }
-    onEdit(retimeShape(state, shape.id, shape.originalStart, playbackToOriginal(frame, state.cutRegions)));
+    onEdit(retimeShape(state, shape.id, shape.originalStart, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state))));
   }
 
   const THICKNESS_LABELS: Record<string, string> = { thin: '細', medium: '中', thick: '太' };

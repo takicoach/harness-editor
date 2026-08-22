@@ -1,4 +1,54 @@
-import type { CutRegion, CutSegment } from './types';
+import type { CutOrdering, CutRegion, CutSegment } from './types';
+
+/**
+ * 区間の端をどちら側に寄せて解釈するか。
+ * 単調再生座標では区間が隙間なく連なるため、境界フレームは前後どちらの区間にも属しうる。
+ * 'start'（既定）＝開始フレーム向け（後ろの区間の先頭とみなす）、
+ * 'end'＝排他的終端向け（前の区間の末尾とみなす）。
+ */
+export type FrameBias = 'start' | 'end';
+
+function hitRange(frame: number, start: number, end: number, bias: FrameBias): boolean {
+  return bias === 'end' ? frame > start && frame <= end : frame >= start && frame < end;
+}
+
+/**
+ * 単調（原素材順）再生フレーム → 並び替え後の再生フレーム。
+ * ordering が未指定・恒等なら恒等写像（従来経路と完全一致）。
+ * 素材の外（負値・総尺以降）は両座標系で一致するためそのまま返す。
+ */
+export function monotoneToOrdered(
+  frame: number,
+  ordering: CutOrdering | undefined,
+  bias: FrameBias = 'start',
+): number {
+  if (ordering === undefined || ordering.identity) return frame;
+  for (let i = 0; i < ordering.monotone.length; i++) {
+    const m = ordering.monotone[i]!;
+    if (hitRange(frame, m.start, m.end, bias)) {
+      return ordering.segments[i]!.playbackStart + (frame - m.start);
+    }
+  }
+  return frame;
+}
+
+/**
+ * 並び替え後の再生フレーム → 単調（原素材順）再生フレーム。monotoneToOrdered の逆。
+ */
+export function orderedToMonotone(
+  frame: number,
+  ordering: CutOrdering | undefined,
+  bias: FrameBias = 'start',
+): number {
+  if (ordering === undefined || ordering.identity) return frame;
+  for (let i = 0; i < ordering.segments.length; i++) {
+    const s = ordering.segments[i]!;
+    if (hitRange(frame, s.playbackStart, s.playbackEnd, bias)) {
+      return ordering.monotone[i]!.start + (frame - s.playbackStart);
+    }
+  }
+  return frame;
+}
 
 /** CutRegion[] を start 昇順へソートし、重複・隣接区間をマージ、空区間を除外する。 */
 export function normalizeCutRegions(regions: CutRegion[]): CutRegion[] {
@@ -104,10 +154,18 @@ export function playbackTotalFrames(originalTotalFrames: number, regions: CutReg
 /**
  * 原本フレームをカット後（再生）フレームへ射影する。
  * フレームがカット区間内なら null。
+ * ordering を渡すと並び替え（再生順が原素材順と異なる編集）にも対応する。
+ * 未指定なら従来どおり単調モデル（原素材順）で射影する。
  */
-export function originalToPlayback(originalFrame: number, regions: CutRegion[]): number | null {
+export function originalToPlayback(
+  originalFrame: number,
+  regions: CutRegion[],
+  ordering?: CutOrdering,
+  bias: FrameBias = 'start',
+): number | null {
   const cuts = normalizeCutRegions(regions);
   let removed = 0;
+  let monotone: number | null = null;
   for (const c of cuts) {
     if (originalFrame >= c.end) {
       removed += c.end - c.start;
@@ -116,13 +174,22 @@ export function originalToPlayback(originalFrame: number, regions: CutRegion[]):
     if (originalFrame >= c.start) return null; // カット区間内
     break;
   }
-  return originalFrame - removed;
+  monotone = originalFrame - removed;
+  return monotoneToOrdered(monotone, ordering, bias);
 }
 
-/** カット後（再生）フレームを原本フレームへ逆射影する。 */
-export function playbackToOriginal(playbackFrame: number, regions: CutRegion[]): number {
+/**
+ * カット後（再生）フレームを原本フレームへ逆射影する。
+ * ordering を渡すと並び替えにも対応する（未指定なら従来どおり単調モデル）。
+ */
+export function playbackToOriginal(
+  playbackFrame: number,
+  regions: CutRegion[],
+  ordering?: CutOrdering,
+  bias: FrameBias = 'start',
+): number {
   const cuts = normalizeCutRegions(regions);
-  let original = playbackFrame;
+  let original = orderedToMonotone(playbackFrame, ordering, bias);
   for (const c of cuts) {
     if (original >= c.start) {
       original += c.end - c.start;

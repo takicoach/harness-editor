@@ -37,6 +37,8 @@ interface UseTimelineEdgeDragOptions<Id, H extends EdgeHandle, O> {
   afterCommit?: () => void;
   /** ライブ表示用オーバーライドの組み立て。 */
   buildOverride: (id: Id, start: number, end: number) => O;
+  /** 端ドラッグ自動スクロールが足した累積 px（useTimelineDrag へそのまま渡す）。 */
+  getAutoScrollDx?: () => number;
 }
 
 interface UseTimelineEdgeDragResult<H, O> {
@@ -64,6 +66,7 @@ export function useTimelineEdgeDrag<Id, H extends EdgeHandle, O>(
     getTrackOriginX: opts.getTrackOriginX,
     pxPerFrame: opts.pxPerFrame,
     map: opts.map,
+    ...(opts.getAutoScrollDx ? { getAutoScrollDx: opts.getAutoScrollDx } : {}),
     onDrag: (_handle, rawFrame) => opts.applySnap(rawFrame),
     onCommit: (handle, finalFrame) => {
       const origin = originRef.current;
@@ -77,6 +80,11 @@ export function useTimelineEdgeDrag<Id, H extends EdgeHandle, O>(
         const clampedEnd = Math.max(origin.start + 1, finalFrame);
         opts.onRetimeEnd(id, origin.start, clampedEnd);
       }
+      opts.afterCommit?.();
+    },
+    // 純クリック（移動ゼロ）は onHandleDown の選択だけで完結させ、コミットしない。
+    // 後片付け（吸着ガイドの消去）は commit 時と同じ afterCommit を通す。
+    onClick: () => {
       opts.afterCommit?.();
     },
   });

@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadProject } from '../core';
-import { applyCuts } from '../core/cutEngine';
+import { buildCutOrdering } from '../core/cutOrder';
 import { isCutsOnly } from '../shared/cutsOnly';
 import type { RenderOptions } from '../shared/renderPreset';
 import { targetResolution } from '../shared/renderPreset';
@@ -48,8 +48,12 @@ export function planFastCut(
   if (!isCutsOnly(project)) return null;
 
   const { videoConfig } = project;
-  const segments: KeptSegment[] = applyCuts(videoConfig.durationFrames, project.cutRegions)
-    .map((s) => ({ start: s.originalStart, end: s.originalEnd }));
+  // 並び替え（cutData.ts の配列順）を反映した再生順で連結する（恒等順列なら原素材順のまま）。
+  const segments: KeptSegment[] = buildCutOrdering(
+    videoConfig.durationFrames,
+    project.cutRegions,
+    project.cutOrder,
+  ).segments.map((s) => ({ start: s.originalStart, end: s.originalEnd }));
   const totalFrames = expectedCutFrames(segments);
   if (totalFrames <= 0) return null;
 

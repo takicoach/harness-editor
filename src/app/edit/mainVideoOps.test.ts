@@ -15,7 +15,7 @@ import { DEFAULT_MAIN_LAYOUT } from '../../core/mainLayout';
 function st(over: Partial<EditState> = {}): EditState {
   return {
     telops: [], cutRegions: [], se: [], images: [], videoInserts: [], bgm: [],
-    selection: null, nextTelopId: 1, nextSeId: 1, nextImageId: 1, nextVideoInsertId: 1, nextBgmId: 1,
+    selection: null, multiTelopIds: [], nextTelopId: 1, nextSeId: 1, nextImageId: 1, nextVideoInsertId: 1, nextBgmId: 1,
     titles: [], nextTitleId: 1,
     shapes: [], nextShapeId: 1,
     sceneTransitions: [], nextTransitionId: 1,

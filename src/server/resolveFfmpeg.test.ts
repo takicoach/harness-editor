@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { join } from 'node:path';
 import {
   commonFfmpegPaths,
   ffprobeFromFfmpeg,
@@ -78,21 +79,41 @@ describe('resolveFfmpegBin', () => {
     });
     expect(bin).toEqual({ ok: true, bin: 'C:\\ffmpeg\\bin\\ffmpeg.exe' });
   });
+
+  it('他が無ければエディタ直下 tools/ffmpeg（setup が置く静的ビルド）を解決する', () => {
+    const toolsBin = join(process.cwd(), 'tools', 'ffmpeg');
+    const bin = resolveFfmpegBin({
+      which: (name) => (name === toolsBin ? name : null),
+      env: {},
+      platform: 'darwin',
+    });
+    expect(bin).toEqual({ ok: true, bin: toolsBin });
+  });
 });
 
 describe('commonFfmpegPaths', () => {
-  it('win32 は zip 展開先・winget・scoop・chocolatey を候補にする', () => {
-    const paths = commonFfmpegPaths('win32', {
-      USERPROFILE: 'C:\\Users\\taki',
-      LOCALAPPDATA: 'C:\\Users\\taki\\AppData\\Local',
-      ProgramData: 'C:\\ProgramData',
-    });
+  it('win32 は zip 展開先・winget・scoop・chocolatey とエディタ直下 tools を候補にする', () => {
+    const paths = commonFfmpegPaths(
+      'win32',
+      {
+        USERPROFILE: 'C:\\Users\\taki',
+        LOCALAPPDATA: 'C:\\Users\\taki\\AppData\\Local',
+        ProgramData: 'C:\\ProgramData',
+      },
+      'C:\\HarnessEditor',
+    );
     expect(paths).toEqual([
       'C:\\ffmpeg\\bin\\ffmpeg.exe',
       'C:\\Users\\taki\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe',
       'C:\\Users\\taki\\scoop\\shims\\ffmpeg.exe',
       'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe',
+      'C:\\HarnessEditor\\tools\\ffmpeg.exe',
     ]);
+  });
+
+  it('win32 の tools 候補は末尾の区切り文字を重ねない', () => {
+    const paths = commonFfmpegPaths('win32', { USERPROFILE: 'C:\\Users\\taki' }, 'C:\\HarnessEditor\\');
+    expect(paths.at(-1)).toBe('C:\\HarnessEditor\\tools\\ffmpeg.exe');
   });
 
   it('darwin/linux は従来の Unix 候補を返す', () => {
@@ -100,6 +121,18 @@ describe('commonFfmpegPaths', () => {
     expect(paths).toContain('/opt/homebrew/bin/ffmpeg');
     expect(paths).toContain('/usr/bin/ffmpeg');
     expect(paths.every((p) => !p.endsWith('.exe'))).toBe(true);
+  });
+
+  it('darwin はエディタ直下 tools/ffmpeg を最後の候補にする（既存候補を優先）', () => {
+    const paths = commonFfmpegPaths('darwin', {}, '/Users/taki/HarnessEditor');
+    expect(paths.at(-1)).toBe('/Users/taki/HarnessEditor/tools/ffmpeg');
+    // 既存の解決順は不変（システム導入が tools/ より優先される）
+    expect(paths.indexOf('/opt/homebrew/bin/ffmpeg')).toBeLessThan(paths.length - 1);
+  });
+
+  it('editorRoot 未指定なら cwd 直下 tools/ffmpeg を候補にする', () => {
+    const paths = commonFfmpegPaths('darwin', {});
+    expect(paths.at(-1)).toBe(join(process.cwd(), 'tools', 'ffmpeg'));
   });
 });
 

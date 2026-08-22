@@ -9,6 +9,10 @@ transcribe を実行し、進捗を stdout に JSON Lines で出力する。
                           [--params <path/transcribe_params.json>]
                           [--mock-backend]
 """
+# macOS 標準の Python 3.9 でも動かすため必須（`str | None` 注釈は 3.9 だと
+# def 時に評価されて TypeError になる。この import で評価が遅延される）。
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -30,13 +34,10 @@ DEFAULT_PARAMS = {
     "logprob_threshold": -1.0,
     "no_speech_threshold": 0.45,
     "word_timestamps": True,
-    "initial_prompt": (
-        "ゴルフレッスンの解説動画です。"
-        "ドリル名: ゆる素振り、零式、壱の型、弐の型、フォロービタ止め、"
-        "スプリットハンド、クロスハンド、クッション投げ。"
-        "専門用語: スイング、テークバック、ハンドファースト、クラブ、重心、"
-        "加速ポイント、当て感、脱力。"
-    ),
+    # 分野固有の用語がある動画は、プロジェクトルートの transcribe_params.json で
+    # initial_prompt を上書きすると認識精度が上がる（README「再 transcribe」節に例あり。
+    # 例: "ゴルフレッスンの解説動画です。専門用語: テークバック、ハンドファースト、…"）。
+    "initial_prompt": "日本語の解説動画です。",
 }
 
 

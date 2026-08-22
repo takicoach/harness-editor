@@ -23,7 +23,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEMO_CLIP = join(REPO, 'scripts', 'guide-assets', 'demo-golf.mp4');
 const OUT_DIR = join(REPO, 'docs', 'images', 'guide');
 const FIXTURE = join(REPO, 'src', 'server', '__fixtures__', 'sample-project');
-const PORT = 2109;
+const PORT = Number(process.env.SME_PORT ?? 2109); // 実エディタ稼働中でも別ポートで収録できるように（isolated e2e と同じ流儀）
 const BASE = `http://localhost:${PORT}`;
 const DEMO_PROJECT = 'ゴルフドリル解説';
 

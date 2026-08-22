@@ -559,6 +559,18 @@ describe('main speed in playback model (Plan 1 修正: フレームスケール�
     expect(m05.sceneTransitions[0]?.at).toBe(1000);
   });
 
+  // 3 ホップ配線（videoConfig → PlaybackModel → Preview → PreviewOverlay）の 1 段目。
+  // ここが落ちるとプレビューの枠アンカーが黙って標準値へ戻る（silent OFF）。
+  it('videoConfig.telopBottomOffset を carry する（未指定は null）', () => {
+    const base = makeProject();
+    const gold = {
+      ...base,
+      videoConfig: { ...base.videoConfig, telopBottomOffset: 540 },
+    };
+    expect(buildPlaybackModel(gold).telopBottomOffset).toBe(540);
+    expect(buildPlaybackModel(base).telopBottomOffset).toBeNull();
+  });
+
   it('mainSpeed=1 では playbackOverlaps と overlaps が一致する', () => {
     const m1 = buildPlaybackModel(makeProject({ mainSpeed: 1, cutRegions: [] }));
     expect(m1.playbackOverlaps).toEqual(m1.overlaps);
@@ -583,6 +595,7 @@ function makeMinimalModel(overrides?: Partial<PlaybackModel>): PlaybackModel {
     telops: [],
     titles: [],
     titleStyle: TITLE_STYLE,
+    telopBottomOffset: null,
     se: [],
     images: [],
     videoInserts: [],

@@ -13,6 +13,7 @@ function st(id: number): EditState {
     videoInserts: [],
     bgm: [],
     selection: id === 0 ? null : { kind: 'telop' as const, id },
+    multiTelopIds: [],
     nextTelopId: id,
     nextSeId: 1,
     nextImageId: 1,

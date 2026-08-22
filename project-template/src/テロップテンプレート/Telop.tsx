@@ -208,7 +208,7 @@ const CharByCharText: React.FC<{
 
 export const Telop: React.FC<TelopProps> = ({ segment }) => {
   const frame = useCurrentFrame();
-  const { fps, width } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
 
   // テンプレートを取得し、フォーマット別設定で上書き
   const baseConfig = getTemplateConfig(segment);
@@ -224,6 +224,23 @@ export const Telop: React.FC<TelopProps> = ({ segment }) => {
     },
   };
   const { font, background, position, textStroke, textShadow } = config;
+
+  // 手動テロップの自由配置（Harness Editor / telop-pack の telopTransform と同式）。
+  // テロップは下端固定描画のため、y はフォーマット連動の縦係数（1 - 2*bottomOffset/height）で
+  // 換算し、下端基準（transformOrigin 50% 100%）で当てる。エディタのプレビューと同位置になる。
+  // position/scale 未指定（通常の字幕）は従来と完全に同一描画。
+  const layoutParts: string[] = [];
+  if (segment.position) {
+    // translate は px で当てる（% は「この帯コンテナ」基準になり移動量が画面基準にならないため）。
+    const vCoeff = 1 - 2 * (TELOP_CONFIG.bottomOffset / height);
+    const tx = segment.position.x * 0.5 * width;
+    const ty = segment.position.y * vCoeff * height;
+    layoutParts.push(`translate(${tx}px, ${ty}px)`);
+  }
+  if (segment.scale != null && segment.scale !== 1) {
+    layoutParts.push(`scale(${segment.scale})`);
+  }
+  const layoutTransform = layoutParts.length > 0 ? layoutParts.join(' ') + ' ' : '';
 
   const localFrame = frame - segment.startFrame;
   const duration = segment.endFrame - segment.startFrame;
@@ -468,6 +485,8 @@ export const Telop: React.FC<TelopProps> = ({ segment }) => {
           justifyContent: 'center',
           alignItems: 'center',
           padding: position.containerPadding,
+          transform: layoutTransform === '' ? undefined : layoutTransform,
+          transformOrigin: '50% 100%',
           zIndex: 200,
         }}
       >
@@ -539,7 +558,8 @@ export const Telop: React.FC<TelopProps> = ({ segment }) => {
           alignItems: 'center',
           padding: position.containerPadding,
           opacity,
-          transform: `translate(${translateX}px, ${translateY}px)`,
+          transform: `${layoutTransform}translate(${translateX}px, ${translateY}px)`,
+          transformOrigin: '50% 100%',
           zIndex: 200, // サムネイルより前面に
         }}
       >
@@ -589,7 +609,8 @@ export const Telop: React.FC<TelopProps> = ({ segment }) => {
         alignItems: 'center',
         padding: position.containerPadding,
         opacity,
-        transform: `translate(${translateX}px, ${translateY}px)`,
+        transform: `${layoutTransform}translate(${translateX}px, ${translateY}px)`,
+        transformOrigin: '50% 100%',
         zIndex: 200, // サムネイルより前面に
       }}
     >

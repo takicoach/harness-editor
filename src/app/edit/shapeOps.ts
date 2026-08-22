@@ -81,22 +81,39 @@ export function selectShape(state: EditState, id: number): EditState {
 }
 
 /**
- * 図形の 2 点を平行移動する（dx, dy を加算・各 0..1 クランプ）。
+ * 図形の 2 点を平行移動する。
+ *
+ * **端点を独立にクランプしない**（裁定 P1-8）。端点ごとに 0..1 クランプすると、境界に当たった
+ * 側だけが止まって図形が変形する（線が縮む・矩形が潰れる）。ここでは図形全体として許される
+ * dx/dy を先に求め、**両端点へ同量を当てて平行移動を常に保つ**。
+ * 動ける余地が無い（実質 0 移動）なら**同一 state 参照**を返す（空の Undo を積まない）。
  * 非有限値・不在 ID は state をそのまま返す。
  */
 export function moveShape(state: EditState, id: number, dx: number, dy: number): EditState {
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) return state;
-  return patchShape(state, id, (s) => ({
-    ...s,
-    x1: clamp01(s.x1 + dx),
-    y1: clamp01(s.y1 + dy),
-    x2: clamp01(s.x2 + dx),
-    y2: clamp01(s.y2 + dy),
+  const s = state.shapes.find((x) => x.id === id);
+  if (s === undefined) return state;
+  const minX = Math.min(s.x1, s.x2);
+  const maxX = Math.max(s.x1, s.x2);
+  const minY = Math.min(s.y1, s.y2);
+  const maxY = Math.max(s.y1, s.y2);
+  // 左へは -minX まで、右へは 1-maxX まで（上下も同様）。
+  const adx = clamp(dx, -minX, 1 - maxX);
+  const ady = clamp(dy, -minY, 1 - maxY);
+  if (adx === 0 && ady === 0) return state;
+  return patchShape(state, id, (t) => ({
+    ...t,
+    x1: clamp01(t.x1 + adx),
+    y1: clamp01(t.y1 + ady),
+    x2: clamp01(t.x2 + adx),
+    y2: clamp01(t.y2 + ady),
   }));
 }
 
 /**
  * 図形の 2 点座標を直接設定する（各 0..1 クランプ）。
+ * ハンドルドラッグの経路（プレビューのリサイズ）はここを通る。
+ * クランプ後の 4 点が現在値と同値なら**同一 state 参照**を返す（no-op を commit しない）。
  * 非有限値・不在 ID は state をそのまま返す。
  */
 export function setShapePoints(
@@ -108,13 +125,14 @@ export function setShapePoints(
   y2: number,
 ): EditState {
   if (![x1, y1, x2, y2].every(Number.isFinite)) return state;
-  return patchShape(state, id, (s) => ({
-    ...s,
-    x1: clamp01(x1),
-    y1: clamp01(y1),
-    x2: clamp01(x2),
-    y2: clamp01(y2),
-  }));
+  const cur = state.shapes.find((s) => s.id === id);
+  if (cur === undefined) return state;
+  const nx1 = clamp01(x1);
+  const ny1 = clamp01(y1);
+  const nx2 = clamp01(x2);
+  const ny2 = clamp01(y2);
+  if (cur.x1 === nx1 && cur.y1 === ny1 && cur.x2 === nx2 && cur.y2 === ny2) return state;
+  return patchShape(state, id, (s) => ({ ...s, x1: nx1, y1: ny1, x2: nx2, y2: ny2 }));
 }
 
 /**

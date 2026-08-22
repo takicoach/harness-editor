@@ -354,12 +354,19 @@ test('テロップを選択するとプレビューに操作ボックスが出�
   ).toHaveAttribute('data-reactdom-ok', 'yes', { timeout: 10_000 });
 
   // 本体をドラッグする → ガイド線が一時表示され、位置が変化する。
+  // 掴む点は枠の中心ではなく**移動ドラッグ面**（.pv-telop-grab）。2026-08-19 の実測方式で
+  // 枠が実際の文字の高さ（薄い）になり、下端がプレイヤーのコントロール帯にかかると
+  // 掴み面は枠の上へ逃げる（帯を侵さない設計）。枠中心は掴み面の外に出うる。
   const bBefore = await box.boundingBox();
   expect(bBefore).not.toBeNull();
-  if (bBefore) {
-    await page.mouse.move(bBefore.x + bBefore.width / 2, bBefore.y + bBefore.height / 2);
+  const grabBox = await page.locator('.pv-telop-grab').boundingBox();
+  expect(grabBox).not.toBeNull();
+  if (grabBox) {
+    const gx = grabBox.x + grabBox.width / 2;
+    const gy = grabBox.y + grabBox.height / 2;
+    await page.mouse.move(gx, gy);
     await page.mouse.down();
-    await page.mouse.move(bBefore.x + bBefore.width / 2 + 40, bBefore.y + bBefore.height / 2 - 30, { steps: 5 });
+    await page.mouse.move(gx + 40, gy - 30, { steps: 5 });
     await expect(page.locator('.pv-guide').first()).toBeVisible();
     await page.mouse.up();
   }
@@ -3165,4 +3172,529 @@ test('自動保存: 編集→放置すると保存ボタンを押さずに自動
     timeout: 10_000,
   });
   await expect(page.locator('.tb-save-error')).toHaveCount(0);
+});
+
+test('テロップ複数選択: Cmd＋クリックで2個選び位置を一括変更→保存、飾りテロップ2個をDeleteで一括削除→保存', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    const msg = String(err);
+    if (msg.includes('MediaPlaybackError')) return;
+    pageErrors.push(msg);
+  });
+
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  // --- 1) じまく 2 本を Cmd＋クリックで複数選択する -------------------------
+  const jimaku = page.locator('.tl-track-jimaku .tl-telop');
+  await jimaku.nth(0).click();
+  await jimaku.nth(1).click({ modifiers: ['Meta'] });
+
+  // 設定タブに一括パネルが出る（単一選択の #ins-pos-x ではなく #ins-multi-pos-x）。
+  await page.locator('.rightdock-tab[data-tab="settings"]').click();
+  await expect(page.locator('#ins-multi-pos-x')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('.ins-body')).toContainText('テロップ 2 個を選択中');
+
+  // --- 2) 位置を一括変更する（確定は Enter）--------------------------------
+  await page.locator('#ins-multi-pos-x').fill('-0.5');
+  await page.locator('#ins-multi-pos-x').press('Enter');
+  await page.locator('#ins-multi-pos-y').fill('-0.4');
+  await page.locator('#ins-multi-pos-y').press('Enter');
+
+  // --- 3) 保存して telopData.ts に両方の position が入ることを数値アサート ---
+  await expect(page.locator('.tb-save.enabled')).toBeVisible();
+  await page.locator('.tb-save.enabled').click();
+  await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({ timeout: 10_000 });
+
+  const telopPath = resolve(FIXTURE_DIR, 'src', 'テロップテンプレート', 'telopData.ts');
+  const afterPosition = readFileSync(telopPath, 'utf8');
+  const posOf = (id: number): { x: number; y: number } | null => {
+    const m = afterPosition.match(new RegExp(`id:\\s*${id},[\\s\\S]*?position:\\s*\\{ x: (-?[\\d.]+), y: (-?[\\d.]+) \\}`));
+    return m === null ? null : { x: Number(m[1]), y: Number(m[2]) };
+  };
+  expect(posOf(1)).toEqual({ x: -0.5, y: -0.4 });
+  expect(posOf(2)).toEqual({ x: -0.5, y: -0.4 });
+  // 選択していない id:3 には波及しない。
+  expect(posOf(3)).toBeNull();
+
+  // --- 4) 飾りテロップを 2 本足して保存（削除の前後差を作る）---------------
+  await clickAddMenuItem(page, '.tl-telop-add');
+  await clickAddMenuItem(page, '.tl-telop-add');
+  const manual = page.locator('.tl-track-telop .tl-telop');
+  await expect(manual).toHaveCount(2);
+  await expect(page.locator('.tb-save.enabled')).toBeVisible();
+  await page.locator('.tb-save.enabled').click();
+  await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({ timeout: 10_000 });
+  expect(readFileSync(telopPath, 'utf8').match(/新しいテロップ/g)?.length).toBe(2);
+
+  // --- 4b) 2 本を複数選択 → Delete で一括削除 ------------------------------
+  await manual.nth(0).click();
+  await manual.nth(1).click({ modifiers: ['Meta'] });
+  await expect(page.locator('.ins-body')).toContainText('テロップ 2 個を選択中');
+
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.tl-track-telop .tl-telop')).toHaveCount(0);
+
+  // --- 5) 保存して telopData.ts から消えていることをアサート ---------------
+  await expect(page.locator('.tb-save.enabled')).toBeVisible();
+  await page.locator('.tb-save.enabled').click();
+  await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({ timeout: 10_000 });
+
+  const afterDelete = readFileSync(telopPath, 'utf8');
+  expect(afterDelete).not.toContain('新しいテロップ');
+  // 字幕 3 本はそのまま残る（削除対象は飾りテロップだけ）。
+  expect(afterDelete.match(/id:\s*\d+,/g)?.length).toBe(3);
+
+  expect(pageErrors).toEqual([]);
+});
+
+// ============================================================================
+// 選択枠実測（measured-overlay・2026-08-19）
+// 設計書: docs/specs/2026-08-19-measured-overlay-box-design.md
+// jsdom では getBoundingClientRect が全ゼロ＝常にフォールバック経路なので、
+// 「実測が効いている」ことを証明できるのはここ（実ブラウザ）だけ。
+// ============================================================================
+
+/** 実測用に差し替える本物の PNG（240×160・単色）。フィクスチャの sample.png は 16 バイトの
+ *  スタブで画像として読めず、img の実寸が 0 になるため実測できない。afterEach の
+ *  `git checkout` がスタブへ戻す。 */
+const REAL_PNG_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAPAAAACgCAIAAAC9uXYyAAABRElEQVR42u3SQQ0AAAjEsNOHOawhCRV8SJMqWJbqgTciAYYGQ4OhwdAYGgwNhgZDg6ExNBgaDA2GBkNjaDA0GBoMDYbG0GBoMDQYGgyNocHQYGgwNBgaQ4OhwdBgaDA0hgZDg6HB0BgaDA2GBkODoTE0GBoMDYYGQ2NoMDQYGgwNhsbQYGgwNBgaDI2hwdBgaDA0GBpDg6HB0GBoMDSGBkODocHQYGgMDYYGQ4OhMTQYGgwNhgZDY2gwNBgaDA2GxtBgaDA0GBoMjaHB0GBoMDQYGkODocHQYGgwNIYGQ4OhwdBgaAwNhgZDg6ExtAoYGgwNhgZDY2gwNBgaDA2GxtBgaDA0GBoMjaHB0GBoMDQYGkODocHQYGgwNIYGQ4OhwdBgaAwNhgZDg6HB0BgaDA2GBkNjaDA0GBoMDYbG0GBoMDTcWHAtFJhrX5ijAAAAAElFTkSuQmCC';
+
+/** 要素の client 矩形をプレーン値で取る（DOMRect は evaluate 越しに落ちるため）。 */
+async function rectOf(page: Page, selector: string): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (el === null) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  }, selector);
+}
+
+test('選択枠実測: テロップ枠が実描画要素の矩形と一致し source=measured になる', async ({ page }) => {
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  // 行クリックで「そのテロップの開始フレーム」へシークしつつ選択する（＝実描画が出る）。
+  await page.locator('.tx-row').first().click();
+  await expect(page.locator('.pv-telop-box')).toBeVisible();
+  // 合成側の目印（実測ルートとテロップラッパー）が出ている。
+  await expect(page.locator('[data-sme-root]')).toHaveCount(1);
+  await expect(page.locator('[data-sme-kind="telop"]')).toHaveCount(1, { timeout: 10_000 });
+
+  // 実測が効いたことをアサートする（フォールバックに失敗を隠させない・裁定 P1-2）。
+  await expect
+    .poll(async () => page.locator('.pv-telop-box').getAttribute('data-sme-box-source'), {
+      timeout: 10_000,
+    })
+    .toBe('measured');
+
+  const box = await rectOf(page, '.pv-telop-box');
+  // **実際に文字が描かれている要素**（フィクスチャ Telop の <span>）。
+  // ラッパー直下の div は全幅の透明レイアウト要素なので、そこと一致しても
+  // 「見えているものを測れている」証拠にならない（合併規則 v2・レビュー P2-5）。
+  const text = await rectOf(page, '[data-sme-kind="telop"] span');
+  const root = await rectOf(page, '[data-sme-root]');
+  if (box === null || text === null || root === null) throw new Error('矩形が取得できません');
+
+  // 枠は実描画（文字）の矩形と一致する（0.5px 量子化ぶんの誤差だけ許容）。
+  expect(Math.abs(box.x - text.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.y - text.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.w - text.w)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.h - text.h)).toBeLessThanOrEqual(1);
+
+  // 全幅ではない（透明な行ラッパーを拾っていない）。
+  expect(box.w).toBeLessThan(root.w * 0.9);
+  // 従来の固定割合近似（幅 76% / 高さ 16%）とも明確に違う＝近似へ落ちていない。
+  expect(Math.abs(box.w - root.w * 0.76)).toBeGreaterThan(5);
+  expect(Math.abs(box.h - root.h * 0.16)).toBeGreaterThan(5);
+
+  // --- ドラッグ「中」も測定が続き、枠が実描画へ追従する（レビュー P1-1）---
+  // 移動量の基準は pointerdown 時の snapshot で凍結済みなので、表示の凍結は不要。
+  // 枠が pointerdown 位置に置き去りになると、掴んだ先で操作できなくなる。
+  const grab = await page.locator('.pv-telop-grab').boundingBox();
+  if (!grab) throw new Error('.pv-telop-grab が取得できません');
+  const gx = grab.x + grab.width / 2;
+  const gy = grab.y + grab.height / 2;
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx + 40, gy - 40, { steps: 6 });
+  const during = await rectOf(page, '.pv-telop-box');
+  await page.mouse.up();
+  if (during === null) throw new Error('ドラッグ中の枠矩形が取得できません');
+  expect(Math.abs(during.x - box.x) + Math.abs(during.y - box.y)).toBeGreaterThan(5);
+  // ドラッグ中も実測のまま（フォールバックへ落ちていない）。
+  expect(await page.locator('.pv-telop-box').getAttribute('data-sme-box-source')).toBe('measured');
+});
+
+test('選択枠実測: 挿入画像の枠が画像要素の実寸と一致する（全画面近似ではない）', async ({ page }) => {
+  // 実寸を持つ画像へ差し替える（afterEach の git checkout でスタブへ戻る）。
+  writeFileSync(
+    resolve(FIXTURE_DIR, 'public', 'images', 'sample.png'),
+    Buffer.from(REAL_PNG_B64, 'base64'),
+  );
+
+  await page.goto('/');
+  await page.locator('.home-card', { hasText: 'sample-project' }).click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  await page.locator('.lc-tab[data-tab="materials"]').click();
+  await page.locator('.ml-tab[data-kind="image"]').click();
+  const cell = page.locator('.ml-grid .ml-cell').first();
+  await cell.click();
+  await cell.locator('.ml-cell-insert').click();
+
+  await expect(page.locator('.pv-telop-box')).toBeVisible();
+  await expect(page.locator('[data-sme-kind="image"]')).toHaveCount(1, { timeout: 10_000 });
+  // 画像が実寸を持って読み込まれたことを先に確かめる（読めない画像なら実測はできないので、
+  // 「measured にならない」ではなく「画像が読めていない」として落とす）。
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const el = document.querySelector('[data-sme-kind="image"] img');
+          return el instanceof HTMLImageElement ? el.naturalWidth : 0;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(0);
+  // 画像の load 後に再測が走る（img load 契機）。
+  await expect
+    .poll(async () => page.locator('.pv-telop-box').getAttribute('data-sme-box-source'), {
+      timeout: 10_000,
+    })
+    .toBe('measured');
+
+  const box = await rectOf(page, '.pv-telop-box');
+  const img = await rectOf(page, '[data-sme-kind="image"] img');
+  const root = await rectOf(page, '[data-sme-root]');
+  if (box === null || img === null || root === null) throw new Error('矩形が取得できません');
+
+  expect(Math.abs(box.x - img.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.y - img.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.w - img.w)).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.h - img.h)).toBeLessThanOrEqual(1);
+  // 全画面×scale の近似ではない（240×160 の画像は縦動画の全画面と一致しない）。
+  expect(box.h).toBeLessThan(root.h - 5);
+});
+
+test('選択枠実測: 図形をプレビューでクリック選択→移動→リサイズし保存に反映される', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    const msg = String(err);
+    if (msg.includes('MediaPlaybackError')) return;
+    pageErrors.push(msg);
+  });
+
+  await page.goto('/');
+  await page.locator('.home-card', { hasText: 'sample-project' }).click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  // --- 矢印を 1 本描く（既存の図形シナリオと同じ手順）---
+  const arrowBtn = page.locator('.pv-shape-btn[title="矢印を描画（クリックで解除）"]');
+  await arrowBtn.click();
+  const contentBox = await page.locator('.pv-stage .__remotion-player').boundingBox();
+  if (!contentBox) throw new Error('プレビュー内容の boundingBox が取得できません');
+  const sx = contentBox.x + contentBox.width * 0.3;
+  const sy = contentBox.y + contentBox.height * 0.4;
+  const ex = contentBox.x + contentBox.width * 0.7;
+  const ey = contentBox.y + contentBox.height * 0.6;
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  await page.mouse.move((sx + ex) / 2, (sy + ey) / 2, { steps: 5 });
+  await page.mouse.move(ex, ey, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('.tl-shape')).toHaveCount(1, { timeout: 5_000 });
+  // 描画ツールを解除（選択・移動モードへ戻す）。
+  await arrowBtn.click();
+  await expect(arrowBtn).toHaveAttribute('aria-pressed', 'false');
+
+  // --- いったん別の対象（じまくブロック）を選び、図形の選択を外す ---
+  // 右ドックは図形選択で設定タブへ切り替わるため、文字起こしの行ではなくタイムラインで選ぶ。
+  await page.locator('.tl-track-jimaku .tl-telop').first().click();
+  await expect(page.locator('.pv-shape-box')).toHaveCount(0);
+
+  // --- プレビュー上で図形をクリック選択（線分の帯に当てる）---
+  await page.mouse.click((sx + ex) / 2, (sy + ey) / 2);
+  await expect(page.locator('.pv-shape-box')).toHaveCount(1);
+  await expect(page.locator('.pv-shape-handle')).toHaveCount(2); // arrow は端点 2 点
+
+  // --- 本体ドラッグで移動（右へ 10%・上へ 5%）---
+  const dx = contentBox.width * 0.1;
+  const dy = -contentBox.height * 0.05;
+  await page.mouse.move((sx + ex) / 2, (sy + ey) / 2);
+  await page.mouse.down();
+  await page.mouse.move((sx + ex) / 2 + dx, (sy + ey) / 2 + dy, { steps: 8 });
+  await page.mouse.up();
+
+  // --- ハンドル（終点）でリサイズ ---
+  const handle = page.locator('[data-sme-shape-handle="x2y2"]');
+  const hb = await handle.boundingBox();
+  if (!hb) throw new Error('ハンドルの boundingBox が取得できません');
+  const targetX = contentBox.x + contentBox.width * 0.9;
+  const targetY = contentBox.y + contentBox.height * 0.8;
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetX, targetY, { steps: 8 });
+  await page.mouse.up();
+
+  // --- 保存して shapeData.ts の座標を数値アサート ---
+  await page.locator('.tb-save.enabled').click();
+  await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({
+    timeout: 10_000,
+  });
+  const shapeDataPath = resolve(FIXTURE_DIR, 'src', 'InsertShape', 'shapeData.ts');
+  const written = readFileSync(shapeDataPath, 'utf8');
+  const num = (re: RegExp): number => {
+    const v = written.match(re)?.[1];
+    if (v === undefined) throw new Error(`shapeData.ts から座標を読めません: ${re}`);
+    return Number(v);
+  };
+  // 始点は「描画 0.3 → 移動 +0.1」で 0.4 付近、y は「0.4 → -0.05」で 0.35 付近。
+  expect(num(/x1:\s*([\d.]+)/)).toBeGreaterThan(0.33);
+  expect(num(/x1:\s*([\d.]+)/)).toBeLessThan(0.47);
+  // 上限は移動前の値 0.4 を**除外**する（移動が起きていないのに通る窓を作らない）。
+  expect(num(/y1:\s*([\d.]+)/)).toBeGreaterThan(0.28);
+  expect(num(/y1:\s*([\d.]+)/)).toBeLessThan(0.38);
+  // 終点はハンドルで 0.9 / 0.8 付近へ動かした。
+  expect(num(/x2:\s*([\d.]+)/)).toBeGreaterThan(0.83);
+  expect(num(/y2:\s*([\d.]+)/)).toBeGreaterThan(0.73);
+
+  expect(pageErrors).toEqual([]);
+});
+
+// ============================================================================
+// 端ドラッグ自動スクロール（edge-autoscroll）＋ ＋追加メニューの「字幕」
+// 設計書: docs/specs/2026-08-20-edge-autoscroll-add-subtitle-design.md
+// jsdom はレイアウトを持たない（scrollWidth/clientWidth/getBoundingClientRect が
+// 全ゼロ）ため、実レイアウトの上で本当にスクロールするのはここでしか確かめられない。
+// ============================================================================
+
+test('端スクロール: ブロックを右端へドラッグしたまま止めると横スクロールし、ドラッグ値も前進する', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    const msg = String(err);
+    if (msg.includes('MediaPlaybackError')) return;
+    pageErrors.push(msg);
+  });
+
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  const body = page.locator('.tl-body');
+  const scrollBefore = await body.evaluate((el) => el.scrollLeft);
+  expect(scrollBefore).toBe(0);
+
+  // じまく #2（原本 [200,320)）を掴む。右隣の字幕は原本 6000 なので右へ大きく動かせる。
+  const block = page.locator('.tl-track-jimaku .tl-telop').nth(1);
+  const blockBox = await block.boundingBox();
+  const bodyBox = await body.boundingBox();
+  expect(blockBox).not.toBeNull();
+  expect(bodyBox).not.toBeNull();
+  if (blockBox === null || bodyBox === null) return;
+
+  const y = blockBox.y + blockBox.height / 2;
+  await page.mouse.move(blockBox.x + blockBox.width / 2, y);
+  await page.mouse.down();
+  // 可視域の右端から 10px（EDGE_ZONE_PX=40 の内側）へ運び、そこで止める。
+  await page.mouse.move(bodyBox.x + bodyBox.width - 10, y, { steps: 8 });
+
+  // 止めた直後のドラッグ値（ブロックの content 座標 left）。以降はポインタを
+  // 一切動かさないので、これが増えるならスクロールに値が追従している証拠になる。
+  const leftAtEdge = await block.evaluate((el) => parseFloat(el.style.left));
+
+  await expect.poll(async () => body.evaluate((el) => el.scrollLeft), { timeout: 10_000 })
+    .toBeGreaterThan(200);
+  // ここが本命の判定。Chromium はドラッグ中の端で**素の**オートスクロールも起こすため
+  // scrollLeft だけでは機能の有無を分離できない（実測: 本機能を殺しても上の行は通った）。
+  // 素のオートスクロールは move を再実行しないのでドラッグ値は凍る＝下の行だけが落ちる。
+  await expect.poll(async () => block.evaluate((el) => parseFloat(el.style.left)), { timeout: 10_000 })
+    .toBeGreaterThan(leftAtEdge + 100);
+
+  // 離す直前のドラッグ値。これが pointerup 後も保たれていれば「確定した」証拠になる。
+  const leftBeforeUp = await block.evaluate((el) => parseFloat(el.style.left));
+  await page.mouse.up();
+
+  // 確定（onCommit）が走っていれば、コミット済み state から描き直した後も同じ位置。
+  // クリック判定を生の画面 X で行っていると純クリック扱いでコミットが捨てられ、
+  // ブロックは掴む前の位置（左）へ黙って戻る。
+  await expect
+    .poll(async () => block.evaluate((el) => parseFloat(el.style.left)), { timeout: 5_000 })
+    .toBe(leftBeforeUp);
+
+  // 離した後もスクロール位置は保たれ、rAF ループが暴走して増え続けない。
+  const settled = await body.evaluate((el) => el.scrollLeft);
+  await page.waitForTimeout(400);
+  expect(await body.evaluate((el) => el.scrollLeft)).toBe(settled);
+
+  expect(pageErrors).toEqual([]);
+});
+
+test('端スクロール: 待機中（掴まずに）カーソルを右端へ置くだけで横スクロールが続く', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    const msg = String(err);
+    if (msg.includes('MediaPlaybackError')) return;
+    pageErrors.push(msg);
+  });
+
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  const body = page.locator('.tl-body');
+  const bodyBox = await body.boundingBox();
+  expect(bodyBox).not.toBeNull();
+  if (bodyBox === null) return;
+  expect(await body.evaluate((el) => el.scrollLeft)).toBe(0);
+
+  // 何も掴まずにカーソルを右端の発動域（可視幅の 4%）へ置き、**そこで止める**。
+  const y = bodyBox.y + bodyBox.height / 2;
+  await page.mouse.move(bodyBox.x + bodyBox.width - 6, y, { steps: 6 });
+
+  // 止めたまま走り続ける（＝ホバー版が担当）。鮮度ガード 200ms で打ち切られていない
+  // ことを、200ms より十分あとの到達量で確かめる。
+  await expect.poll(async () => body.evaluate((el) => el.scrollLeft), { timeout: 10_000 })
+    .toBeGreaterThan(300);
+
+  // 中央へ戻せば止まる（可視域の外・発動域の外では速度 0）。
+  await page.mouse.move(bodyBox.x + bodyBox.width / 2, y, { steps: 4 });
+  await page.waitForTimeout(300);
+  const settled = await body.evaluate((el) => el.scrollLeft);
+  await page.waitForTimeout(400);
+  expect(await body.evaluate((el) => el.scrollLeft)).toBe(settled);
+
+  expect(pageErrors).toEqual([]);
+});
+
+test('端スクロール: 右端すれすれのブロックは純クリックでは動かず、6px 超動かせば送れる', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    const msg = String(err);
+    if (msg.includes('MediaPlaybackError')) return;
+    pageErrors.push(msg);
+  });
+
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  const body = page.locator('.tl-body');
+  const bodyBox = await body.boundingBox();
+  expect(bodyBox).not.toBeNull();
+  if (bodyBox === null) return;
+
+  // じまく #3（最後尾の字幕）を「右端から 20px の位置」＝端ゾーン（40px）の中へ持ってくる。
+  // content 座標は displayMap 依存なので決め打ちせず style.left を実測して使う。
+  const block = page.locator('.tl-track-jimaku .tl-telop').nth(2);
+  const leftBefore = await block.evaluate((el) => parseFloat(el.style.left));
+  expect(leftBefore).toBeGreaterThan(bodyBox.width);
+  await body.evaluate((el, x) => { el.scrollLeft = x; }, leftBefore - bodyBox.width + 20);
+
+  const blockBox = await block.boundingBox();
+  expect(blockBox).not.toBeNull();
+  if (blockBox === null) return;
+  const y = blockBox.y + blockBox.height / 2;
+
+  // --- 1) 純クリック（実移動 2px）では動かない -------------------------------
+  // 端ゾーンに居るブロックを選択のためにクリックしただけ。ここで端スクロールが
+  // 走ると区間が動いて確定してしまう（2026-08-17 に潰した副作用の復活）。
+  await page.mouse.move(blockBox.x + 4, y);
+  await page.mouse.down();
+  await page.mouse.move(blockBox.x + 6, y);
+  await page.waitForTimeout(500); // rAF を十分に回す時間
+  await page.mouse.up();
+  // scrollLeft は Chromium 自身のドラッグ時オートスクロールでも動きうるので見ない。
+  // 「区間が動いていないか」＝ブロックの content 座標だけを見る。
+  expect(await block.evaluate((el) => parseFloat(el.style.left))).toBe(leftBefore);
+
+  // --- 2) しきい値（5px）を超えて動かせば端スクロールが始まり、確定まで通る -----
+  const blockBox2 = await block.boundingBox();
+  expect(blockBox2).not.toBeNull();
+  if (blockBox2 === null) return;
+  const scrollAtGrab = await body.evaluate((el) => el.scrollLeft);
+  await page.mouse.move(blockBox2.x + 4, y);
+  await page.mouse.down();
+  await page.mouse.move(blockBox2.x + 12, y);
+
+  await expect.poll(async () => body.evaluate((el) => el.scrollLeft), { timeout: 10_000 })
+    .toBeGreaterThan(scrollAtGrab + 100);
+
+  const leftBeforeUp = await block.evaluate((el) => parseFloat(el.style.left));
+  expect(leftBeforeUp).toBeGreaterThan(leftBefore + 50);
+  await page.mouse.up();
+
+  // 確定（onCommit）が走っていれば、コミット済み state から描き直しても同じ位置。
+  await expect
+    .poll(async () => block.evaluate((el) => parseFloat(el.style.left)), { timeout: 5_000 })
+    .toBe(leftBeforeUp);
+
+  expect(pageErrors).toEqual([]);
+});
+
+test('字幕追加: ＋追加メニューの「字幕」で空き区間へ足し、保存すると manual なしで telopData.ts へ入る', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => {
+    const msg = String(err);
+    if (msg.includes('MediaPlaybackError')) return;
+    pageErrors.push(msg);
+  });
+
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  const jimaku = page.locator('.tl-track-jimaku .tl-telop');
+  await expect(jimaku).toHaveCount(3);
+
+  // 再生ヘッドを原本フレーム 400 へ（字幕 #2 の終端 320 と #3 の開始 6000 の間＝空き区間）。
+  // ガター 88px ぶんを足した content-x でルーラーをクリックする（既存 e2e と同じ換算）。
+  const ruler = page.locator('.tl-ruler');
+  const rbox = await ruler.boundingBox();
+  expect(rbox).not.toBeNull();
+  if (rbox === null) return;
+  await page.mouse.click(rbox.x + 88 + 400, rbox.y + rbox.height / 2);
+
+  await clickAddMenuItem(page, '.tl-subtitle-add');
+
+  // 飾りテロップ行ではなく「じまく」行が 1 本増える。
+  await expect(jimaku).toHaveCount(4);
+  await expect(page.locator('.tl-track-telop .tl-telop')).toHaveCount(0);
+  await expect(page.locator('.tl-track-jimaku .tl-telop', { hasText: '新しい字幕' })).toHaveCount(1);
+
+  // 保存して telopData.ts を数値でアサートする。
+  await expect(page.locator('.tb-save.enabled')).toBeVisible();
+  await page.locator('.tb-save.enabled').click();
+  await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({ timeout: 10_000 });
+
+  const telopPath = resolve(FIXTURE_DIR, 'src', 'テロップテンプレート', 'telopData.ts');
+  const written = readFileSync(telopPath, 'utf8');
+  // 新字幕は id 4（既存 3 本の次）。fps=60・既定 3 秒 → 180 フレーム。
+  const added = written.match(/\{\s*id:\s*4,[\s\S]*?\n {2}\}/)?.[0];
+  expect(added).toBeDefined();
+  expect(added).toContain('startFrame: 400,');
+  expect(added).toContain('endFrame: 580,');
+  expect(added).toContain('text: "新しい字幕"');
+  // 字幕なので manual を書かない（書くと飾りテロップ扱いで別トラック・別色になる）。
+  expect(added).not.toContain('manual');
+  // 時間軸上の直前字幕（#2・template 2 / style normal）から見た目を継ぐ。
+  expect(added).toContain('template: 2,');
+  expect(added).toContain('style: "normal"');
+
+  expect(pageErrors).toEqual([]);
 });

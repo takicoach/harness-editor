@@ -24,6 +24,11 @@ interface TelopTrackProps {
   telops: EditorTelop[];
   /** 選択中のテロップ ID（インスペクタ選択と同期）。 */
   selectedTelopId: number | null;
+  /**
+   * 複数選択中のテロップ ID 群（`EditState.multiTelopIds`）。空なら単一選択。
+   * プライマリ（selectedTelopId）と同じ選択枠スタイルで全部ハイライトする。
+   */
+  multiSelectedIds?: number[];
   /** ドラッグ中のテロップ区間を上書き表示する。null ならコミット済み state を使う。 */
   liveOverride: TelopOverride | null;
   /** 矢印キー対象として選択中のつまみ（強調表示用）。 */
@@ -59,6 +64,7 @@ export function TelopTrack({
   pxPerFrame,
   telops,
   selectedTelopId,
+  multiSelectedIds = [],
   liveOverride,
   selectedHandle,
   onHandleDown,
@@ -76,6 +82,7 @@ export function TelopTrack({
       ),
     [telops],
   );
+  const multiSet = useMemo(() => new Set(multiSelectedIds), [multiSelectedIds]);
   const trackStyle = { ['--lane-count']: Math.max(1, laneCount) } as React.CSSProperties;
   const trackClass =
     variant === 'subtitle' ? 'tl-track tl-track-jimaku' : 'tl-track tl-track-telop';
@@ -91,7 +98,8 @@ export function TelopTrack({
         const width = Math.max(4, widthMapped(start, end, pxPerFrame, map));
         const lane = lanes[i] ?? 0;
         const top = `calc(${lane} * var(--lane-row-h) + var(--lane-inset))`;
-        const selected = selectedTelopId === t.id;
+        // 複数選択中は集合の全員を同じ選択枠でハイライトする（設計書 §2）。
+        const selected = selectedTelopId === t.id || multiSet.has(t.id);
         const startHandle: TelopHandleId = { kind: 'telop', telopId: t.id, edge: 'start' };
         const endHandle: TelopHandleId = { kind: 'telop', telopId: t.id, edge: 'end' };
         return (

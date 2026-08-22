@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
 import { formatClock, frameToSec, parseSecField } from '../../../shared/format';
 import type { EditorVideoInsert } from '../../../core/types';
@@ -30,8 +31,8 @@ interface VideoInsertSettingsTabProps {
 
 /** サブ動画選択時のインスペクタ本体（ファイル・大きさ・イン点同期・表示区間・削除）。 */
 export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, videoDurations, projectId, assetVersions, onLive, onEdit }: VideoInsertSettingsTabProps) {
-  const playbackStart = originalToPlayback(videoInsert.originalStart, state.cutRegions);
-  const playbackEnd = originalToPlayback(videoInsert.originalEnd, state.cutRegions);
+  const playbackStart = originalToPlayback(videoInsert.originalStart, state.cutRegions, cutOrderingOf(state));
+  const playbackEnd = originalToPlayback(videoInsert.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   const shownStart = playbackStart ?? videoInsert.originalStart;
   const shownEnd = playbackEnd ?? videoInsert.originalEnd;
   const editable = playbackStart !== null && playbackEnd !== null;
@@ -66,7 +67,7 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
   function commitStart(): void {
     const frame = parseSecField(startStr, shownStart, fps);
     if (frame === null) { setStartStr(frameToSec(shownStart, fps).toFixed(2)); return; }
-    const start = playbackToOriginal(frame, state.cutRegions);
+    const start = playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state));
     onEdit(retimeVideoInsert(state, videoInsert.id, start, videoInsert.originalEnd, endLimit(start)));
   }
   function commitEnd(): void {
@@ -76,7 +77,7 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
       state,
       videoInsert.id,
       videoInsert.originalStart,
-      playbackToOriginal(frame, state.cutRegions),
+      playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state)),
       endLimit(videoInsert.originalStart),
     ));
   }

@@ -1,4 +1,5 @@
 import type { EditState } from './editState';
+import { cutOrderingOf } from '../../core/cutOrder';
 import { playbackToOriginal } from '../../core/cutEngine';
 import type { EditorTitle } from '../../core/types';
 
@@ -19,8 +20,8 @@ export function insertTitle(
   const start = Math.max(0, Math.min(Math.round(headPlaybackFrame), totalPlaybackFrames - 1));
   const dur = Math.max(1, Math.round(TITLE_DEFAULT_DURATION_SEC * fps));
   const endPlayback = Math.min(totalPlaybackFrames, start + dur);
-  const originalStart = playbackToOriginal(start, state.cutRegions);
-  const originalEnd = playbackToOriginal(endPlayback, state.cutRegions);
+  const originalStart = playbackToOriginal(start, state.cutRegions, cutOrderingOf(state));
+  const originalEnd = playbackToOriginal(endPlayback, state.cutRegions, cutOrderingOf(state), 'end');
   if (originalStart >= originalEnd) return state;
   const title: EditorTitle = { id: state.nextTitleId, originalStart, originalEnd, text: TITLE_DEFAULT_TEXT };
   return {
@@ -53,7 +54,13 @@ export function moveTitle(state: EditState, id: number, originalStart: number): 
   });
 }
 
-/** 原本フレーム atOriginalFrame で 2 つに分割（両方とも同じ文字で開始）。範囲外は no-op。 */
+/**
+ * 原本フレーム atOriginalFrame で 2 つに分割（両方とも同じ文字で開始）。範囲外は no-op。
+ *
+ * 分割後は **右（後半）断片を選択する**（cutOps.splitTelopAt と同仕様）。
+ * ユーザーは「ここから先を書き換えたい」ので分割するため、左を選んだままだと
+ * 「分割したのに編集対象は左」という見えない食い違いになり、打った文字が左へ入る。
+ */
 export function splitTitleAt(state: EditState, id: number, atOriginalFrame: number): EditState {
   const index = state.titles.findIndex((t) => t.id === id);
   if (index === -1) return state;
@@ -63,7 +70,7 @@ export function splitTitleAt(state: EditState, id: number, atOriginalFrame: numb
   const right: EditorTitle = { ...t, id: state.nextTitleId, originalStart: atOriginalFrame };
   const titles = [...state.titles];
   titles.splice(index, 1, left, right);
-  return { ...state, titles, nextTitleId: state.nextTitleId + 1, selection: { kind: 'title', id: left.id } };
+  return { ...state, titles, nextTitleId: state.nextTitleId + 1, selection: { kind: 'title', id: right.id } };
 }
 
 export function removeTitle(state: EditState, id: number): EditState {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../../core/cutOrder';
 import { useAudition } from '../../audio/useAudition';
 import { assetPathFor, assetUrl } from '../materialList';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
@@ -31,8 +32,8 @@ interface BgmSettingsTabProps {
  *  VideoInsertSettingsTab のミラー（イン点同期は BGM には不要なので省略）。 */
 export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVersions, installing, installErrors, bgmInstalled, dirty, onInstall, onEdit }: BgmSettingsTabProps) {
   const audition = useAudition();
-  const playbackStart = originalToPlayback(bgm.originalStart, state.cutRegions);
-  const playbackEnd = originalToPlayback(bgm.originalEnd, state.cutRegions);
+  const playbackStart = originalToPlayback(bgm.originalStart, state.cutRegions, cutOrderingOf(state));
+  const playbackEnd = originalToPlayback(bgm.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   const shownStart = playbackStart ?? bgm.originalStart;
   const shownEnd = playbackEnd ?? bgm.originalEnd;
   const editable = playbackStart !== null && playbackEnd !== null;
@@ -58,12 +59,12 @@ export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVe
   function commitStart(): void {
     const frame = parseSecField(startStr, shownStart, fps);
     if (frame === null) { setStartStr(frameToSec(shownStart, fps).toFixed(2)); return; }
-    onEdit(resizeBgm(state, bgm.id, playbackToOriginal(frame, state.cutRegions), bgm.originalEnd));
+    onEdit(resizeBgm(state, bgm.id, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state)), bgm.originalEnd));
   }
   function commitEnd(): void {
     const frame = parseSecField(endStr, shownEnd, fps);
     if (frame === null) { setEndStr(frameToSec(shownEnd, fps).toFixed(2)); return; }
-    onEdit(resizeBgm(state, bgm.id, bgm.originalStart, playbackToOriginal(frame, state.cutRegions)));
+    onEdit(resizeBgm(state, bgm.id, bgm.originalStart, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state))));
   }
   function commitFadeIn(): void {
     const frame = parseSecField(fadeInStr, bgm.fadeInFrames, fps);

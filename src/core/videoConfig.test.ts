@@ -38,6 +38,51 @@ export const TELOP_CONFIG = TELOP_CONFIG_MAP[FORMAT];
     expect(cfg.titleStyle).toEqual({ top: 60, left: 30, fontSize: 30 });
   });
 
+  it('TELOP_CONFIG からテロップ下端オフセット（bottomOffset）を読む', () => {
+    // golf-short-gold プリセット（short: bottomOffset 540）相当。
+    const source = `export type VideoFormat = 'youtube' | 'short' | 'square';
+export const FORMAT: VideoFormat = 'short';
+export const FPS = 60;
+export const DURATION_FRAMES = 12000;
+export const VIDEO_FILE = 'main.mp4';
+const RESOLUTION_MAP = { short: { width: 1080, height: 1920 } } as const;
+const TELOP_CONFIG_MAP = {
+  short: { fontSize: 84, bottomOffset: 540, titleTop: 220, titleLeft: 64 },
+} as const;
+export const RESOLUTION = RESOLUTION_MAP[FORMAT];
+export const TELOP_CONFIG = TELOP_CONFIG_MAP[FORMAT];
+`;
+    expect(parseVideoConfig(source).telopBottomOffset).toBe(540);
+    expect(parseVideoConfigStatic(source).telopBottomOffset).toBe(540);
+  });
+
+  it('TELOP_CONFIG が無い / bottomOffset が数値でない場合は null（呼び出し側が標準値へフォールバック）', () => {
+    // フィクスチャ（VIDEO_CONFIG_SOURCE）は TELOP_CONFIG を持たない。
+    expect(parseVideoConfig(VIDEO_CONFIG_SOURCE).telopBottomOffset).toBeNull();
+
+    const notNumber = `export type VideoFormat = 'youtube' | 'short' | 'square';
+export const FORMAT: VideoFormat = 'short';
+export const FPS = 60;
+export const DURATION_FRAMES = 12000;
+export const RESOLUTION = { width: 1080, height: 1920 };
+export const TELOP_CONFIG = { bottomOffset: '540px' };
+`;
+    expect(parseVideoConfig(notNumber).telopBottomOffset).toBeNull();
+  });
+
+  it('bottomOffset が負なら null（画面外アンカーを作らない）', () => {
+    const negative = `export type VideoFormat = 'youtube' | 'short' | 'square';
+export const FORMAT: VideoFormat = 'short';
+export const FPS = 60;
+export const DURATION_FRAMES = 12000;
+export const RESOLUTION = { width: 1080, height: 1920 };
+export const TELOP_CONFIG = { bottomOffset: -100 };
+`;
+    expect(parseVideoConfig(negative).telopBottomOffset).toBeNull();
+    // 0 は有効値（下端ぴったり）。
+    expect(parseVideoConfig(negative.replace('-100', '0')).telopBottomOffset).toBe(0);
+  });
+
   it('TELOP_CONFIG が無い場合は解像度から既定のタイトルスタイルを導く', () => {
     // フィクスチャ（VIDEO_CONFIG_SOURCE）は TELOP_CONFIG を持たない → フォールバック。
     const cfg = parseVideoConfig(VIDEO_CONFIG_SOURCE);

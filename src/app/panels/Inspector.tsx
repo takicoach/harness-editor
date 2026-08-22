@@ -9,6 +9,7 @@ import type { TelopComponent } from '../../preview/loadTelopComponent';
 export { sliderToRate, rateToSlider } from './inspector/shared';
 import { SettingsTab } from './inspector/SettingsTab';
 export { SettingsTab } from './inspector/SettingsTab';
+import { MultiTelopSettingsTab } from './inspector/MultiTelopSettingsTab';
 import { SeSettingsTab } from './inspector/SeSettingsTab';
 import { ImageSettingsTab } from './inspector/ImageSettingsTab';
 import { VideoInsertSettingsTab } from './inspector/VideoInsertSettingsTab';
@@ -109,6 +110,9 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
     ? state.shapes.find((s) => s.id === shapeSelection.id)
     : undefined;
   const joinSelection = state.selection?.kind === 'join' ? state.selection : null;
+  // 複数選択（集合サイズ 2 以上）のときは専用パネルへ切り替える。
+  // 不変条件により集合が空でないなら selection は必ずテロップなので、他種の分岐とは競合しない。
+  const multiTelopSelected = state.multiTelopIds.length >= 2;
 
   // 設定ヘッダのタイトル（今なにを編集中か）。中央表示中の道具立てを明確にする。
   const settingsTitle = selectedTitle
@@ -129,9 +133,11 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
                   ? 'メイン動画設定'
                   : state.selection?.kind === 'cutSegment'
                     ? 'この区間の速度'
-                    : selected
-                      ? 'テロップ設定'
-                      : '設定';
+                    : multiTelopSelected
+                      ? 'テロップ一括設定'
+                      : selected
+                        ? 'テロップ設定'
+                        : '設定';
 
   return (
     <div className="ins">
@@ -245,6 +251,8 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
             segmentId={state.selection.id}
             onEdit={onEdit}
           />
+        ) : multiTelopSelected ? (
+          <MultiTelopSettingsTab state={state} onEdit={onEdit} />
         ) : selected ? (
           <SettingsTab
             telop={selected}

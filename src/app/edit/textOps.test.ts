@@ -14,6 +14,7 @@ function state(): EditState {
     videoInserts: [],
     bgm: [],
     selection: null,
+    multiTelopIds: [],
     nextTelopId: 3,
     nextSeId: 1,
     nextImageId: 1,

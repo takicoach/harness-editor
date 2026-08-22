@@ -11,6 +11,7 @@ function baseState(over: Partial<EditState> = {}): EditState {
     videoInserts: [],
     bgm: [],
     selection: null,
+    multiTelopIds: [],
     nextTelopId: 1,
     nextSeId: 1,
     nextImageId: 1,

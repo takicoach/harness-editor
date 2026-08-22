@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../core/cutOrder';
 import type { RefObject } from 'react';
 import type { PlayerRef } from '@remotion/player';
 import type { EditorTitle } from '../../core/types';
@@ -17,8 +18,8 @@ interface TitleSettingsTabProps {
 
 export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: TitleSettingsTabProps) {
   // 表示タイミングは再生（カット後）フレームでユーザーに見せる。
-  const playbackStart = originalToPlayback(title.originalStart, state.cutRegions);
-  const playbackEnd = originalToPlayback(title.originalEnd, state.cutRegions);
+  const playbackStart = originalToPlayback(title.originalStart, state.cutRegions, cutOrderingOf(state));
+  const playbackEnd = originalToPlayback(title.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   // カット区間内へ落ちている端は null。その場合は原本フレームをそのまま表示する。
   const shownStart = playbackStart ?? title.originalStart;
   const shownEnd = playbackEnd ?? title.originalEnd;
@@ -33,8 +34,8 @@ export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: Title
 
   /** 再生フレーム入力 → 原本フレームへ逆射影してタイミングを更新する。 */
   function commitTiming(nextStart: number, nextEnd: number): void {
-    const origStart = playbackToOriginal(nextStart, state.cutRegions);
-    const origEnd = playbackToOriginal(nextEnd, state.cutRegions);
+    const origStart = playbackToOriginal(nextStart, state.cutRegions, cutOrderingOf(state));
+    const origEnd = playbackToOriginal(nextEnd, state.cutRegions, cutOrderingOf(state), 'end');
     onEdit(setTitleTiming(state, title.id, origStart, origEnd));
   }
 
@@ -54,7 +55,7 @@ export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: Title
    *  範囲外の場合は reducer が no-op になる。 */
   function handleSplit(): void {
     const pf = Math.round(playerRef.current?.getCurrentFrame() ?? 0);
-    const atOriginalFrame = playbackToOriginal(pf, state.cutRegions);
+    const atOriginalFrame = playbackToOriginal(pf, state.cutRegions, cutOrderingOf(state));
     onEdit(splitTitleAt(state, title.id, atOriginalFrame));
   }
 

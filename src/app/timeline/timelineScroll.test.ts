@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { followScrollLeft, wheelAction, zoomAnchoredScrollLeft } from './timelineScroll';
+import {
+  followScrollLeft,
+  wheelAction,
+  zoomAnchoredScrollLeft,
+  edgeScrollVelocity,
+  edgeScrollFrameScale,
+  edgeScrollSpeed,
+  edgeScrollZone,
+  EDGE_ZONE_PX,
+  MAX_EDGE_SCROLL_PX,
+  MAX_EDGE_SCROLL_FRAME_SCALE,
+} from './timelineScroll';
 
 describe('followScrollLeft', () => {
   // 可視幅 1000・anchor 0.45 → anchor 線は X=450。
@@ -76,5 +87,155 @@ describe('wheelAction', () => {
 
   it('横スワイプ（deltaX 主体）は native（ブラウザ標準の横スクロール）', () => {
     expect(wheelAction({ ...base, deltaX: 40, deltaY: 2 })).toEqual({ kind: 'native' });
+  });
+});
+
+describe('edgeScrollVelocity（端ドラッグ自動スクロール・edge-autoscroll）', () => {
+  // 可視域 [100, 1100]（幅 1000）。端ゾーンは左 [100,140] / 右 [1060,1100]。
+  const L = 100;
+  const R = 1100;
+
+  it('定数は設計どおり（ゾーン 40px・最大 20px/フレーム）', () => {
+    expect(EDGE_ZONE_PX).toBe(40);
+    expect(MAX_EDGE_SCROLL_PX).toBe(20);
+  });
+
+  it('ゾーン外（中央）は 0＝スクロールしない', () => {
+    expect(edgeScrollVelocity(600, L, R)).toBe(0);
+  });
+
+  it('ゾーン境界ちょうどは 0（ゾーンに入った瞬間は速度ゼロから始まる）', () => {
+    expect(edgeScrollVelocity(L + EDGE_ZONE_PX, L, R)).toBe(0);
+    expect(edgeScrollVelocity(R - EDGE_ZONE_PX, L, R)).toBe(0);
+  });
+
+  it('左端は負（左へスクロール）・端ちょうどで最大速度', () => {
+    expect(edgeScrollVelocity(L, L, R)).toBe(-MAX_EDGE_SCROLL_PX);
+  });
+
+  it('右端は正（右へスクロール）・端ちょうどで最大速度', () => {
+    expect(edgeScrollVelocity(R, L, R)).toBe(MAX_EDGE_SCROLL_PX);
+  });
+
+  it('深さに比例する（ゾーンの半分の深さなら半分の速度）', () => {
+    expect(edgeScrollVelocity(L + EDGE_ZONE_PX / 2, L, R)).toBe(-MAX_EDGE_SCROLL_PX / 2);
+    expect(edgeScrollVelocity(R - EDGE_ZONE_PX / 2, L, R)).toBe(MAX_EDGE_SCROLL_PX / 2);
+  });
+
+  it('可視域の外へ出ても最大速度でクランプ（暴走させない）', () => {
+    expect(edgeScrollVelocity(L - 500, L, R)).toBe(-MAX_EDGE_SCROLL_PX);
+    expect(edgeScrollVelocity(R + 500, L, R)).toBe(MAX_EDGE_SCROLL_PX);
+  });
+
+  it('可視域が端ゾーン 2 つ分より狭いときは近い方の端が勝つ', () => {
+    // 幅 50（[0,50]）→ 左右のゾーンが重なる。x=10 は左端に近い＝負。
+    expect(edgeScrollVelocity(10, 0, 50)).toBeLessThan(0);
+    // x=40 は右端に近い＝正。
+    expect(edgeScrollVelocity(40, 0, 50)).toBeGreaterThan(0);
+  });
+
+  it('非有限値・幅ゼロは 0（計測前でも壊れない）', () => {
+    expect(edgeScrollVelocity(Number.NaN, L, R)).toBe(0);
+    expect(edgeScrollVelocity(600, Number.NaN, R)).toBe(0);
+    expect(edgeScrollVelocity(0, 0, 0)).toBe(0);
+  });
+});
+
+describe('edgeScrollFrameScale（可変フレームレートの正規化）', () => {
+  it('初回フレーム（前回時刻なし）は 1 倍', () => {
+    expect(edgeScrollFrameScale(null)).toBe(1);
+  });
+
+  it('60Hz（16.67ms）はちょうど 1 倍＝速度定数の意味を変えない', () => {
+    expect(edgeScrollFrameScale(1000 / 60)).toBe(1);
+  });
+
+  it('30Hz（33.3ms）は 2 倍＝実時間あたりのスクロール速度が揃う', () => {
+    expect(edgeScrollFrameScale(1000 / 30)).toBeCloseTo(2, 10);
+  });
+
+  it('120Hz（8.33ms）は 0.5 倍＝高リフレッシュで倍速にならない', () => {
+    expect(edgeScrollFrameScale(1000 / 120)).toBeCloseTo(0.5, 10);
+  });
+
+  it('タブ復帰などの巨大 dt は上限でクランプ（一気に飛ばさない）', () => {
+    expect(edgeScrollFrameScale(5000)).toBe(MAX_EDGE_SCROLL_FRAME_SCALE);
+    expect(MAX_EDGE_SCROLL_FRAME_SCALE).toBe(3);
+  });
+
+  it('0・負・非有限は 1 倍（計測不能時は等倍で素通し）', () => {
+    expect(edgeScrollFrameScale(0)).toBe(1);
+    expect(edgeScrollFrameScale(-16)).toBe(1);
+    expect(edgeScrollFrameScale(Number.NaN)).toBe(1);
+  });
+});
+
+describe('edgeScrollSpeed', () => {
+  // 可視域 X=100..1100・Y=0..400、ガター 120、zone=80 明示 / maxSpeed=1600。
+  const base = { rect: { left: 100, right: 1100, top: 0, bottom: 400 }, gutter: 120, pointerY: 200, zone: 80 };
+
+  it('中央付近では 0（不用意に動かない）', () => {
+    expect(edgeScrollSpeed({ ...base, pointerX: 600 })).toBe(0);
+  });
+
+  it('右端に近いほど速く右へ（端で最速）', () => {
+    const mid = edgeScrollSpeed({ ...base, pointerX: 1060 });
+    const near = edgeScrollSpeed({ ...base, pointerX: 1090 });
+    expect(mid).toBeGreaterThan(0);
+    expect(near).toBeGreaterThan(mid);
+    expect(edgeScrollSpeed({ ...base, pointerX: 1100 })).toBe(1600);
+  });
+
+  it('発動域の入り口は 0 でごく低速から立ち上がる（2乗）', () => {
+    expect(edgeScrollSpeed({ ...base, pointerX: 1020 })).toBe(0);
+    expect(edgeScrollSpeed({ ...base, pointerX: 1060 })).toBeCloseTo(1600 * 0.25);
+  });
+
+  it('左の発動域はガターの右端から数え、負（左へ）を返す', () => {
+    // ガター右端（X=220）が最速、そこから 80px 右（X=300）で 0 に戻る。
+    expect(edgeScrollSpeed({ ...base, pointerX: 220 })).toBe(-1600);
+    expect(edgeScrollSpeed({ ...base, pointerX: 260 })).toBeCloseTo(-1600 * 0.25);
+    expect(edgeScrollSpeed({ ...base, pointerX: 300 })).toBe(0);
+    // ガターの上（見出し列）では発動しない。
+    expect(edgeScrollSpeed({ ...base, pointerX: 150 })).toBe(0);
+  });
+
+  it('可視域の外（上下・左右）では 0＝即停止', () => {
+    expect(edgeScrollSpeed({ ...base, pointerX: 1090, pointerY: 500 })).toBe(0);
+    expect(edgeScrollSpeed({ ...base, pointerX: 1200 })).toBe(0);
+    expect(edgeScrollSpeed({ ...base, pointerX: 50 })).toBe(0);
+  });
+
+  it('可視域が狭い時は発動域を半分ずつに分ける（左右の取り合いを防ぐ）', () => {
+    const narrow = { rect: { left: 0, right: 200, top: 0, bottom: 400 }, gutter: 120, pointerY: 200, zone: 80 };
+    // inner=80 → z=40。中点 X=160 はどちらの域にも食い込まず 0。
+    expect(edgeScrollSpeed({ ...narrow, pointerX: 160 })).toBe(0);
+    expect(edgeScrollSpeed({ ...narrow, pointerX: 200 })).toBe(1600);
+    expect(edgeScrollSpeed({ ...narrow, pointerX: 120 })).toBe(-1600);
+  });
+});
+
+describe('edgeScrollZone', () => {
+  it('可視幅の 4%（画面が小さいほど発動域も狭い）', () => {
+    expect(edgeScrollZone(1000)).toBe(40);
+  });
+
+  it('広い画面（4K 等）では 64px で頭打ち', () => {
+    expect(edgeScrollZone(3000)).toBe(64);
+  });
+
+  it('狭い画面でも 28px は確保（狙えなくならない）', () => {
+    expect(edgeScrollZone(300)).toBe(28);
+    expect(edgeScrollZone(0)).toBe(28);
+  });
+});
+
+describe('edgeScrollSpeed の既定 zone', () => {
+  it('zone 省略時は可視幅から自動算出する', () => {
+    // 可視域 1120px・ガター 120 → inner 1000 → zone 40。
+    const auto = { rect: { left: 0, right: 1120, top: 0, bottom: 400 }, gutter: 120, pointerY: 200 };
+    expect(edgeScrollSpeed({ ...auto, pointerX: 1080 })).toBe(0);
+    expect(edgeScrollSpeed({ ...auto, pointerX: 1100 })).toBeCloseTo(1600 * 0.25);
+    expect(edgeScrollSpeed({ ...auto, pointerX: 1120 })).toBe(1600);
   });
 });

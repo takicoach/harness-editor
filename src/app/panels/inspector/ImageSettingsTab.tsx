@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
 import { formatClock, frameToSec, parseSecField } from '../../../shared/format';
 import type { EditorImage, ImageType } from '../../../core/types';
@@ -21,8 +22,8 @@ interface ImageSettingsTabProps {
 /** 画像選択時のインスペクタ本体（ファイル・タイプ・スケール・表示する時間・削除）。 */
 export function ImageSettingsTab({ image, state, fps, imageLibrary, onEdit }: ImageSettingsTabProps) {
   // 再生（カット後）フレームでユーザーに見せる。カット区間内なら null。
-  const playbackStart = originalToPlayback(image.originalStart, state.cutRegions);
-  const playbackEnd = originalToPlayback(image.originalEnd, state.cutRegions);
+  const playbackStart = originalToPlayback(image.originalStart, state.cutRegions, cutOrderingOf(state));
+  const playbackEnd = originalToPlayback(image.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   const shownStart = playbackStart ?? image.originalStart;
   const shownEnd = playbackEnd ?? image.originalEnd;
   const editable = playbackStart !== null && playbackEnd !== null;
@@ -47,13 +48,13 @@ export function ImageSettingsTab({ image, state, fps, imageLibrary, onEdit }: Im
   function commitStart(): void {
     const frame = parseSecField(startStr, shownStart, fps);
     if (frame === null) { setStartStr(frameToSec(shownStart, fps).toFixed(2)); return; }
-    onEdit(retimeImage(state, image.id, playbackToOriginal(frame, state.cutRegions), image.originalEnd));
+    onEdit(retimeImage(state, image.id, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state)), image.originalEnd));
   }
 
   function commitEnd(): void {
     const frame = parseSecField(endStr, shownEnd, fps);
     if (frame === null) { setEndStr(frameToSec(shownEnd, fps).toFixed(2)); return; }
-    onEdit(retimeImage(state, image.id, image.originalStart, playbackToOriginal(frame, state.cutRegions)));
+    onEdit(retimeImage(state, image.id, image.originalStart, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state))));
   }
 
   return (

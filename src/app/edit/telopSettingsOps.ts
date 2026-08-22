@@ -1,6 +1,6 @@
 import type { EditorTelop, TelopPosition, TelopStyle, TelopTemplate } from '../../core/types';
 import { clampSubtitleRange, clampSubtitleMove } from '../../core/telopEngine';
-import type { EditState } from './editState';
+import { normalizeMultiSelection, type EditState } from './editState';
 
 /** 指定 ID のテロップへ patch を適用するヘルパ（不在 ID はそのまま）。 */
 function patchTelop(
@@ -72,7 +72,12 @@ export function removeTelop(state: EditState, telopId: number): EditState {
     state.selection?.kind === 'telop' && state.selection.id === telopId
       ? null
       : state.selection;
-  return { ...state, telops: state.telops.filter((t) => t.id !== telopId), selection };
+  // 配列が縮むので複数選択集合の整合を取り直す（消えた ID を残さない）。
+  return normalizeMultiSelection({
+    ...state,
+    telops: state.telops.filter((t) => t.id !== telopId),
+    selection,
+  });
 }
 
 /**
@@ -187,4 +192,98 @@ export function setAllTelopPositions(
   const s = clamp(scale, 0.3, 3.0);
   // 各テロップへ独立した position オブジェクトを渡す（参照共有しない＝一回きりのコピー）。
   return { ...state, telops: state.telops.map((t) => ({ ...t, position: { x, y }, scale: s })) };
+}
+
+// ---------------------------------------------------------------------------
+// 複数選択の一括 ops（設計書 §3 `docs/specs/2026-08-18-telop-multiselect-design.md`）
+//
+// 共通契約:
+// - `ids` は Set 化して重複を無視する。`telops` に実在しない ID は無視する。
+// - 実在対象がゼロ、または結果が全て同値なら **同一 state 参照** を返す
+//   （履歴へ空の Undo を積まないため）。
+// - `Number.isFinite` でない入力は no-op（同一 state 参照）。
+// ---------------------------------------------------------------------------
+
+/**
+ * 指定 ID 群のテロップへ patch を適用する共通ヘルパ。
+ * 変更が 1 件も起きなければ（対象ゼロ・全同値）同一 state 参照を返す。
+ * @param same 変更前後が同値かの判定。true なら「その 1 件は変わらなかった」とみなす。
+ */
+function patchTelops(
+  state: EditState,
+  ids: number[],
+  patch: (t: EditorTelop) => EditorTelop,
+  same: (before: EditorTelop, after: EditorTelop) => boolean,
+): EditState {
+  const targets = new Set(ids);
+  if (targets.size === 0) return state;
+  let changed = false;
+  const telops = state.telops.map((t) => {
+    if (!targets.has(t.id)) return t;
+    const next = patch(t);
+    if (same(t, next)) return t;
+    changed = true;
+    return next;
+  });
+  if (!changed) return state;
+  return { ...state, telops };
+}
+
+/**
+ * 複数テロップの位置 x/y を同じ値へ一括設定する（クランプは {@link setTelopPosition} と同一）。
+ * position オブジェクトはテロップごとに独立して作る（参照共有しない）。
+ */
+export function setTelopsPosition(
+  state: EditState,
+  ids: number[],
+  x: number,
+  y: number,
+): EditState {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return state;
+  const cx = clamp(x, -1, 1);
+  const cy = clamp(y, -1, 0);
+  return patchTelops(
+    state,
+    ids,
+    (t) => ({ ...t, position: { x: cx, y: cy } }),
+    (before) => before.position?.x === cx && before.position?.y === cy,
+  );
+}
+
+/** 複数テロップのスケールを一括設定する（0.3..3.0 へクランプ・単体版と同一）。 */
+export function setTelopsScale(state: EditState, ids: number[], scale: number): EditState {
+  if (!Number.isFinite(scale)) return state;
+  const s = clamp(scale, 0.3, 3.0);
+  return patchTelops(
+    state,
+    ids,
+    (t) => ({ ...t, scale: s }),
+    (before) => before.scale === s,
+  );
+}
+
+/**
+ * 複数テロップをまとめて削除する。
+ *
+ * **削除するのは飾りテロップ（`manual:true`）のみ。字幕はスキップする。**
+ * 字幕の「削除」は既存契約どおり動画区間カット（`toggleSegmentCut`）であって配列からの
+ * 物理削除ではない（{@link removeTelop} の docstring と同じ契約）。混在選択で字幕まで
+ * 消すと、その契約が黙って変わってしまう。
+ *
+ * 削除対象が 1 件も無ければ同一 state 参照を返す。削除後は
+ * {@link normalizeMultiSelection} を通して選択・複数選択集合の整合を取る。
+ */
+export function removeTelops(state: EditState, ids: number[]): EditState {
+  const targets = new Set(ids);
+  if (targets.size === 0) return state;
+  const removable = new Set(
+    state.telops.filter((t) => targets.has(t.id) && t.manual === true).map((t) => t.id),
+  );
+  if (removable.size === 0) return state;
+  const telops = state.telops.filter((t) => !removable.has(t.id));
+  const selection =
+    state.selection?.kind === 'telop' && removable.has(state.selection.id)
+      ? null
+      : state.selection;
+  return normalizeMultiSelection({ ...state, telops, selection });
 }

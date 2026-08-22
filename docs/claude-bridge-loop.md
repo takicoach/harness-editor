@@ -1,8 +1,12 @@
-# エディタ画面 → Claude Code 編集ブリッジ：常駐手順
+# エディタ画面 → Claude Code 編集ブリッジ：常駐手順（技術者向け）
 
-エディタを開いている間、画面の「Claude に指示」パネルから編集を出せるようにする。
+エディタを開いている間、画面の AI タブから編集指示を出せるようにする仕組みの技術メモ。
 
-## 1. 一度だけ：MCP 接続を登録
+> **通常の利用ではこの手順は不要です。** エディタの **AI タブ**（埋め込みターミナル）が
+> 接続の登録から待機の開始まで自動で行います（利用者向けの説明は `docs/AI接続マニュアル.md`）。
+> 以下は、外部ターミナルで待機役を自分で動かす「別ターミナル運用」の場合の手順です。
+
+## 1. 一度だけ：接続を登録（別ターミナル運用のみ）
 
 エディタを起動した状態（ポート 2109）で、このプロジェクトのフォルダで:
 
@@ -20,13 +24,13 @@ claude mcp add --transport http sme-editor http://localhost:2109/mcp
 /loop sme-editor の get_next_instruction を呼んで編集指示を待つ。指示が返ったら、その場では編集せずバックグラウンドの subagent に委譲して、すぐ次の get_next_instruction を呼びに戻る。subagent には「projectDir 配下を編集して実現し、作業中は .sme/status.json の activity を書き、完了したら report_instruction_status を done（失敗なら failed）で一言返答する」ことを指示する。empty が返ったら再度呼んで待ち続ける。
 ```
 
-**B. 動画専属** — `get_next_instruction` に `projectId` を渡すとそのプロジェクトの指示だけを受け取る（AI タブの接続ガイドに ID 入り文言が出る）:
+**B. 動画専属** — `get_next_instruction` に `projectId` を渡すとそのプロジェクトの指示だけを受け取る（`projectId` は動画のフォルダ名）:
 
 ```
 /loop sme-editor の get_next_instruction を projectId: "<この動画のID>" で呼んで編集指示を待つ。指示が返ったら projectDir 配下のファイルを編集して実現し、完了したら report_instruction_status を done / failed で一言返答する。empty が返ったら再度呼んで待ち続ける。
 ```
 
-配送の意味論（サーバ側で保証）: 同一プロジェクトの指示は同時に 1 件しか配送されない（直列）。専属がいるプロジェクトは専属が優先され、専属の活動が約3分途絶えると未配送分を全体待機が引き継ぐ。全体待機の同時配送数は `SME_MAX_PARALLEL_INSTRUCTIONS`（既定 3）。受け箱は `<HARNESS_PROJECT_ROOT>/.sme-inbox.json` に永続化され、再起動時に pending は復元・processing だったものは「結果不明」の failed になる。処理中のまま止まった指示は AI タブの打ち切りボタン（10 分無応答で表示）で解放する。旧文言（引数なし）も従来通り動くが直列のまま。
+配送の意味論（サーバ側で保証）: 同一プロジェクトの指示は同時に 1 件しか配送されない（直列）。専属がいるプロジェクトは専属が優先され、専属の活動が約3分途絶えると未配送分を全体待機が引き継ぐ。全体待機の同時配送数は `SME_MAX_PARALLEL_INSTRUCTIONS`（既定 3）。受け箱は `<HARNESS_PROJECT_ROOT>/.sme-inbox.json` に永続化され、再起動時に pending は復元・processing だったものは「結果不明」の failed になる。処理中のまま止まった指示は `POST /api/instructions/abort` で解放するか、エディタ再起動で「結果不明」の failed として解放される。旧文言（引数なし）も従来通り動くが直列のまま。
 
 ## 課金・コスト安全（重要）
 
@@ -34,7 +38,7 @@ claude mcp add --transport http sme-editor http://localhost:2109/mcp
 - **`claude -p`（ヘッドレス）では回さない**こと（プログラム的利用＝従量課金側）。対話セッション＋`/loop` のみ。
 - `get_next_instruction` はサーバ側で最大 ~120 秒ブロックして待つため、待機中はトークンを消費しない。
 - 作業が終わったら `/loop` を止め、放置しない。
-（同じ内容を README のAI タブ節にも記載している。原本の設計書は公開リポジトリには同梱していない。）
+（同じ内容を README の AI タブ節にも記載している。）
 
 ## 飾りテロップ（文字起こし非依存の装飾テロップ）
 

@@ -4,6 +4,7 @@ import type { PlayerRef } from '@remotion/player';
 import { formatClock } from '../../shared/format';
 import { buildWordChips } from '../../core/wordChips';
 import { originalToPlayback, playbackToOriginal } from '../../core/cutEngine';
+import { cutOrderingOf } from '../../core/cutOrder';
 import {
   TRANSCRIPT_FOLLOW_STORAGE_KEY,
   resolveInitialFollowEnabled,
@@ -239,7 +240,7 @@ export function TranscriptPanel({
         return;
       }
       const playback = playerToPlayback(e.detail.frame, speedView);
-      const orig = playbackToOriginal(playback, state.cutRegions);
+      const orig = playbackToOriginal(playback, state.cutRegions, cutOrderingOf(state));
       const id = followedTelopId(subtitleTelops, orig);
       if (id === null || id === lastFollowedIdRef.current) return;
       const row = rowRefs.current.get(id);
@@ -271,7 +272,7 @@ export function TranscriptPanel({
       const speedView = model ?? { speedSegments: null, playbackOverlaps: [], mainSpeed: 1 };
       const frame = player.getCurrentFrame();
       const playback = playerToPlayback(frame, speedView);
-      const orig = playbackToOriginal(playback, state.cutRegions);
+      const orig = playbackToOriginal(playback, state.cutRegions, cutOrderingOf(state));
       const id = followedTelopId(subtitleTelops, orig);
       return id !== null ? rowRefs.current.get(id) : undefined;
     })();
@@ -481,6 +482,7 @@ export function TranscriptPanel({
                 const pb = originalToPlayback(
                   t.originalStart,
                   cutsBypassed ? [] : state.cutRegions,
+                  cutsBypassed ? undefined : cutOrderingOf(state),
                 );
                 if (pb !== null) onSeek(pb);
               }}

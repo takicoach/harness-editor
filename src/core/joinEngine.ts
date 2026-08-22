@@ -1,5 +1,5 @@
 import { applyCuts } from './cutEngine';
-import type { CutRegion, SceneTransition } from './types';
+import type { CutOrdering, CutRegion, SceneTransition } from './types';
 
 /** カット後タイムラインの「つなぎ目」。atOriginal=削除カット区間の原本開始、playbackFrame=境界の再生フレーム。 */
 export interface Join {
@@ -7,9 +7,17 @@ export interface Join {
   playbackFrame: number;
 }
 
-/** 隣接 kept 区間の境界を全て返す（＝各削除カット区間に 1 つ）。 */
-export function computeJoins(originalTotalFrames: number, regions: CutRegion[]): Join[] {
-  const segs = applyCuts(originalTotalFrames, regions);
+/**
+ * 隣接 kept 区間の境界を全て返す（＝各削除カット区間に 1 つ）。
+ * ordering を渡すと「再生順で隣り合う区間」の境界になる（並び替え対応）。
+ * 未指定なら従来どおり原素材順の隣接境界。
+ */
+export function computeJoins(
+  originalTotalFrames: number,
+  regions: CutRegion[],
+  ordering?: CutOrdering,
+): Join[] {
+  const segs = ordering ? ordering.segments : applyCuts(originalTotalFrames, regions);
   const joins: Join[] = [];
   for (let i = 0; i < segs.length - 1; i++) {
     const cur = segs[i]!;

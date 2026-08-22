@@ -228,7 +228,14 @@ function TelopLayer({ Telop, telops }: { Telop: TelopComponent; telops: TelopSeg
             }
           : undefined;
         return (
-          <AbsoluteFill key={current.id} style={style}>
+          // data-sme-* は選択枠の実測（measureBox / useMeasuredBox）の目印。
+          // 測定は data-sme-root 起点の限定 query のみで、Remotion の内部 DOM には依存しない。
+          <AbsoluteFill
+            key={current.id}
+            style={style}
+            data-sme-kind="telop"
+            data-sme-id={current.id}
+          >
             <Telop segment={segmentForStyle} />
           </AbsoluteFill>
         );
@@ -273,7 +280,10 @@ function InsertImageLayer({
         const duration = i.playbackEnd - i.playbackStart;
         return (
           <Sequence key={i.id} from={i.playbackStart} durationInFrames={duration}>
-            <InsertImage segment={segment} />
+            {/* 実測の目印（TelopLayer と同じ規約）。AbsoluteFill は layout 中立。 */}
+            <AbsoluteFill data-sme-kind="image" data-sme-id={i.id}>
+              <InsertImage segment={segment} />
+            </AbsoluteFill>
           </Sequence>
         );
       })}
@@ -332,7 +342,10 @@ function VideoInsertLayer({
           const duration = v.playbackEnd - v.playbackStart;
           return (
             <Sequence key={v.id} from={v.playbackStart} durationInFrames={duration}>
-              <InsertVideo segment={segment} />
+              {/* 実測の目印（TelopLayer と同じ規約）。AbsoluteFill は layout 中立。 */}
+              <AbsoluteFill data-sme-kind="videoInsert" data-sme-id={v.id}>
+                <InsertVideo segment={segment} />
+              </AbsoluteFill>
             </Sequence>
           );
         })}
@@ -595,7 +608,8 @@ export function makeEditorComposition(
       </AbsoluteFill>
     );
     return (
-      <AbsoluteFill style={{ backgroundColor: 'black' }}>
+      // data-sme-root: 選択枠の実測スコープ（全画面同寸判定の基準矩形も兼ねる）。
+      <AbsoluteFill data-sme-root="" style={{ backgroundColor: 'black' }}>
         <MainVideoLayoutFrame keptSegments={keptSegments} base={mainLayout} segmentLayouts={segmentLayouts} hasOverlap={hasOverlap} layoutKeyframes={layoutKeyframes}>
           {mainVideoContent}
         </MainVideoLayoutFrame>

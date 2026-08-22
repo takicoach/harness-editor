@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { createEditState, toEditorProject, samePersistedContent } from './editState';
+import {
+  createEditState,
+  initialEditState,
+  toEditorProject,
+  samePersistedContent,
+  normalizeMultiSelection,
+  toggleMultiTelopSelection,
+  clearMultiSelection,
+  type EditState,
+} from './editState';
+import { removeTelop } from './telopSettingsOps';
+import { splitTelopAt, mergeTelopWithNext, insertTelop } from './cutOps';
 import type { EditorProject } from '../../core/types';
 import { DEFAULT_DUCKING } from './duckingSettings';
 import { DEFAULT_MAIN_LAYOUT } from '../../core/mainLayout';
@@ -615,5 +626,188 @@ describe('segmentLayouts 伝播', () => {
     const a = createEditState(sampleProject());
     const withSeg = { ...a, segmentLayouts: { 3: { position: { x: 0, y: 0 }, scale: 1.5, rotation: 0, flipH: false, flipV: false } } };
     expect(toEditorProject(withSeg, sampleProject()).segmentLayouts).toEqual(withSeg.segmentLayouts);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 複数選択（multiTelopIds）と中央正規化 normalizeMultiSelection
+// 設計書 docs/specs/2026-08-18-telop-multiselect-design.md §1
+// ---------------------------------------------------------------------------
+
+/** テロップ 4 件・#1 選択の初期状態。複数選択テストの共通素材。 */
+function multiState(): EditState {
+  const base = createEditState(sampleProject());
+  return {
+    ...base,
+    telops: [
+      { id: 1, originalStart: 30, originalEnd: 150, text: 'あ' },
+      { id: 2, originalStart: 200, originalEnd: 320, text: 'い' },
+      { id: 3, originalStart: 400, originalEnd: 500, text: 'う', manual: true },
+      { id: 4, originalStart: 600, originalEnd: 700, text: 'え', manual: true },
+    ],
+    nextTelopId: 5,
+    selection: { kind: 'telop', id: 1 },
+    multiTelopIds: [],
+  };
+}
+
+describe('createEditState の multiTelopIds 初期値', () => {
+  it('読込・再読込では必ず空（前プロジェクトの集合を持ち越さない）', () => {
+    expect(createEditState(sampleProject()).multiTelopIds).toEqual([]);
+  });
+  it('initialEditState でも空', () => {
+    expect(initialEditState({ mainSpeed: 1, segmentSpeeds: {} }).multiTelopIds).toEqual([]);
+  });
+});
+
+describe('normalizeMultiSelection', () => {
+  it('不変条件を満たしていれば同一 state 参照を返す（無駄な再レンダーを作らない）', () => {
+    const s = { ...multiState(), multiTelopIds: [1, 2] };
+    expect(normalizeMultiSelection(s)).toBe(s);
+  });
+
+  it('空集合はそのまま（同一参照）', () => {
+    const s = multiState();
+    expect(normalizeMultiSelection(s)).toBe(s);
+  });
+
+  it('telops に実在しない ID を取り除く', () => {
+    const s = { ...multiState(), multiTelopIds: [1, 2, 999] };
+    expect(normalizeMultiSelection(s).multiTelopIds).toEqual([1, 2]);
+  });
+
+  it('重複 ID を取り除く', () => {
+    const s = { ...multiState(), multiTelopIds: [1, 2, 2, 1] };
+    expect(normalizeMultiSelection(s).multiTelopIds).toEqual([1, 2]);
+  });
+
+  it('プライマリ（selection.id）を含まない集合は空にする', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 1 }, multiTelopIds: [2, 3] };
+    expect(normalizeMultiSelection(s).multiTelopIds).toEqual([]);
+  });
+
+  it('除去の結果サイズ 1 になったら空にする（単数の複数選択は作らない）', () => {
+    const s = { ...multiState(), multiTelopIds: [1, 999] };
+    expect(normalizeMultiSelection(s).multiTelopIds).toEqual([]);
+  });
+
+  it('selection がテロップ以外なら空にする', () => {
+    const s = { ...multiState(), selection: { kind: 'se' as const, id: 1 }, multiTelopIds: [1, 2] };
+    expect(normalizeMultiSelection(s).multiTelopIds).toEqual([]);
+  });
+
+  it('selection が null なら空にする', () => {
+    const s = { ...multiState(), selection: null, multiTelopIds: [1, 2] };
+    expect(normalizeMultiSelection(s).multiTelopIds).toEqual([]);
+  });
+
+  it('telops 以外の内容は変更しない', () => {
+    const s = { ...multiState(), multiTelopIds: [1, 999] };
+    const next = normalizeMultiSelection(s);
+    expect(next.telops).toBe(s.telops);
+    expect(next.selection).toBe(s.selection);
+  });
+});
+
+describe('toggleMultiTelopSelection', () => {
+  it('単一選択中に別テロップをトグルすると 2 個選択・最後のクリックがプライマリ', () => {
+    const next = toggleMultiTelopSelection(multiState(), 2);
+    expect(next.multiTelopIds).toEqual([1, 2]);
+    expect(next.selection).toEqual({ kind: 'telop', id: 2 });
+  });
+
+  it('集合に含まれる非プライマリをトグルすると外れ、プライマリは変わらない', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 2 }, multiTelopIds: [1, 2] };
+    const next = toggleMultiTelopSelection(s, 1);
+    expect(next.multiTelopIds).toEqual([]);
+    expect(next.selection).toEqual({ kind: 'telop', id: 2 });
+  });
+
+  it('プライマリ自身をトグルすると外れ、残りの 1 つがプライマリになる', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 2 }, multiTelopIds: [1, 2] };
+    const next = toggleMultiTelopSelection(s, 2);
+    expect(next.multiTelopIds).toEqual([]);
+    expect(next.selection).toEqual({ kind: 'telop', id: 1 });
+  });
+
+  it('3 個目を足すと 3 個選択になる', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 2 }, multiTelopIds: [1, 2] };
+    const next = toggleMultiTelopSelection(s, 3);
+    expect(next.multiTelopIds).toEqual([1, 2, 3]);
+    expect(next.selection).toEqual({ kind: 'telop', id: 3 });
+  });
+
+  it('唯一の選択テロップをトグルしても未選択にはしない（同一参照）', () => {
+    const s = multiState();
+    expect(toggleMultiTelopSelection(s, 1)).toBe(s);
+  });
+
+  it('テロップ以外を選択中のトグルは単一選択として扱う（集合は空のまま）', () => {
+    const s = { ...multiState(), selection: { kind: 'se' as const, id: 1 }, multiTelopIds: [] };
+    const next = toggleMultiTelopSelection(s, 3);
+    expect(next.selection).toEqual({ kind: 'telop', id: 3 });
+    expect(next.multiTelopIds).toEqual([]);
+  });
+
+  it('実在しない ID のトグルは no-op（同一参照）', () => {
+    const s = multiState();
+    expect(toggleMultiTelopSelection(s, 999)).toBe(s);
+  });
+});
+
+describe('clearMultiSelection', () => {
+  it('集合を空にする', () => {
+    const s = { ...multiState(), multiTelopIds: [1, 2] };
+    expect(clearMultiSelection(s).multiTelopIds).toEqual([]);
+  });
+  it('もともと空なら同一参照（空 Undo を作らない）', () => {
+    const s = multiState();
+    expect(clearMultiSelection(s)).toBe(s);
+  });
+});
+
+describe('samePersistedContent は multiTelopIds を無視する（dirty 判定）', () => {
+  it('集合だけが違う 2 状態は「同じ内容」', () => {
+    const a = { ...multiState(), multiTelopIds: [] };
+    const b = { ...multiState(), multiTelopIds: [1, 2] };
+    expect(samePersistedContent(a, b)).toBe(true);
+  });
+});
+
+describe('テロップ配列を変える各 op の後に不整合 ID が残らない', () => {
+  it('単体削除（removeTelop）で削除された ID は集合から消える', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 3 }, multiTelopIds: [3, 4] };
+    const next = removeTelop(s, 4);
+    expect(next.telops.map((t) => t.id)).toEqual([1, 2, 3]);
+    // 残り 1 個（=3）はサイズ 1 なので集合は空へ落ちる。
+    expect(next.multiTelopIds).toEqual([]);
+  });
+
+  it('プライマリを単体削除すると集合は空になる（選択も外れる）', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 3 }, multiTelopIds: [3, 4] };
+    const next = removeTelop(s, 3);
+    expect(next.selection).toBeNull();
+    expect(next.multiTelopIds).toEqual([]);
+  });
+
+  it('分割（splitTelopAt）は選択が新断片へ移るので集合が解除される', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 1 }, multiTelopIds: [1, 2] };
+    const next = splitTelopAt(s, 1, 100, 'あ', 'あ');
+    expect(next.selection?.kind).toBe('telop');
+    // 分割後のプライマリは右断片（新 ID）。集合はプライマリを含めないので解除される。
+    expect(next.multiTelopIds).toEqual([]);
+  });
+
+  it('結合（mergeTelopWithNext）で消えた ID は集合に残らない', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 1 }, multiTelopIds: [1, 2] };
+    const next = mergeTelopWithNext(s, 1);
+    expect(next.multiTelopIds).toEqual([]);
+  });
+
+  it('追加（insertTelop）は新テロップが選択されるので集合が解除される', () => {
+    const s = { ...multiState(), selection: { kind: 'telop' as const, id: 1 }, multiTelopIds: [1, 2] };
+    const next = insertTelop(s, null, 800, 860);
+    expect(next.selection).toEqual({ kind: 'telop', id: 5 });
+    expect(next.multiTelopIds).toEqual([]);
   });
 });

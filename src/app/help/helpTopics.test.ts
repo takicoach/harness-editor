@@ -41,7 +41,7 @@ describe('filterHelpTopics', () => {
   });
 
   it('本文の部分一致でも絞り込む（大小文字無視）', () => {
-    const result = filterHelpTopics(HELP_TOPICS, 'MCP', 'all');
+    const result = filterHelpTopics(HELP_TOPICS, 'claude code', 'all');
     expect(result.map((t) => t.id)).toContain('mcp');
   });
 

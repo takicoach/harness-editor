@@ -19,7 +19,7 @@ if not "%ANTHROPIC_API_KEY%"=="" (
   echo        解除してから常駐してください（このウィンドウで: set ANTHROPIC_API_KEY=）。
 )
 
-echo     画面から Claude に指示するには docs/claude-bridge-loop.md を参照（MCP 接続 + /loop 常駐）。
+echo     AI に編集を頼むには、画面右の AI タブを開いてください（接続設定は自動です）。
 echo == Harness Editor を起動します
 echo    プロジェクト置き場: %HARNESS_PROJECT_ROOT%
 echo    ブラウザが自動で開きます。このウィンドウは閉じないでください

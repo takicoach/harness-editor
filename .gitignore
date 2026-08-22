@@ -13,6 +13,9 @@ cutLearning-aggregated.json
 # 既定のプロジェクト置き場（start.command / start.bat が作る。利用者の動画プロジェクト）
 projects/
 
+# setup スクリプトが置く ffmpeg / ffprobe の静的ビルド（環境ごとに違うため追跡しない）
+/tools/
+
 # claude ローカル導入ジョブの生成物（npm install --prefix 先）
 .claude-runtime/
 
@@ -31,3 +34,7 @@ src/server/__fixtures__/e2e-create-project-tmp/
 src/server/__fixtures__/status-live-tmp*/
 src/server/__fixtures__/tutorial-tmp*/
 src/server/__fixtures__/.sme-inbox.json*
+
+# breakdown sheets (証拠ログと生成HTMLは追跡しない)
+_breakdown/logs/
+_breakdown/*.html

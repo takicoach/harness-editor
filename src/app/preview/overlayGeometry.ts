@@ -1,5 +1,5 @@
 import type { TelopPosition } from '../../core/types';
-import { telopBottomFrac, telopVCoeff } from '../../preview/telopLayout';
+import { telopBottomFrac, telopScaleOriginY, telopVCoeff } from '../../preview/telopLayout';
 
 /** 画面座標（左上原点）の矩形。 */
 export interface Rect {
@@ -39,9 +39,44 @@ export const BOX_FRAC_W = 0.76;
 export const BOX_FRAC_H = 0.16;
 
 /**
+ * 枠アンカー（テロップ下端）の位置比を返す。
+ *
+ * プロジェクトの実描画位置は `TELOP_CONFIG.bottomOffset` で決まり、プリセットごとに違う
+ * （標準テンプレート short=200 / golf-short-gold=540）。**選択枠と当たり判定だけ**はこの
+ * 実値へ合わせないと、枠が実描画テキストから離れて掴めなくなる。
+ *
+ * 読めない場合（null / undefined / 非有限・compH が 0 以下）は標準値へフォールバックする。
+ * 戻り値は [0,1] へクランプする（壊れた設定値で枠が画面外へ暴走しない）。
+ *
+ * 注意: これは**表示アンカー専用**。移動量係数 `telopVCoeff` と書き出し側と同式の
+ * `telopTransform` は標準固定のまま（2026-08-17 の「エディタ⇄書き出し一致」契約）。
+ */
+export function telopAnchorFrac(
+  compW: number,
+  compH: number,
+  bottomOffset?: number | null,
+): number {
+  if (bottomOffset != null && Number.isFinite(bottomOffset) && compH > 0) {
+    return clamp(bottomOffset / compH, 0, 1);
+  }
+  return telopBottomFrac(compW, compH);
+}
+
+/**
  * テロップの操作ボックス（バウンディングボックス）を画面座標で返す。
- * テロップは下端固定で描かれ、拡縮は下端基準（下端固定で上へ伸縮）。よって箱も下端を
- * テロップ下端へ合わせ、scale では下端固定で上へ伸ばす。x は中心 50%・y は縦係数で上へ。
+ * テロップは下端固定で描かれ、箱の下端をテロップ下端へ合わせる。
+ * x は中心 50%・y は縦係数で上へ。
+ *
+ * **拡縮の下端**: 実描画（`EditorComposition` の TelopLayer / プロジェクト側 `TelopPlayer.tsx`）は
+ * 全画面ラッパーへ scale を当て、`transformOrigin` Y は**標準固定**の `1 - telopBottomFrac`
+ * （＝ origin）を使う。よってテキスト下端は origin から見て `(anchor - origin)` の距離にあり、
+ * scale 倍される: `origin + (anchor - origin) * scale`。
+ * 標準プロジェクトは anchor === origin なので第 2 項が消え、従来どおり
+ * 「拡縮しても下端不変」へ**恒等に縮退**する。golf-short-gold（bottomOffset=540）だけ
+ * origin ≠ anchor となり、拡大でテキスト下端が上がるのに枠が追従しない問題が出る。
+ *
+ * @param bottomOffset TELOP_CONFIG.bottomOffset（px）。枠の**アンカー**に効く
+ *   （{@link telopAnchorFrac}）。省略・null なら標準値。
  */
 export function telopBoxRect(
   content: Rect,
@@ -49,13 +84,20 @@ export function telopBoxRect(
   scale: number,
   compW: number,
   compH: number,
+  bottomOffset?: number | null,
 ): Rect {
   const w = content.w * BOX_FRAC_W * scale;
   const h = content.h * BOX_FRAC_H * scale;
-  const bottomFrac = telopBottomFrac(compW, compH);
+  // 上端からの比。origin＝実描画の transformOrigin（標準固定）、anchor＝テキスト下端（実値）。
+  // origin は telopLayout.telopScaleOriginY（実描画が使う正本）から取り、定数を写経しない。
+  const originFrac = telopScaleOriginY(compW, compH) / 100;
+  const anchorFrac = 1 - telopAnchorFrac(compW, compH, bottomOffset);
+  // 移動量係数は標準固定（書き出し一致契約）。アンカーだけがプリセット実値に追従する。
   const vCoeff = telopVCoeff(compW, compH);
   // テロップ下端の画面 Y（position.y は上方向=負で縦係数ぶん上へ）。
-  const bottomY = content.y + content.h * (1 - bottomFrac + position.y * vCoeff);
+  const bottomY =
+    content.y +
+    content.h * (originFrac + (anchorFrac - originFrac) * scale + position.y * vCoeff);
   const cx = content.x + content.w / 2 + (position.x * content.w) / 2;
   return { x: cx - w / 2, y: bottomY - h, w, h };
 }

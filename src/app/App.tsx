@@ -42,6 +42,7 @@ import { VideoLinkBanner } from './panels/VideoLinkBanner';
 import { useAudition } from './audio/useAudition';
 import type { MaterialKind } from './panels/materialList';
 import { playbackToOriginal } from '../core/cutEngine';
+import { cutOrderingOf } from '../core/cutOrder';
 import { playbackToPlayer, playerToPlayback } from '../preview/speedBridge';
 import { nextReloadKey, withReloadBust } from '../shared/previewReload';
 import type { TimelineDropApi } from './panels/Timeline';
@@ -443,6 +444,8 @@ export function App() {
     return buildPlaybackModel({
       ...proj,
       cutRegions: [],
+      // カットを外す以上、カット並び替えも外す（Timeline 側の playbackOrdering と対称）。
+      cutOrder: [],
       sceneTransitions: [],
       mainSpeed: 1,
       segmentSpeeds: {},
@@ -605,6 +608,7 @@ export function App() {
     const orig = playbackToOriginal(
       model ? playerToPlayback(pf, model) : pf,
       previewCuts ? [] : session.state.cutRegions,
+      previewCuts ? undefined : cutOrderingOf(session.state),
     );
     session.apply(applyInsertMaterial(kind, session.state, file, orig));
   }

@@ -1,4 +1,8 @@
-import { applyCuts, cutRegionsFromCutData, playbackTotalFrames } from './cutEngine';
+import { cutRegionsFromCutData, playbackTotalFrames } from './cutEngine';
+import {
+  buildCutOrdering, cutOrderFromCutData,
+  reorderSe, reorderStartEnd, unreorderSe, unreorderStartEnd,
+} from './cutOrder';
 import { parseCutData, serializeCutData } from './cutData';
 import { anchorImages, clampImages, projectImages } from './imageEngine';
 import { parseInsertImageData, serializeInsertImageData } from './insertImageData';
@@ -80,11 +84,15 @@ export function loadProject(files: ProjectFiles): EditorProject {
     files.cutDataSource !== null && cutData.length === 0
       ? [{ start: 0, end: videoConfig.durationFrames }]
       : cutRegionsFromCutData(cutData, videoConfig.durationFrames);
+  // cutData.ts の配列順＝再生順。削除区間モデルでは表せないので別に保持する（案A）。
+  const cutOrder = cutOrderFromCutData(cutData);
+  const ordering = buildCutOrdering(videoConfig.durationFrames, cutRegions, cutOrder);
 
   // transitionData は再生座標で保存されているため、そのまま buildOverlaps へ渡せる（循環なし）。
   // overlaps が空（transitionData 無し or overlap 系 0 件）なら uncollapseStartEnd は恒等。
   const parsedTransitions = parseTransitionData(files.transitionDataSource ?? null, videoConfig.fps);
-  const cutSegments = applyCuts(videoConfig.durationFrames, cutRegions);
+  // 並び替え後の再生順区間（恒等順列なら applyCuts の出力と同一）。
+  const cutSegments = ordering.segments;
   const overlaps = buildOverlaps(parsedTransitions, cutSegments);
 
   // 速度逆射影ヘルパ: 個別指定ありなら区分線形、なければ一律（cutSegments が resolve の基準）。
@@ -107,12 +115,16 @@ export function loadProject(files: ProjectFiles): EditorProject {
   // 各データは最終座標で保存されているため、anchorX へ渡す前に:
   //   1) unscale（速度スケールを逆適用して再生座標へ戻す）
   //   2) uncollapse（overlap 分の詰めを逆適用して再生座標へ戻す）
-  // の順で適用する。rate===1 / overlaps=[] のどちらも恒等なので既存テストに影響なし。
-  const rawTelops = uncollapseStartEnd(
-    unscaleSE_(
-      parseTelopData(files.telopDataSource, videoConfig.fps, videoConfig.durationFrames),
+  //   3) unreorder（並び替えを逆適用して単調＝原素材順の再生座標へ戻す）
+  // の順で適用する。rate===1 / overlaps=[] / 恒等順列 のいずれも恒等なので既存テストに影響なし。
+  const rawTelops = unreorderStartEnd(
+    uncollapseStartEnd(
+      unscaleSE_(
+        parseTelopData(files.telopDataSource, videoConfig.fps, videoConfig.durationFrames),
+      ),
+      overlaps,
     ),
-    overlaps,
+    ordering,
   );
   const telops = anchorTelops(rawTelops, cutRegions);
 
@@ -127,44 +139,59 @@ export function loadProject(files: ProjectFiles): EditorProject {
         startFrame: finalToPlayback(s.startFrame, overlaps),
         endFrame: s.endFrame !== undefined ? finalToPlayback(s.endFrame, overlaps) : undefined,
       }));
-  const se = anchorSe(uncollapsedSe, cutRegions);
+  const se = anchorSe(unreorderSe(uncollapsedSe, ordering), cutRegions);
 
   const images = anchorImages(
-    uncollapseStartEnd(
-      unscaleSE_(parseInsertImageData(files.insertImageDataSource, videoConfig.fps)),
-      overlaps,
+    unreorderStartEnd(
+      uncollapseStartEnd(
+        unscaleSE_(parseInsertImageData(files.insertImageDataSource, videoConfig.fps)),
+        overlaps,
+      ),
+      ordering,
     ),
     cutRegions,
   );
   const videoInserts = anchorVideoInserts(
-    uncollapseStartEnd(
-      unscaleVI_(parseInsertVideoData(files.videoInsertDataSource ?? null, videoConfig.fps)),
-      overlaps,
+    unreorderStartEnd(
+      uncollapseStartEnd(
+        unscaleVI_(parseInsertVideoData(files.videoInsertDataSource ?? null, videoConfig.fps)),
+        overlaps,
+      ),
+      ordering,
     ),
     cutRegions,
   );
   const bgm = anchorBgm(
-    uncollapseStartEnd(
-      unscaleSE_(parseBgmData(files.bgmDataSource ?? null)),
-      overlaps,
+    unreorderStartEnd(
+      uncollapseStartEnd(
+        unscaleSE_(parseBgmData(files.bgmDataSource ?? null)),
+        overlaps,
+      ),
+      ordering,
     ),
     cutRegions,
   );
 
   const rawTitles = files.titleDataSource
-    ? uncollapseStartEnd(
-        unscaleSE_(
-          parseTitleData(files.titleDataSource, videoConfig.fps, videoConfig.durationFrames),
+    ? unreorderStartEnd(
+        uncollapseStartEnd(
+          unscaleSE_(
+            parseTitleData(files.titleDataSource, videoConfig.fps, videoConfig.durationFrames),
+          ),
+          overlaps,
         ),
-        overlaps,
+        ordering,
       )
     : [];
   const titles = anchorTitles(rawTitles, cutRegions);
 
   const shapes = anchorShapes(
-    uncollapseStartEnd(
-      unscaleSE_(parseInsertShapeData(files.shapeDataSource ?? null)),
-      overlaps,
+    unreorderStartEnd(
+      uncollapseStartEnd(
+        unscaleSE_(parseInsertShapeData(files.shapeDataSource ?? null)),
+        overlaps,
+      ),
+      ordering,
     ),
     cutRegions,
   );
@@ -172,7 +199,7 @@ export function loadProject(files: ProjectFiles): EditorProject {
   // transitionData は再生座標のまま anchorSceneTransitions へ渡す（据え置き）。
   const sceneTransitions = anchorSceneTransitions(
     parsedTransitions,
-    computeJoins(videoConfig.durationFrames, cutRegions),
+    computeJoins(videoConfig.durationFrames, cutRegions, ordering),
   );
 
   return {
@@ -181,6 +208,7 @@ export function loadProject(files: ProjectFiles): EditorProject {
     transcript,
     telops,
     cutRegions,
+    cutOrder,
     se,
     images,
     telopDataSource: files.telopDataSource,
@@ -248,7 +276,9 @@ export function serializeProject(project: EditorProject): {
 } {
   const original = project.videoConfig.durationFrames;
   const rate = project.mainSpeed; // 速度最外段スケール係数（下の resolved.map((r)=>...) の r とは別物）
-  const cutSegments = applyCuts(original, project.cutRegions);
+  // 再生順アンカーから並び替えを再導出する（恒等順列なら applyCuts の出力そのもの＝従来と同一）。
+  const ordering = buildCutOrdering(original, project.cutRegions, project.cutOrder);
+  const cutSegments = ordering.segments;
   const cutTotal = playbackTotalFrames(original, project.cutRegions);
 
   // 区間ごと速度が「実質」効いているか。効いていれば区分線形 segs を構築し、
@@ -264,7 +294,7 @@ export function serializeProject(project: EditorProject): {
   });
   // overlaps: crossfade/slide/wipe 系のつなぎ目による最終座標の詰め量を計算する。
   // transitionData が無いか overlap 系が 0 件なら overlaps = [] → collapseStartEnd は恒等。
-  const joins = computeJoins(original, project.cutRegions);
+  const joins = computeJoins(original, project.cutRegions, ordering);
   const resolved = resolveSceneTransitions(project.sceneTransitions ?? [], joins);
   const playbackTransitions = resolved.map((r) => ({ ...r.transition, at: r.playbackFrame }));
   const overlaps = buildOverlaps(playbackTransitions, cutSegments);
@@ -283,8 +313,12 @@ export function serializeProject(project: EditorProject): {
     if (source === undefined) return seg;
     return { ...seg, originalStart: source.originalStart, originalEnd: source.originalEnd };
   });
-  // 再生フレーム → 最終フレームへ写す（originalStart/End は ...x スプレッドで不変）。
-  const projectedWithOriginal = collapseStartEnd(projectedWithOriginalPlayback, overlaps);
+  // 単調再生フレーム → 並び替え後の再生フレーム → 最終フレームへ写す
+  // （originalStart/End は ...x スプレッドで不変。恒等順列なら reorderStartEnd は恒等）。
+  const projectedWithOriginal = collapseStartEnd(
+    reorderStartEnd(projectedWithOriginalPlayback, ordering),
+    overlaps,
+  );
 
   // 画像も clamp してから再生フレームへ射影する。
   const { images: clampedImages } = clampImages(project.images, project.cutRegions);
@@ -309,7 +343,7 @@ export function serializeProject(project: EditorProject): {
     project.cutRegions,
   );
   const projectedTitlesPlayback = projectTitles(clampedTitles, project.cutRegions);
-  const projectedTitles = collapseStartEnd(projectedTitlesPlayback, overlaps);
+  const projectedTitles = collapseStartEnd(reorderStartEnd(projectedTitlesPlayback, ordering), overlaps);
   // 元ファイルが存在するか、保存すべきタイトルがある場合のみ書き出す（bgm と対称）。
   // 0 件かつ titleDataSource:null → 孤立ファイル防止のため null を返す。
   const titleOutput =
@@ -323,7 +357,7 @@ export function serializeProject(project: EditorProject): {
     project.cutRegions,
   );
   const projectedShapesPlayback = projectShapes(clampedShapes, project.cutRegions);
-  const projectedShapes = collapseStartEnd(projectedShapesPlayback, overlaps);
+  const projectedShapes = collapseStartEnd(reorderStartEnd(projectedShapesPlayback, ordering), overlaps);
   // 元ファイルが存在するか、保存すべき図形がある場合のみ書き出す。
   // 0 件かつ shapeDataSource:null → 孤立ファイル防止のため null を返す。
   const shapeOutput = serializeInsertShapeData(
@@ -334,7 +368,10 @@ export function serializeProject(project: EditorProject): {
   // SE も clamp してから再生フレームへ射影し、最終フレームへ写す。
   // SoundEffect.endFrame は省略可能（undefined）なので collapseStartEnd の汎用型に通せない。
   // playbackToFinal を直接使い、endFrame undefined は undefined のまま通過させる。
-  const sePlayback = projectSe(clampSe(project.se, project.cutRegions).se, project.cutRegions);
+  const sePlayback = reorderSe(
+    projectSe(clampSe(project.se, project.cutRegions).se, project.cutRegions),
+    ordering,
+  );
   const seCollapsed = overlaps.length === 0
     ? sePlayback
     : sePlayback.map((s) => ({
@@ -345,10 +382,10 @@ export function serializeProject(project: EditorProject): {
 
   // 各インライン射影を最終座標化（const に切り出して collapseStartEnd を通す）。
   const imagesPlayback = projectImages(clampedImages, project.cutRegions);
-  const imagesCollapsed = collapseStartEnd(imagesPlayback, overlaps);
+  const imagesCollapsed = collapseStartEnd(reorderStartEnd(imagesPlayback, ordering), overlaps);
 
   const videoInsertsPlayback = projectVideoInserts(clampedVideoInserts, project.cutRegions);
-  const videoInsertsCollapsed = collapseStartEnd(videoInsertsPlayback, overlaps);
+  const videoInsertsCollapsed = collapseStartEnd(reorderStartEnd(videoInsertsPlayback, ordering), overlaps);
 
   const bgmPlayback = applyDuckingToBgm(
     projectBgm(clampedBgm, project.cutRegions),
@@ -357,14 +394,14 @@ export function serializeProject(project: EditorProject): {
     project.videoConfig.fps,
     project.ducking,
   );
-  const bgmCollapsed = collapseStartEnd(bgmPlayback, overlaps);
+  const bgmCollapsed = collapseStartEnd(reorderStartEnd(bgmPlayback, ordering), overlaps);
 
   // トランジションを原本フレームから再生フレームへ射影してから直列化する。
   // transitionData は再生座標のまま据え置き（at は overlaps の定義元）。
   // 0 件かつ transitionDataSource:null → 孤立ファイル防止のため null を返す（shape と対称）。
   const projectedTransitions = projectSceneTransitions(
     project.sceneTransitions ?? [],
-    computeJoins(original, project.cutRegions),
+    computeJoins(original, project.cutRegions, ordering),
   );
   const transitionOutput = serializeTransitionData(
     project.transitionDataSource ?? null,

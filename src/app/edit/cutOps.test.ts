@@ -12,6 +12,9 @@ import {
   openCutRange,
   rangeOverlapsCut,
   addTelopAtFrame,
+  addSubtitleAtFrame,
+  subtitleInsertSpan,
+  MIN_SUBTITLE_FRAMES,
   TELOP_DEFAULT_DURATION_SEC,
   cutButtonMode,
 } from './cutOps';
@@ -30,6 +33,7 @@ function state(): EditState {
     videoInserts: [],
     bgm: [],
     selection: null,
+    multiTelopIds: [],
     nextTelopId: 3,
     nextSeId: 1,
     nextImageId: 1,
@@ -101,6 +105,17 @@ describe('splitTelopAt', () => {
   it('存在しない ID はそのまま返す', () => {
     expect(splitTelopAt(state(), 999, 90, 'a', 'b').telops).toHaveLength(2);
   });
+
+  it('分割後は右（後半）断片を選択する（分割直後の打ち替え先を左に据え置かない）', () => {
+    const next = splitTelopAt(state(), 1, 90, 'ゆる', '素振り');
+    expect(next.selection).toEqual({ kind: 'telop', id: 3 });
+  });
+
+  it('分割できなかったときは選択を書き換えない', () => {
+    const before = { ...state(), selection: { kind: 'telop', id: 2 } as const };
+    expect(splitTelopAt(before, 1, 30, 'a', 'b').selection).toEqual({ kind: 'telop', id: 2 });
+    expect(splitTelopAt(before, 999, 90, 'a', 'b').selection).toEqual({ kind: 'telop', id: 2 });
+  });
 });
 
 describe('openCutRange / rangeOverlapsCut', () => {
@@ -154,6 +169,25 @@ describe('splitTelopWithText', () => {
 
   it('存在しない ID はそのまま返す', () => {
     expect(splitTelopWithText(state(), 999, 90, []).telops).toHaveLength(2);
+  });
+
+  it('手動テロップは本文を割らず両断片へ複製する（transcript と無関係なため）', () => {
+    // 実機不具合の再現値（04_golf-short-0811 #30）。transcript 側の単語チップは
+    // 本文と対応しないので、以前は末尾 1 文字だけが右へ渡っていた。
+    const manual: EditState = {
+      ...state(),
+      telops: [{ id: 1, originalStart: 875, originalEnd: 1655, text: '当たり前ですよね.', manual: true }],
+      multiTelopIds: [],
+      nextTelopId: 2,
+    };
+    const chips: WordChip[] = [
+      { text: 'ゴルフスイングの', originalStart: 875, originalEnd: 1200 },
+      { text: '基本は', originalStart: 1200, originalEnd: 1452 },
+      { text: 'とても大事', originalStart: 1452, originalEnd: 1655 },
+    ];
+    const next = splitTelopWithText(manual, 1, 1452, chips);
+    expect(next.telops[0]).toMatchObject({ id: 1, originalEnd: 1452, text: '当たり前ですよね.' });
+    expect(next.telops[1]).toMatchObject({ id: 2, originalStart: 1452, text: '当たり前ですよね.' });
   });
 });
 
@@ -218,6 +252,7 @@ describe('resizeCutRegion', () => {
       videoInserts: [],
       bgm: [],
       selection: null,
+      multiTelopIds: [],
       nextTelopId: 1,
       nextSeId: 1,
       nextImageId: 1,
@@ -281,6 +316,7 @@ describe('resizeCutRegion', () => {
       videoInserts: [],
       bgm: [],
       selection: null,
+      multiTelopIds: [],
       nextTelopId: 1,
       nextSeId: 1,
       nextImageId: 1,
@@ -315,6 +351,7 @@ describe('resizeCutRegion', () => {
       videoInserts: [],
       bgm: [],
       selection: null,
+      multiTelopIds: [],
       nextTelopId: 1,
       nextSeId: 1,
       nextImageId: 1,
@@ -386,6 +423,7 @@ describe('insertTelop', () => {
         { id: 1, originalStart: 0, originalEnd: 30, text: 'a', template: 7 },
         { id: 2, originalStart: 30, originalEnd: 60, text: 'b', template: 7 },
       ],
+      multiTelopIds: [],
       nextTelopId: 3,
       cutRegions: [],
       se: [],
@@ -483,6 +521,7 @@ describe('mergeTelopWithNext は飾りテロップを飛ばす', () => {
       ],
       cutRegions: [], se: [], images: [], videoInserts: [], bgm: [],
       selection: null,
+      multiTelopIds: [],
       nextTelopId: 10, nextSeId: 1, nextImageId: 1, nextVideoInsertId: 1, nextBgmId: 1,
     } as const;
     const next = mergeTelopWithNext(state as any, 1);
@@ -530,7 +569,7 @@ describe('cutRange', () => {
 describe('addTelopAtFrame', () => {
   const base = (over = {}) => ({
     telops: [], cutRegions: [], se: [], images: [], videoInserts: [], bgm: [], titles: [],
-    selection: null, nextTelopId: 5, nextSeId: 1, nextImageId: 1,
+    selection: null, multiTelopIds: [], nextTelopId: 5, nextSeId: 1, nextImageId: 1,
     nextVideoInsertId: 1, nextBgmId: 1, nextTitleId: 1,
     shapes: [], nextShapeId: 1,
     sceneTransitions: [], nextTransitionId: 1,
@@ -552,6 +591,122 @@ describe('addTelopAtFrame', () => {
   });
   it('TELOP_DEFAULT_DURATION_SEC は 3', () => {
     expect(TELOP_DEFAULT_DURATION_SEC).toBe(3);
+  });
+});
+
+describe('addSubtitleAtFrame（＋追加メニューの「字幕」）', () => {
+  const FPS = 30;
+  /** 字幕2件（#1 [30,150] / #2 [200,320]）を持つ既定 state を使う。 */
+
+  it('カット区間などの空きに既定3秒・manual なしの字幕を足して選択する', () => {
+    const next = addSubtitleAtFrame(state(), 400, FPS);
+    const added = next.telops.find((t) => t.id === 3);
+    expect(added).toMatchObject({
+      id: 3,
+      originalStart: 400,
+      originalEnd: 400 + TELOP_DEFAULT_DURATION_SEC * FPS,
+      text: '新しい字幕',
+    });
+    // 字幕は manual を「付けない」（付けると飾りテロップ扱いになり別トラック・別色になる）。
+    expect('manual' in (added ?? {})).toBe(false);
+    expect(next.selection).toEqual({ kind: 'telop', id: 3 });
+    expect(next.nextTelopId).toBe(4);
+  });
+
+  it('隣の字幕と重なる場合は端を詰める（clampSubtitleRange 系）', () => {
+    // #2 は [200,320]。160 から 3 秒（=90f）欲しいが 200 で止まる。
+    const next = addSubtitleAtFrame(state(), 160, FPS);
+    const added = next.telops.find((t) => t.id === 3);
+    expect(added).toMatchObject({ originalStart: 160, originalEnd: 200 });
+  });
+
+  it('既存字幕の内側など有効区間が10フレーム未満なら no-op（同一参照を返す）', () => {
+    const s = state();
+    // #1 [30,150] の内側。start は 150 まで押し出され、end は #2 の 200 で止まる…
+    // ではなく、直後の字幕が #2 なので [150,200]＝50f 取れる。取れない例を作る。
+    const tight: EditState = {
+      ...s,
+      telops: [
+        { id: 1, originalStart: 30, originalEnd: 150, text: 'A' },
+        { id: 2, originalStart: 155, originalEnd: 320, text: 'B' },
+      ],
+    };
+    // ヘッドが #1 の内側 → start=150 / end=155 → 5f < 10f → no-op。
+    expect(addSubtitleAtFrame(tight, 100, FPS)).toBe(tight);
+  });
+
+  it('隙間ぴったり10フレームなら追加できる（境界）', () => {
+    const s = state();
+    const tight: EditState = {
+      ...s,
+      telops: [
+        { id: 1, originalStart: 30, originalEnd: 150, text: 'A' },
+        { id: 2, originalStart: 160, originalEnd: 320, text: 'B' },
+      ],
+    };
+    const next = addSubtitleAtFrame(tight, 100, FPS);
+    expect(next).not.toBe(tight);
+    expect(next.telops.find((t) => t.id === 3)).toMatchObject({ originalStart: 150, originalEnd: 160 });
+    expect(MIN_SUBTITLE_FRAMES).toBe(10);
+  });
+
+  it('配列上も時間順（直前の字幕の直後）へ挿入する', () => {
+    const s = state();
+    // 末尾に古い順序で並んでいない字幕がある状態でも、時間順で #1 の直後に入る。
+    const next = addSubtitleAtFrame(s, 160, FPS);
+    expect(next.telops.map((t) => t.id)).toEqual([1, 3, 2]);
+  });
+
+  it('直前に字幕が無ければ先頭へ挿入する', () => {
+    const next = addSubtitleAtFrame(state(), 0, FPS);
+    expect(next.telops.map((t) => t.id)).toEqual([3, 1, 2]);
+    expect(next.telops[0]).toMatchObject({ originalStart: 0, originalEnd: 30 });
+  });
+
+  it('時間軸上で直前の字幕から template / style を継承する', () => {
+    const s = state();
+    const styled: EditState = {
+      ...s,
+      telops: [
+        { id: 1, originalStart: 30, originalEnd: 150, text: 'A', template: 7, style: 'emphasis' as const },
+        { id: 2, originalStart: 900, originalEnd: 1000, text: 'B', template: 2 },
+      ],
+    };
+    const added = addSubtitleAtFrame(styled, 400, FPS).telops.find((t) => t.id === 3);
+    expect(added).toMatchObject({ template: 7, style: 'emphasis' });
+  });
+
+  it('飾りテロップ（manual）は継承元にも境界にもしない', () => {
+    const s = state();
+    const withManual: EditState = {
+      ...s,
+      telops: [
+        { id: 1, originalStart: 30, originalEnd: 150, text: 'A', template: 7 },
+        { id: 9, originalStart: 380, originalEnd: 500, text: '飾り', template: 30, manual: true },
+      ],
+    };
+    const next = addSubtitleAtFrame(withManual, 400, FPS);
+    const added = next.telops.find((t) => t.id === 3);
+    // 飾りと重なっても詰めない・飾りの template も継がない。
+    expect(added).toMatchObject({ originalStart: 400, originalEnd: 490, template: 7 });
+  });
+
+  it('複数選択中に追加すると新字幕の単一選択へ正規化される', () => {
+    const s = state();
+    const multi: EditState = { ...s, selection: { kind: 'telop', id: 1 }, multiTelopIds: [1, 2] };
+    const next = addSubtitleAtFrame(multi, 400, FPS);
+    expect(next.selection).toEqual({ kind: 'telop', id: 3 });
+    expect(next.multiTelopIds).toEqual([]);
+  });
+
+  it('非有限値・fps<=0 は no-op（同一参照）', () => {
+    const s = state();
+    expect(addSubtitleAtFrame(s, NaN, FPS)).toBe(s);
+    expect(addSubtitleAtFrame(s, 400, 0)).toBe(s);
+  });
+
+  it('負のフレームは 0 へクランプ', () => {
+    expect(addSubtitleAtFrame(state(), -50, FPS).telops[0]).toMatchObject({ originalStart: 0 });
   });
 });
 
@@ -582,5 +737,123 @@ describe('cutButtonMode', () => {
     const multi = [{ start: 0, end: 50 }, { start: 100, end: 200 }];
     expect(cutButtonMode(multi, 10, 40)).toBe('open');
     expect(cutButtonMode(multi, 60, 90)).toBe('cut');
+  });
+});
+
+describe('subtitleInsertSpan（字幕追加の可否と「ヘッドからずれたか」）', () => {
+  const FPS = 30;
+  const telops = [
+    { id: 1, originalStart: 30, originalEnd: 150, text: 'A' },
+    { id: 2, originalStart: 400, originalEnd: 600, text: 'B' },
+  ];
+
+  it('空きにそのまま入るときは shifted:false', () => {
+    expect(subtitleInsertSpan(telops, 3, 200, FPS)).toEqual({ start: 200, end: 290, shifted: false });
+  });
+
+  it('ヘッドが既存字幕の内側なら、その字幕の直後へ寄せて shifted:true', () => {
+    // #1 [30,150] の内側 → 開始は 150 へ。3 秒（90f）は #2 の 400 に届かないのでそのまま。
+    expect(subtitleInsertSpan(telops, 3, 100, FPS)).toEqual({ start: 150, end: 240, shifted: true });
+  });
+
+  it('隙間が最小尺に満たなければ null（追加不可）', () => {
+    const tight = [
+      { id: 1, originalStart: 30, originalEnd: 150, text: 'A' },
+      { id: 2, originalStart: 155, originalEnd: 320, text: 'B' },
+    ];
+    expect(subtitleInsertSpan(tight, 3, 100, FPS)).toBeNull();
+  });
+
+  it('非有限値・fps<=0 は null', () => {
+    expect(subtitleInsertSpan(telops, 3, Number.NaN, FPS)).toBeNull();
+    expect(subtitleInsertSpan(telops, 3, 200, 0)).toBeNull();
+  });
+});
+
+describe('addSubtitleAtFrame: ヘッドが既存字幕の内側のとき（P2-3 仕様確定）', () => {
+  const FPS = 30;
+
+  it('no-op にせず、直後の空きへ寄せて追加する', () => {
+    const s = state();
+    const roomy: EditState = {
+      ...s,
+      telops: [
+        { id: 1, originalStart: 30, originalEnd: 150, text: 'A', template: 4 },
+        { id: 2, originalStart: 400, originalEnd: 600, text: 'B', template: 9 },
+      ],
+    };
+    const next = addSubtitleAtFrame(roomy, 100, FPS);
+    expect(next).not.toBe(roomy);
+    const added = next.telops.find((t) => t.id === 3);
+    // 直前の字幕（#1）の直後・その template を継承・配列上も #1 の直後。
+    expect(added).toMatchObject({ originalStart: 150, originalEnd: 240, template: 4 });
+    expect(next.telops.map((t) => t.id)).toEqual([1, 3, 2]);
+    expect(next.selection).toEqual({ kind: 'telop', id: 3 });
+  });
+});
+
+describe('splitTelopWithText: チップと本文が対応しない字幕は時間比で割る（P2-4）', () => {
+  /** 発話区間のチップ（本文と無関係）。 */
+  const chips: WordChip[] = [
+    { text: 'ゆる', originalStart: 0, originalEnd: 20 },
+    { text: '素振り', originalStart: 20, originalEnd: 60 },
+    { text: 'です', originalStart: 60, originalEnd: 100 },
+  ];
+
+  it('手動追加した字幕（manual なし・本文は transcript と無関係）をチップ境界で割らない', () => {
+    const st: EditState = {
+      ...state(),
+      telops: [{ id: 1, originalStart: 0, originalEnd: 100, text: '新しい字幕' }],
+    };
+    const next = splitTelopWithText(st, 1, 50, chips);
+    // チップ側の文字数（'ゆる素振り'=5）を本文の切り出し位置に使うと ['新しい字','幕']。
+    // 本文とチップが対応しないので時間比（50%）で割るのが正しい。
+    expect(next.telops.map((t) => t.text)).toEqual(['新しい', '字幕']);
+  });
+
+  it('本文とチップが対応する通常の字幕は従来どおりチップ境界で割る（恒等性の回帰）', () => {
+    const st: EditState = {
+      ...state(),
+      telops: [{ id: 1, originalStart: 0, originalEnd: 100, text: 'ゆる素振りです' }],
+    };
+    const next = splitTelopWithText(st, 1, 50, chips);
+    expect(next.telops.map((t) => t.text)).toEqual(['ゆる素振り', 'です']);
+  });
+
+  it('改行入りの本文もチップと対応していればチップ境界で割る（改行は照合から除く）', () => {
+    const st: EditState = {
+      ...state(),
+      telops: [{ id: 1, originalStart: 0, originalEnd: 100, text: 'ゆる素振り\nです' }],
+    };
+    const next = splitTelopWithText(st, 1, 50, chips);
+    expect(next.telops.map((t) => t.text)).toEqual(['ゆる素振り', 'です']);
+  });
+});
+
+describe('splitTelopWithText: 誤字修正済み本文はチップ文字数の近似で割る（P2-2）', () => {
+  // transcript は「効き目」、本文は typo_dict / 手直しで「利き目」へ直っている。
+  // 文字列は一致しないが**文字数は対応している**ので、チップ境界の近似が使える。
+  const chips: WordChip[] = [
+    { text: '効き目が', originalStart: 0, originalEnd: 80 },
+    { text: '大事', originalStart: 80, originalEnd: 100 },
+  ];
+
+  it('1 文字だけ違う（長さは同じ）本文はチップ境界で割れる', () => {
+    const st: EditState = {
+      ...state(),
+      telops: [{ id: 1, originalStart: 0, originalEnd: 100, text: '利き目が大事' }],
+    };
+    const next = splitTelopWithText(st, 1, 80, chips);
+    // 時間比（80%）で割ると ['利き目が大','事'] になり語の途中で切れる。
+    expect(next.telops.map((t) => t.text)).toEqual(['利き目が', '大事']);
+  });
+
+  it('文字数が対応しない本文は従来どおり時間比（P2-4 の判定は維持）', () => {
+    const st: EditState = {
+      ...state(),
+      telops: [{ id: 1, originalStart: 0, originalEnd: 100, text: '新しい字幕' }],
+    };
+    const next = splitTelopWithText(st, 1, 80, chips);
+    expect(next.telops.map((t) => t.text)).toEqual(['新しい字', '幕']);
   });
 });

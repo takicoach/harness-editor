@@ -8,7 +8,9 @@ import {
   pointerToVideoInsertPosition,
   pointerToVideoInsertScale,
   clamp,
+  telopAnchorFrac,
 } from './overlayGeometry';
+import { telopScaleOriginY } from '../../preview/telopLayout';
 
 describe('clamp', () => {
   it('範囲内はそのまま、範囲外は端へ寄せる', () => {
@@ -63,6 +65,87 @@ describe('telopBoxRect', () => {
     expect(big.w).toBe(152);
     expect(big.h).toBeCloseTo(32, 6);
     expect(big.y + big.h).toBeCloseTo(base.y + base.h, 6); // 下端不変
+  });
+
+  // --- プリセット実値（TELOP_CONFIG.bottomOffset）への枠アンカー追従 ---
+  // golf-short-gold は bottomOffset=540（標準 short=200）。枠が実描画テキストより
+  // 約 340px 下に出る不具合の回帰テスト。
+  it('bottomOffset=540 を渡すと箱の下端が (1 - 540/1920) の位置へ来る', () => {
+    const box = telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920, 540);
+    expect(box.y + box.h).toBeCloseTo(100 * (1 - 540 / 1920), 6);
+    // 標準アンカー（200/1920）より上にある＝実描画テキストへ寄る。
+    const std = telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920);
+    expect(box.y + box.h).toBeLessThan(std.y + std.h);
+  });
+
+  it('bottomOffset を渡しても移動量係数（vCoeff）は標準固定のまま（書き出し一致契約）', () => {
+    // y=-1 の移動量は標準 vCoeff ぶん。アンカーだけがズレる。
+    const base = telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920, 540);
+    const up = telopBoxRect(content, { x: 0, y: -1 }, 1, 1080, 1920, 540);
+    expect(base.y - up.y).toBeCloseTo(SHORT_VCOEFF, 6);
+  });
+
+  // 実描画は「全画面ラッパーへ scale を当て、transformOrigin Y は標準固定 (1 - 200/1920)」
+  // （EditorComposition.TelopLayer / プロジェクト側 TelopPlayer.tsx が同式）。
+  // 標準プロジェクトは origin == テキスト下端なので拡縮で下端が動かないが、
+  // golf-short-gold（540）は origin ≠ 下端なので拡縮で実テキスト下端が動く。枠も追従させる。
+  const ORIGIN_FRAC = 1 - 200 / 1920; // 標準固定の transformOrigin Y
+  const GOLD_ANCHOR_FRAC = 1 - 540 / 1920; // gold のテキスト下端
+
+  it('bottomOffset=540・scale=2 で枠下端が実描画テキスト下端（origin 基準の拡縮後）と一致する', () => {
+    const expected = 100 * (ORIGIN_FRAC + (GOLD_ANCHOR_FRAC - ORIGIN_FRAC) * 2);
+    const box = telopBoxRect(content, { x: 0, y: 0 }, 2, 1080, 1920, 540);
+    expect(box.y + box.h).toBeCloseTo(expected, 6);
+    // 拡大で実テキストは上がる（origin より下にあるため）。
+    expect(box.y + box.h).toBeLessThan(100 * GOLD_ANCHOR_FRAC);
+  });
+
+  it('bottomOffset=540・scale=0.5 でも実描画テキスト下端と一致する（縮小は下がる）', () => {
+    const expected = 100 * (ORIGIN_FRAC + (GOLD_ANCHOR_FRAC - ORIGIN_FRAC) * 0.5);
+    const box = telopBoxRect(content, { x: 0, y: 0 }, 0.5, 1080, 1920, 540);
+    expect(box.y + box.h).toBeCloseTo(expected, 6);
+    expect(box.y + box.h).toBeGreaterThan(100 * GOLD_ANCHOR_FRAC);
+  });
+
+  it('標準プロジェクトでは scale を変えても従来値のまま（anchor === origin の恒等縮退）', () => {
+    const y = -0.4;
+    for (const s of [0.3, 0.5, 1, 2, 3]) {
+      // 従来式（scale 非依存）: 下端 = h*(1 - bottomFrac + y*vCoeff)。
+      const legacy = 100 * (1 - 200 / 1920 + y * (1 - (2 * 200) / 1920));
+      const box = telopBoxRect(content, { x: 0, y }, s, 1080, 1920);
+      expect(box.y + box.h).toBeCloseTo(legacy, 6);
+      // 標準値 200 を実値として明示的に渡しても完全一致（フォールバック経路と同値）。
+      expect(telopBoxRect(content, { x: 0, y }, s, 1080, 1920, 200)).toEqual(box);
+      expect(telopBoxRect(content, { x: 0, y }, s, 1080, 1920, null)).toEqual(box);
+    }
+  });
+
+  it('原点比は telopScaleOriginY（telopLayout の単一ソース）と一致する', () => {
+    // 枠の拡縮原点は実描画の transformOrigin と同じ値でなければならない。
+    // 定数を写経せず、正本（telopLayout.telopScaleOriginY）から突合する。
+    const originFrac = telopScaleOriginY(1080, 1920) / 100;
+    // scale=2・bottomOffset=540 の下端は origin + (anchor - origin)*2。
+    const anchorFrac = 1 - 540 / 1920;
+    const box = telopBoxRect(content, { x: 0, y: 0 }, 2, 1080, 1920, 540);
+    expect(box.y + box.h).toBeCloseTo(100 * (originFrac + (anchorFrac - originFrac) * 2), 6);
+    // 標準プロジェクトでは origin == anchor なので下端は origin そのもの（scale 不問）。
+    const std = telopBoxRect(content, { x: 0, y: 0 }, 2.5, 1080, 1920);
+    expect(std.y + std.h).toBeCloseTo(100 * originFrac, 6);
+  });
+
+  it('異常に大きい bottomOffset でもアンカー比は [0,1] にクランプされる', () => {
+    // compH を超える値（99999）は 1 に張り付き、枠が画面上端より上へ暴走しない。
+    const box = telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920, 99999);
+    expect(box.y + box.h).toBeCloseTo(0, 6); // 1 - 1 = 0（content 上端）
+    expect(telopAnchorFrac(1080, 1920, 99999)).toBe(1);
+    expect(telopAnchorFrac(1080, 1920, 540)).toBeCloseTo(540 / 1920, 9);
+  });
+
+  it('null / undefined / 非数値 の bottomOffset は従来の標準アンカーへフォールバックする', () => {
+    const std = telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920);
+    expect(telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920, null)).toEqual(std);
+    expect(telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920, undefined)).toEqual(std);
+    expect(telopBoxRect(content, { x: 0, y: 0 }, 1, 1080, 1920, Number.NaN)).toEqual(std);
   });
 });
 

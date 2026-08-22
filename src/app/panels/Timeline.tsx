@@ -1,9 +1,10 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { resizeCutRegion, cutRange, openCutRange, splitTelopWithText, addTelopAtFrame, cutButtonMode } from '../edit/cutOps';
+import { resizeCutRegion, cutRange, openCutRange, splitTelopWithText, addTelopAtFrame, addSubtitleAtFrame, subtitleInsertSpan, cutButtonMode } from '../edit/cutOps';
 import { telopAtFrame } from '../../core/segmentOps';
 import { buildWordChips } from '../../core/wordChips';
 import { isTranscriptAlignedWithVideo } from '../../core/transcript';
-import { moveTelop, setTelopTiming } from '../edit/telopSettingsOps';
+import { moveTelop, setTelopTiming, removeTelops } from '../edit/telopSettingsOps';
+import { clearMultiSelection, toggleMultiTelopSelection } from '../edit/editState';
 import { addSe, moveSe, resizeSe, selectSe, setSeFadeIn, setSeFadeOut, finalizeAddedSe } from '../edit/seOps';
 import { addImage, moveImage, retimeImage, selectImage } from '../edit/imageOps';
 import { addVideoInsert, moveVideoInsert, retimeVideoInsert, selectVideoInsert, videoInsertMaxEnd } from '../edit/videoInsertOps';
@@ -27,7 +28,9 @@ import type { Ref, RefObject } from 'react';
 import { applyInsertMaterial } from '../edit/insertMaterial';
 import { useDropdown } from '../useDropdown';
 import type { MaterialKind } from './materialList';
-import { applyCuts, playbackTotalFrames, originalToPlayback, playbackToOriginal, normalizeCutRegions, materialBounds } from '../../core/cutEngine';
+import { playbackTotalFrames, originalToPlayback, playbackToOriginal, normalizeCutRegions, materialBounds } from '../../core/cutEngine';
+import { cutOrderingOf } from '../../core/cutOrder';
+import type { CutOrdering } from '../../core/types';
 import type { PlaybackOverlap } from '../../core/transitionEngine';
 import { speedScale, speedTotalFrames, type SpeedSegment } from '../../core/speedEngine';
 import { playbackToPlayer, playerToPlayback } from '../../preview/speedBridge';
@@ -37,7 +40,7 @@ import type { EditSession } from '../useEditSession';
 import { formatClock } from '../../shared/format';
 import { clampZoom, frameToXMapped, widthMapped, xToFrameMapped, TRACK_LABEL_GUTTER_PX } from '../timeline/timelineGeometry';
 import { buildDisplayMap, type DisplayMap } from '../../core/timelineDisplayMap';
-import { followScrollLeft, wheelAction, zoomAnchoredScrollLeft } from '../timeline/timelineScroll';
+import { edgeScrollFrameScale, edgeScrollSpeed, edgeScrollVelocity, followScrollLeft, wheelAction, zoomAnchoredScrollLeft } from '../timeline/timelineScroll';
 import { nextPlaybackRate, playbackRateLabel, type TransportKey } from '../preview/transport';
 import { collectSnapTargets, snapFrameMapped, type SnapTarget } from '../timeline/snapping';
 import { pulseKeysForChange } from '../timeline/cutPulse';
@@ -372,6 +375,95 @@ function TimelineBody({
     return () => el.removeEventListener('wheel', handler);
   }, []);
 
+  // タイムライン上でポインタドラッグが進行中か（下の「端ドラッグ自動スクロール」の
+  // ブロックで毎レンダ書き込む）。ホバー版の共存ガードがここを読む。
+  // 宣言だけ先に置くのは、ホバー版の useEffect（すぐ下）から参照するため。
+  const timelineDragActiveRef = useRef(false);
+
+  // 端ホバー自動スクロール。マウス（横スワイプ不可）で右端より先を見るための操作。
+  // カーソルを可視域の左右端へ寄せている間だけ、寄せた深さに応じた速度で横スクロールする。
+  // pointermove は window で拾う（ドラッグ中は setPointerCapture で掴んだ要素へ配送されるため、
+  // コンテナに貼ると効かなくなる）。速度が 0 の間は rAF を回さない。
+  //
+  // **ドラッグ中は休止する**（共存ガード）。端スクロールは 2 段構成で、待機中（非ドラッグ）は
+  // このホバー版、ドラッグ確定後は下の「端ドラッグ自動スクロール」が担当する。window で
+  // 拾う設計上ホバー版はドラッグ中も走ってしまい、放置すると同じ scrollLeft を 2 つの
+  // 書き手が奪い合う。さらに **armed 前（ドラッグ確定前）でも休止**させる必要がある——
+  // ここで scrollLeft が動くと「端ゾーンのブロックをクリックしただけで区間が動く」
+  // （2026-08-17 に潰した事故）がホバー版という別経路で復活するため。
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    let speed = 0;
+    let raf = 0;
+    let last = 0;
+
+    const step = (now: number): void => {
+      const dt = last === 0 ? 0 : (now - last) / 1000;
+      last = now;
+      if (speed === 0 || timelineDragActiveRef.current) {
+        raf = 0;
+        last = 0;
+        return;
+      }
+      // 再生追従と競合させない（再生中はヘッドが scrollLeft を持つ）。
+      if (!isPlayingRef.current) el.scrollLeft += speed * dt;
+      raf = requestAnimationFrame(step);
+    };
+
+    const onMove = (e: PointerEvent): void => {
+      // ドラッグ中は速度を持たない（ループも起こさない）。離して次に動かせば復帰する。
+      // ボタンが押されている間も同様。タイムライン外で始まったドラッグが端を通過した
+      // だけで走り出さないため（ref はタイムライン内のドラッグしか知らない）。
+      if (timelineDragActiveRef.current || e.buttons !== 0) {
+        speed = 0;
+        return;
+      }
+      speed = edgeScrollSpeed({
+        pointerX: e.clientX,
+        pointerY: e.clientY,
+        rect: el.getBoundingClientRect(),
+        gutter: TRACK_LABEL_GUTTER_PX,
+      });
+      if (speed !== 0 && raf === 0) raf = requestAnimationFrame(step);
+    };
+    const stop = (): void => { speed = 0; };
+    // ポインタがウィンドウの外へ出た時だけ止める。`pointerout` が
+    // `relatedTarget === null` で来るのが「文書の外へ出た」の正規の signal。
+    // （`pointerleave` は非バブルなので window に貼っても実質発火しない＝d0a4f89 の穴。）
+    //
+    // **鮮度（最後の move から N ms）で止めてはいけない。** ホバー版は「カーソルを端に
+    // 置いたまま待つ」操作で、可視域内でカーソルを止めている間ブラウザは pointermove を
+    // 出さない。実測（Chromium・e2e「待機中」）: 200ms の鮮度ガードを入れると 244px で
+    // 打ち切られ、外すと 300px 超まで伸びた＝鮮度ガードは機能そのものを殺す。
+    const stopIfLeftWindow = (e: PointerEvent): void => {
+      if (e.relatedTarget === null) speed = 0;
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerout', stopIfLeftWindow, true);
+    // 押した瞬間に止める。ドラッグ開始が React の再レンダ経由で
+    // timelineDragActiveRef へ届くまでの 1 フレームでも、掴んだ後にコンテンツが動くと
+    // クリック/ドラッグ判定の実移動がずれる（getAutoScrollDx はドラッグ版の量しか数えない）。
+    //
+    // **capture phase で拾う**。React 18 はルート要素へ委譲するため、ブロック・つまみ・
+    // ルーラーの `beginDrag` が呼ぶ `stopPropagation()` は window の bubble リスナまで殺す
+    // ＝本命の経路でこのガードが不発になる。とくに `.tl-cut-fab-btn` は stopPropagation
+    // するのにドラッグを始めない（＝ドラッグ状態 ref も立たない）唯一の要素で、右端ゾーンで
+    // 押している間ホバー版が走り続けると FAB がカーソルの下から逃げてカットが黙って落ちる。
+    window.addEventListener('pointerdown', stop, true);
+    window.addEventListener('pointerleave', stop);
+    window.addEventListener('blur', stop);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerout', stopIfLeftWindow, true);
+      window.removeEventListener('pointerdown', stop, true);
+      window.removeEventListener('pointerleave', stop);
+      window.removeEventListener('blur', stop);
+      if (raf !== 0) cancelAnimationFrame(raf);
+    };
+  }, []);
+
   // 再生追従スクロール。再生中だけ、再生ヘッドの X を可視域の anchor 位置へ毎フレーム寄せる。
   // isPlaying と「最新の pxPerFrame / cutRegions / overlaps」を ref で読み、frameupdate 購読を貼り直さない。
   // overlaps は totalFrames 定義後（下）に算出し followRef.current へ入れる。
@@ -380,7 +472,7 @@ function TimelineBody({
   const rateChangeRef = useRef(onPlaybackRateChange);
   rateChangeRef.current = onPlaybackRateChange;
   // displayMap は初回レンダ設定時のみ undefined。onFrame 発火前に必ず本体で最新値へ更新される（frameToXMapped は undefined を恒等扱い）。
-  const followRef = useRef({ pxPerFrame, cutRegions: state.cutRegions, overlaps: [] as PlaybackOverlap[], mainSpeed: state.mainSpeed, speedSegments: speedSegments as SpeedSegment[] | null, displayMap: undefined as DisplayMap | undefined });
+  const followRef = useRef({ pxPerFrame, cutRegions: state.cutRegions, ordering: undefined as CutOrdering | undefined, overlaps: [] as PlaybackOverlap[], mainSpeed: state.mainSpeed, speedSegments: speedSegments as SpeedSegment[] | null, displayMap: undefined as DisplayMap | undefined });
 
   // プレイヤーの frameupdate を購読し、再生ヘッド位置を追従させる。
   // あわせて play/pause を購読し、再生中だけ横スクロールを再生ヘッドへ滑らかに追従させる。
@@ -392,14 +484,14 @@ function TimelineBody({
       // playerToPlayback で再生フレームへ戻し、playbackFrame state（再生座標）に保存する。
       // seekToOriginal と対称。
       const frame = e.detail.frame;
-      const { pxPerFrame: ppf, cutRegions, overlaps: ovs, mainSpeed, speedSegments: segs, displayMap: dm } = followRef.current;
+      const { pxPerFrame: ppf, cutRegions, ordering, overlaps: ovs, mainSpeed, speedSegments: segs, displayMap: dm } = followRef.current;
       const playback = playerToPlayback(frame, { speedSegments: segs, playbackOverlaps: ovs, mainSpeed });
       setPlaybackFrame(playback);
       // 再生中のみ横スクロールを追従させる（一時停止・手動シーク中は触らない）。
       if (!isPlayingRef.current) return;
       const el = bodyRef.current;
       if (!el) return;
-      const orig = playbackToOriginal(playback, cutRegions);
+      const orig = playbackToOriginal(playback, cutRegions, ordering);
       const playheadX = frameToXMapped(orig, ppf, dm);
       el.scrollLeft = followScrollLeft(playheadX, el.clientWidth, el.scrollWidth);
     };
@@ -594,17 +686,17 @@ function TimelineBody({
   const totalFrames = baseProject.videoConfig.durationFrames;
   const playbackFrames = playbackTotalFrames(totalFrames, state.cutRegions);
 
-  // つなぎ目マーク（JoinMarkers）用: カット後タイムラインの境界一覧。
+  // カット並び替え（再生順）の対応表。恒等順列なら従来の単調モデルと完全一致。
+  const ordering = useMemo(() => cutOrderingOf(state), [state]);
+
+  // つなぎ目マーク（JoinMarkers）用: カット後タイムラインの境界一覧（再生順で隣接する境界）。
   const joins = useMemo(
-    () => computeJoins(totalFrames, state.cutRegions),
-    [totalFrames, state.cutRegions],
+    () => computeJoins(totalFrames, state.cutRegions, ordering),
+    [totalFrames, state.cutRegions, ordering],
   );
 
-  // 残す区間（速度選択用）。applyCuts は原本座標で区間を返すため CutTrack と座標系が一致する。
-  const keptSegments = useMemo(
-    () => applyCuts(totalFrames, state.cutRegions),
-    [totalFrames, state.cutRegions],
-  );
+  // 残す区間（速度選択用）。区間は原本座標を持つため CutTrack と座標系が一致する。
+  const keptSegments = ordering.segments;
 
   // 区間速度表示マップ。identity（全速度 1）なら frameToX と同一。Task 5。
   const displayMap = useMemo(
@@ -629,23 +721,25 @@ function TimelineBody({
     () => (cutsBypassed ? [] : state.cutRegions),
     [cutsBypassed, state.cutRegions],
   );
+  // カット確認モード中は並び替えも効かせない（モデルがカット無しで組まれるため）。
+  const playbackOrdering = cutsBypassed ? undefined : ordering;
   const playbackMainSpeed = cutsBypassed ? 1 : state.mainSpeed;
 
   // overlaps: sceneTransitions（at=原本）からタイムライン定規とプレイヤーの橋渡しを構築。
   // overlaps 空（カット無し or 重なる系なし）なら finalToPlayback/playbackToFinal は恒等。
   const overlaps = useMemo(
-    () => (cutsBypassed ? [] : timelineOverlaps(state.sceneTransitions, totalFrames, state.cutRegions)),
-    [cutsBypassed, state.sceneTransitions, totalFrames, state.cutRegions],
+    () => (cutsBypassed ? [] : timelineOverlaps(state.sceneTransitions, totalFrames, state.cutRegions, ordering)),
+    [cutsBypassed, state.sceneTransitions, totalFrames, state.cutRegions, ordering],
   );
 
   // followRef に最新の overlaps / mainSpeed / speedSegments / displayMap を毎レンダーで更新する（onFrame は購読を貼り直さないため ref 経由）。
-  followRef.current = { pxPerFrame, cutRegions: playbackRegions, overlaps, mainSpeed: playbackMainSpeed, speedSegments, displayMap };
+  followRef.current = { pxPerFrame, cutRegions: playbackRegions, ordering: playbackOrdering, overlaps, mainSpeed: playbackMainSpeed, speedSegments, displayMap };
 
   function seekToOriginal(originalFrame: number): void {
     // 原本フレーム → 再生フレーム。カット区間内なら直近の非カットフレームへ丸める。
-    let playback = originalToPlayback(originalFrame, playbackRegions);
+    let playback = originalToPlayback(originalFrame, playbackRegions, playbackOrdering);
     for (let probe = originalFrame - 1; playback === null && probe > 0; probe--) {
-      playback = originalToPlayback(probe, playbackRegions);
+      playback = originalToPlayback(probe, playbackRegions, playbackOrdering);
     }
     // 全フレームがカット区間内の場合も probe > 0 で止まるためフォールバックは seekTo(0)（再生タイムライン先頭）。
     // 再生フレーム → プレイヤー（速度後）フレームへ変換してプレイヤーへ渡す。
@@ -660,12 +754,14 @@ function TimelineBody({
   }
 
   // 再生フレーム → 原本フレーム。原本座標トラック上のヘッド位置に使う。
-  const playheadOriginal = playbackToOriginal(playbackFrame, playbackRegions);
+  const playheadOriginal = playbackToOriginal(playbackFrame, playbackRegions, playbackOrdering);
 
   // アンカー固定ズームが参照する最新値（ホイールハンドラは購読を貼り直さないため ref 経由）。
   zoomStateRef.current = { pxPerFrame, playheadOriginal, displayMap };
 
   // ヘッド分割時のテキスト分配用の単語チップ。transcript が動画と非整合なら空（時間比分割になる）。
+  // 手動（装飾）テロップは本文が transcript と無関係なので、splitTelopWithText 側が
+  // チップを無視して本文を両断片へ複製する（判定はあちらに一本化・ここで分岐しない）。
   function splitChipsFor(t: EditorTelop): WordChip[] {
     if (!isTranscriptAlignedWithVideo(baseProject.transcript, baseProject.videoConfig)) return [];
     return buildWordChips(
@@ -696,6 +792,12 @@ function TimelineBody({
   // ドラッグ開始時の原本フレーム（ツールチップの移動量の基準）。カット・テロップ・SE で独立管理する。
   const cutDragOriginRef = useRef<number>(0);
   const telopDragOriginRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  /**
+   * 修飾キー＋pointerdown で「トグル候補」に入れたテロップ ID（純クリックが確定するまで保留）。
+   * pointerup で純クリックだったときだけ telopDrag の onClick がこれを消費してトグルする。
+   * ドラッグとして確定した場合（onCommit）は捨てる＝修飾キー＋ドラッグではトグルしない。
+   */
+  const telopMultiPendingRef = useRef<number | null>(null);
   const seDragOriginRef = useRef<{ start: number; end: number; fadeInFrames: number; fadeOutFrames: number }>({
     start: 0, end: 0, fadeInFrames: 0, fadeOutFrames: 0,
   });
@@ -705,6 +807,14 @@ function TimelineBody({
   function trackOriginX(): number {
     const el = scrollRef.current;
     return el ? el.getBoundingClientRect().left : 0;
+  }
+
+  // 端ドラッグ自動スクロール（edge-autoscroll）が、このドラッグ中に自分で足した scrollLeft の
+  // 累積（右＝正）。useTimelineDrag のクリック/ドラッグ判定へ渡す。**自分が足した分だけ**を
+  // 数える（ズーム補正・再生追従・パネル開閉による原点移動は含めない）。
+  const autoScrollDxRef = useRef(0);
+  function getAutoScrollDx(): number {
+    return autoScrollDxRef.current;
   }
 
   // 素材ライブラリからのドラッグドロップ受け口。可視領域(bodyRef)内で離されたら、
@@ -741,6 +851,7 @@ function TimelineBody({
     onCommit: () => {
       // スクラブはプレビュー移動のみ。状態コミット不要。
     },
+    // onClick は意図的に未指定。コミットが空なので純クリックで呼ばれても副作用がない。
   });
 
   // 吸着しきい値（px ではなくフレーム）。ズームに依存させ、画面上 8px 相当にする。
@@ -776,6 +887,7 @@ function TimelineBody({
   // 未使用パラメータ（_handle）は `_` 始まりにして noUnusedParameters を満たす。
   const cutDrag = useTimelineDrag<CutHandleId>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     onDrag: (_handle, rawFrame) => applySnap(rawFrame),
@@ -788,6 +900,8 @@ function TimelineBody({
       setSelectedHandle(resolved === null ? null : { kind: 'cut', handle: resolved });
       setSnapHit(null);
     },
+    // 純クリックは選択のみ（selectedHandle は onHandleDown で設定済み・区間は動かさない）。
+    onClick: () => setSnapHit(null),
   });
 
   // ドラッグ中のカット区間をライブ表示用に組み立てる。
@@ -808,20 +922,38 @@ function TimelineBody({
   // テロップ端ドラッグ。ドラッグ中の見た目だけ liveTelopOverride で差し替える。
   const telopDrag = useTimelineDrag<TelopHandleId>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     onDrag: (_handle, rawFrame) => applySnap(rawFrame),
+    // 関数形で最新状態を素材にする。pointerdown の setTransient（選択変更）が
+    // まだ反映されていない古いクロージャを push して、選択を巻き戻さないため。
     onCommit: (handle, finalFrame) => {
-      const telop = state.telops.find((t) => t.id === handle.telopId);
-      if (telop === undefined) { setSnapHit(null); return; }
-      if (handle.edge === 'body') {
-        session.apply(moveTelop(state, telop.id, finalFrame));
-      } else if (handle.edge === 'start') {
-        session.apply(setTelopTiming(state, telop.id, Math.min(finalFrame, telop.originalEnd - 1), telop.originalEnd));
-      } else {
-        session.apply(setTelopTiming(state, telop.id, telop.originalStart, Math.max(finalFrame, telop.originalStart + 1)));
-      }
+      // ドラッグとして確定した＝トグルは行わない（修飾キー＋ドラッグ）。
+      telopMultiPendingRef.current = null;
+      session.apply((prev) => {
+        const telop = prev.telops.find((t) => t.id === handle.telopId);
+        if (telop === undefined) return prev;
+        if (handle.edge === 'body') {
+          return moveTelop(prev, telop.id, finalFrame);
+        }
+        if (handle.edge === 'start') {
+          return setTelopTiming(prev, telop.id, Math.min(finalFrame, telop.originalEnd - 1), telop.originalEnd);
+        }
+        return setTelopTiming(prev, telop.id, telop.originalStart, Math.max(finalFrame, telop.originalStart + 1));
+      });
       setSnapHit(null);
+    },
+    // 純クリックは選択のみ（telopHandleDown で選択済み）。履歴も積まず区間も動かさない。
+    // 修飾キー＋純クリックのときだけ、ここで複数選択のトグルを確定する。
+    onClick: () => {
+      setSnapHit(null);
+      const pending = telopMultiPendingRef.current;
+      telopMultiPendingRef.current = null;
+      if (pending === null) return;
+      // 範囲選択カットとは相互排他（両方が同時に生きる状態を作らない）。
+      setCutSelection(null);
+      session.setTransient((prev) => toggleMultiTelopSelection(prev, pending));
     },
   });
 
@@ -849,6 +981,7 @@ function TimelineBody({
   // edge='fadeIn'/'fadeOut' → フェード長変更（setSeFadeIn / setSeFadeOut）。
   const seDrag = useTimelineDrag<SeHandleId>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     onDrag: (handle, rawFrame) => {
@@ -859,9 +992,9 @@ function TimelineBody({
         const baseFade = handle.edge === 'fadeIn' ? origin.fadeInFrames : origin.fadeOutFrames;
         const newFade = Math.max(0, Math.round(baseFade + (handle.edge === 'fadeIn' ? delta : -delta)));
         if (handle.edge === 'fadeIn') {
-          session.setTransient(setSeFadeIn(state, handle.seId, newFade));
+          session.setTransient((prev) => setSeFadeIn(prev, handle.seId, newFade));
         } else {
-          session.setTransient(setSeFadeOut(state, handle.seId, newFade));
+          session.setTransient((prev) => setSeFadeOut(prev, handle.seId, newFade));
         }
         return rawFrame;
       }
@@ -870,32 +1003,34 @@ function TimelineBody({
     onCommit: (handle, finalFrame) => {
       const origin = seDragOriginRef.current;
       if (handle.edge === 'body') {
-        session.apply(moveSe(state, handle.seId, finalFrame));
+        session.apply((prev) => moveSe(prev, handle.seId, finalFrame));
       } else if (handle.edge === 'start') {
         const clampedStart = Math.min(Math.max(0, finalFrame), origin.end - 1);
-        session.apply(resizeSe(state, handle.seId, clampedStart, origin.end));
+        session.apply((prev) => resizeSe(prev, handle.seId, clampedStart, origin.end));
       } else if (handle.edge === 'end') {
         const clampedEnd = Math.max(origin.start + 1, finalFrame);
-        session.apply(resizeSe(state, handle.seId, origin.start, clampedEnd));
+        session.apply((prev) => resizeSe(prev, handle.seId, origin.start, clampedEnd));
       } else if (handle.edge === 'fadeIn') {
         const startFade = origin.fadeInFrames;
         const delta = finalFrame - origin.start;
         const finalFade = Math.max(0, Math.round(startFade + delta));
         commitInPointDrag(startFade, finalFade, {
-          onLive: (v) => session.setTransient(setSeFadeIn(state, handle.seId, v)),
-          onCommit: (v) => session.apply(setSeFadeIn(state, handle.seId, v)),
+          onLive: (v) => session.setTransient((prev) => setSeFadeIn(prev, handle.seId, v)),
+          onCommit: (v) => session.apply((prev) => setSeFadeIn(prev, handle.seId, v)),
         });
       } else if (handle.edge === 'fadeOut') {
         const startFade = origin.fadeOutFrames;
         const delta = finalFrame - origin.end;
         const finalFade = Math.max(0, Math.round(startFade + (-delta)));
         commitInPointDrag(startFade, finalFade, {
-          onLive: (v) => session.setTransient(setSeFadeOut(state, handle.seId, v)),
-          onCommit: (v) => session.apply(setSeFadeOut(state, handle.seId, v)),
+          onLive: (v) => session.setTransient((prev) => setSeFadeOut(prev, handle.seId, v)),
+          onCommit: (v) => session.apply((prev) => setSeFadeOut(prev, handle.seId, v)),
         });
       }
       setSnapHit(null);
     },
+    // 純クリックは選択のみ（onHandleDown で選択済み）。履歴も積まず区間も動かさない。
+    onClick: () => setSnapHit(null),
   });
 
   // ドラッグ中の SE 区間をライブ表示用に組み立てる。
@@ -935,6 +1070,7 @@ function TimelineBody({
   // 動画トラック背景のドラッグ＝範囲選択。両端は吸着。drop で選択帯を確定（カットはまだしない）。
   const cutSelDrag = useTimelineDrag<'cutsel'>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     onDrag: (_h, raw) => Math.max(cutSelBounds.start, Math.min(cutSelBounds.end, snapFrameWithGuide(raw))),
@@ -955,6 +1091,8 @@ function TimelineBody({
       }
       setCutSelection({ start, end });
     },
+    // onClick は意図的に未指定。範囲選択はクリック自体が「選択解除＋頭出し」という
+    // 意味を持つ操作なので、純クリックでも onCommit を通す必要がある。
   });
 
   // 描画用の選択帯。ドラッグ中はライブ、離した後は確定済み cutSelection。
@@ -1007,6 +1145,35 @@ function TimelineBody({
     setCutSelection(null);
   }, [baseProject]);
 
+  // テロップ複数選択がある間、Delete/Backspace で一括削除・Esc で選択解除。
+  // 範囲選択カットとは相互排他（§1）なので優先順位規則は要らない ——「いま生きている方」に効く。
+  // 削除できるのは飾りテロップ（manual）だけで、字幕は removeTelops がスキップする
+  //（字幕の削除＝区間カットという既存契約を変えない）。
+  const multiTelopIds = state.multiTelopIds;
+  useEffect(() => {
+    if (multiTelopIds.length < 2) return;
+    function onKey(e: KeyboardEvent): void {
+      if (e.isComposing) return;
+      const target = e.target as HTMLElement | null;
+      const inEditable =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target?.isContentEditable ?? false);
+      if (inEditable) return;
+      if (e.key === 'Escape') {
+        session.setTransient(clearMultiSelection);
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        session.apply((prev) => removeTelops(prev, prev.multiTelopIds));
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [multiTelopIds, session]);
+
   // B キー = 再生ヘッド位置でヘッド下テロップを分割。
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
@@ -1043,15 +1210,18 @@ function TimelineBody({
   // useTimelineEdgeDrag は onRetimeStart/onRetimeEnd に同じ clamp 済み値を渡す。
   const imageEdgeDrag = useTimelineEdgeDrag<number, ImageHandleId, ImageOverride>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     applySnap,
     findEntity: (id) => state.images.find((i) => i.id === id),
     getId: (handle) => handle.imageId,
-    onMove: (id, frame) => session.apply(moveImage(state, id, frame)),
-    onRetimeStart: (id, start, end) => session.apply(retimeImage(state, id, start, end)),
-    onRetimeEnd: (id, start, end) => session.apply(retimeImage(state, id, start, end)),
-    onSelectEntity: (id) => session.setTransient(selectImage(state, id)),
+    // telop と同型: pointerdown の選択（setTransient）と pointerup のコミット（apply）が
+    // 同じ最新状態の系列に載るよう、どちらも関数形で書く。
+    onMove: (id, frame) => session.apply((prev) => moveImage(prev, id, frame)),
+    onRetimeStart: (id, start, end) => session.apply((prev) => retimeImage(prev, id, start, end)),
+    onRetimeEnd: (id, start, end) => session.apply((prev) => retimeImage(prev, id, start, end)),
+    onSelectEntity: (id) => session.setTransient((prev) => selectImage(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'image', handle }),
     afterCommit: () => setSnapHit(null),
     buildOverride: (id, start, end) => ({ imageId: id, originalStart: start, originalEnd: end }),
@@ -1060,19 +1230,20 @@ function TimelineBody({
   // サブ動画ドラッグ。edge='body' は平行移動、'start'/'end' は片端移動。
   const videoInsertEdgeDrag = useTimelineEdgeDrag<number, VideoInsertHandleId, VideoInsertOverride>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     applySnap,
     findEntity: (id) => state.videoInserts.find((v) => v.id === id),
     getId: (handle) => handle.videoInsertId,
-    onMove: (id, frame) => session.apply(moveVideoInsert(state, id, frame)),
+    onMove: (id, frame) => session.apply((prev) => moveVideoInsert(prev, id, frame)),
     // 端ドラッグはどちらの端でも「確定する start」を基準に上限を出す
     // （左端を左へ伸ばすと尺が増え、消費するソース量も増えるため）。
     onRetimeStart: (id, start, end) =>
-      session.apply(retimeVideoInsert(state, id, start, end, videoInsertEndLimitById(id, start))),
+      session.apply((prev) => retimeVideoInsert(prev, id, start, end, videoInsertEndLimitById(id, start))),
     onRetimeEnd: (id, start, end) =>
-      session.apply(retimeVideoInsert(state, id, start, end, videoInsertEndLimitById(id, start))),
-    onSelectEntity: (id) => session.setTransient(selectVideoInsert(state, id)),
+      session.apply((prev) => retimeVideoInsert(prev, id, start, end, videoInsertEndLimitById(id, start))),
+    onSelectEntity: (id) => session.setTransient((prev) => selectVideoInsert(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'videoInsert', handle }),
     afterCommit: () => setSnapHit(null),
     buildOverride: (id, start, end) => ({ videoInsertId: id, originalStart: start, originalEnd: end }),
@@ -1108,6 +1279,7 @@ function TimelineBody({
   //   「commit 前に pre-drag 値へ復元 → final を1件積む」方式で Undo 整合を保つ。
   const bgmDrag = useTimelineDrag<BgmHandleId>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     onDrag: (handle, rawFrame) => {
@@ -1122,9 +1294,9 @@ function TimelineBody({
         const newFade = Math.max(0, Math.round(baseFade + (handle.edge === 'fadeIn' ? delta : -delta)));
         // live プレビュー: setTransient で現在エントリを上書き。
         if (handle.edge === 'fadeIn') {
-          session.setTransient(setBgmFadeIn(state, handle.bgmId, newFade));
+          session.setTransient((prev) => setBgmFadeIn(prev, handle.bgmId, newFade));
         } else {
-          session.setTransient(setBgmFadeOut(state, handle.bgmId, newFade));
+          session.setTransient((prev) => setBgmFadeOut(prev, handle.bgmId, newFade));
         }
         return rawFrame; // useTimelineDrag が drag.frame として保持（ツールチップ用）。
       }
@@ -1133,13 +1305,13 @@ function TimelineBody({
     onCommit: (handle, finalFrame) => {
       const origin = bgmDragOriginRef.current;
       if (handle.edge === 'body') {
-        session.apply(moveBgm(state, handle.bgmId, finalFrame));
+        session.apply((prev) => moveBgm(prev, handle.bgmId, finalFrame));
       } else if (handle.edge === 'start') {
         const clampedStart = Math.min(Math.max(0, finalFrame), origin.end - 1);
-        session.apply(resizeBgm(state, handle.bgmId, clampedStart, origin.end));
+        session.apply((prev) => resizeBgm(prev, handle.bgmId, clampedStart, origin.end));
       } else if (handle.edge === 'end') {
         const clampedEnd = Math.max(origin.start + 1, finalFrame);
-        session.apply(resizeBgm(state, handle.bgmId, origin.start, clampedEnd));
+        session.apply((prev) => resizeBgm(prev, handle.bgmId, origin.start, clampedEnd));
       } else if (handle.edge === 'fadeIn') {
         // commitInPointDrag と同じ方式:
         // pre-drag 値で setTransient して潰れたエントリを復元 → final を apply。
@@ -1147,20 +1319,22 @@ function TimelineBody({
         const delta = finalFrame - origin.start;
         const finalFade = Math.max(0, Math.round(startFade + delta));
         commitInPointDrag(startFade, finalFade, {
-          onLive: (v) => session.setTransient(setBgmFadeIn(state, handle.bgmId, v)),
-          onCommit: (v) => session.apply(setBgmFadeIn(state, handle.bgmId, v)),
+          onLive: (v) => session.setTransient((prev) => setBgmFadeIn(prev, handle.bgmId, v)),
+          onCommit: (v) => session.apply((prev) => setBgmFadeIn(prev, handle.bgmId, v)),
         });
       } else if (handle.edge === 'fadeOut') {
         const startFade = origin.fadeOutFrames;
         const delta = finalFrame - origin.end;
         const finalFade = Math.max(0, Math.round(startFade + (-delta)));
         commitInPointDrag(startFade, finalFade, {
-          onLive: (v) => session.setTransient(setBgmFadeOut(state, handle.bgmId, v)),
-          onCommit: (v) => session.apply(setBgmFadeOut(state, handle.bgmId, v)),
+          onLive: (v) => session.setTransient((prev) => setBgmFadeOut(prev, handle.bgmId, v)),
+          onCommit: (v) => session.apply((prev) => setBgmFadeOut(prev, handle.bgmId, v)),
         });
       }
       setSnapHit(null);
     },
+    // 純クリックは選択のみ（onHandleDown で選択済み）。履歴も積まず区間も動かさない。
+    onClick: () => setSnapHit(null),
   });
 
   // Task 2: じまく・テロップ両行で共有する onHandleDown コールバック。
@@ -1170,7 +1344,19 @@ function TimelineBody({
     const originStart = t?.originalStart ?? 0;
     const originEnd = t?.originalEnd ?? 0;
     telopDragOriginRef.current = { start: originStart, end: originEnd };
-    session.setTransient({ ...state, selection: { kind: 'telop', id: handle.telopId } });
+    // 修飾キー（Cmd/Ctrl/Shift）＋クリックは複数選択のトグル。ただし確定は pointerup 後の
+    // 「純クリック判定」まで待つ（修飾キーを押したままドラッグしたときにトグルさせない）。
+    // 待っている間は選択も動かさない＝ドラッグなら掴んだテロップの区間編集がそのまま通る。
+    if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      telopMultiPendingRef.current = handle.telopId;
+    } else {
+      telopMultiPendingRef.current = null;
+      // 通常クリックは従来どおり単一選択（複数選択は解除する）。
+      // 関数形。この後の pointerup（onCommit）と同じ「最新状態」の系列に載せる。
+      session.setTransient((prev) =>
+        clearMultiSelection({ ...prev, selection: { kind: 'telop', id: handle.telopId } }),
+      );
+    }
     setSelectedHandle({ kind: 'telop', handle });
     const originFrame = handle.edge === 'end' ? originEnd : originStart;
     telopDrag.beginDrag(handle, e, originFrame);
@@ -1202,19 +1388,160 @@ function TimelineBody({
   // 図形ドラッグ。edge='body' は平行移動、'start'/'end' は片端移動。
   const shapeEdgeDrag = useTimelineEdgeDrag<number, ShapeHandleId, ShapeOverride>({
     getTrackOriginX: trackOriginX,
+    getAutoScrollDx,
     pxPerFrame,
     map: displayMap,
     applySnap,
     findEntity: (id) => state.shapes.find((s) => s.id === id),
     getId: (handle) => handle.shapeId,
-    onMove: (id, frame) => session.apply(moveShapeTime(state, id, frame)),
-    onRetimeStart: (id, start, end) => session.apply(retimeShape(state, id, start, end)),
-    onRetimeEnd: (id, start, end) => session.apply(retimeShape(state, id, start, end)),
-    onSelectEntity: (id) => session.setTransient(selectShape(state, id)),
+    onMove: (id, frame) => session.apply((prev) => moveShapeTime(prev, id, frame)),
+    onRetimeStart: (id, start, end) => session.apply((prev) => retimeShape(prev, id, start, end)),
+    onRetimeEnd: (id, start, end) => session.apply((prev) => retimeShape(prev, id, start, end)),
+    onSelectEntity: (id) => session.setTransient((prev) => selectShape(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'shape', handle }),
     afterCommit: () => setSnapHit(null),
     buildOverride: (id, start, end) => ({ shapeId: id, originalStart: start, originalEnd: end }),
   });
+
+  // ---- 端ドラッグ自動スクロール（edge-autoscroll・scrollLeft の第4経路） -------
+  // ブロックを掴んだまま可視域の左右端へポインタを寄せると横スクロールする。
+  // 対象は「時間を編集するドラッグ」だけ。スクラブ（ルーラー）は再生ヘッド追従と
+  // 競合するので対象外（設計書 ①「対象外」）。
+  //
+  // **発動は「ドラッグ確定後のみ」**（drag.moved）。pointerdown 直後から動かすと、
+  // 端ゾーン（40px）に居るブロックを選択のためにクリックしただけでスクロールが始まり、
+  // 区間が動いて確定してしまう（2026-08-17 に潰した「クリックで黙って動く」の復活）。
+  // Cmd＋クリックの複数選択トグルも純クリック判定が要るので同じ理由で壊れる。
+  // 監視（ポインタ位置の記録と rAF ループ）は pointerdown から始める。最初の pointermove を
+  // 取りこぼすと「ポインタ位置が分からないまま」になるため。
+  const edgeScrollWatching =
+    cutDrag.drag !== null ||
+    telopDrag.drag !== null ||
+    seDrag.drag !== null ||
+    bgmDrag.drag !== null ||
+    cutSelDrag.drag !== null ||
+    imageEdgeDrag.drag !== null ||
+    videoInsertEdgeDrag.drag !== null ||
+    shapeEdgeDrag.drag !== null;
+
+  // ホバー版（待機中の担当）を休止させる条件。上記 8 経路に加えてスクラブも含める。
+  // スクラブは端スクロールの対象外（再生ヘッド追従と競合する）なので、ホバー版が
+  // 代わりに走ってしまうと「対象外」が窓口を変えて破られる。armed ではなく watching
+  // （pointerdown の時点）で立てるのが要点——確定前に scrollLeft を動かさないため。
+  timelineDragActiveRef.current = edgeScrollWatching || scrubDrag.drag !== null;
+
+  // 実際にスクロールを始めてよいのは、ドラッグとして確定してから（moved）。
+  const edgeScrollArmed =
+    (cutDrag.drag?.moved ?? false) ||
+    (telopDrag.drag?.moved ?? false) ||
+    (seDrag.drag?.moved ?? false) ||
+    (bgmDrag.drag?.moved ?? false) ||
+    (cutSelDrag.drag?.moved ?? false) ||
+    (imageEdgeDrag.drag?.moved ?? false) ||
+    (videoInsertEdgeDrag.drag?.moved ?? false) ||
+    (shapeEdgeDrag.drag?.moved ?? false);
+  // rAF ループから最新値を読むため ref に写す（ループは貼り直さない）。
+  const edgeScrollArmedRef = useRef(false);
+  edgeScrollArmedRef.current = edgeScrollArmed;
+
+  // 最後に観測したポインタイベントの要点。スクロール後の move 再送で、位置だけでなく
+  // pointerId / pointerType / buttons まで引き継ぐ（受け手がこれらで分岐しても壊れない）。
+  const lastPointerRef = useRef<
+    { x: number; y: number; pointerId: number; pointerType: string; buttons: number } | null
+  >(null);
+
+  useEffect(() => {
+    if (!edgeScrollWatching) return;
+    let raf = 0;
+    let stopped = false;
+    let prevTs: number | null = null;
+    // このドラッグで自分が足した量をゼロから数え直す。
+    autoScrollDxRef.current = 0;
+    // 可視域の矩形はドラッグ中に変わらない前提で開始時に 1 回だけ実測する。
+    // 毎フレーム getBoundingClientRect を呼ぶと強制同期レイアウトが 60 回/秒走る。
+    // 変わるのはウィンドウリサイズだけでなく、タイムライン高さ変更やパネル開閉でも
+    // 起きるので、window の resize ではなく要素自身の ResizeObserver で取り直す。
+    const el0 = bodyRef.current;
+    let rect: DOMRect | null = el0 === null ? null : el0.getBoundingClientRect();
+
+    function remeasure(): void {
+      const el = bodyRef.current;
+      rect = el === null ? null : el.getBoundingClientRect();
+    }
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(remeasure);
+    if (observer !== null && el0 !== null) observer.observe(el0);
+
+    function onPointerMove(e: PointerEvent): void {
+      lastPointerRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        buttons: e.buttons,
+      };
+    }
+
+    function step(ts: number): void {
+      if (stopped) return;
+      // 実フレーム間隔で速度を正規化する（120Hz で倍速・コマ落ちで鈍足にしない）。
+      const dt = prevTs === null ? null : ts - prevTs;
+      prevTs = ts;
+      // 再生中は再生追従スクロール（followScrollLeft）が毎フレーム同じ scrollLeft を
+      // 書いている。端スクロールを重ねると 2 つの書き手が奪い合って画面が痙攣するので、
+      // 再生中は端スクロールを見送る（一時停止すれば次のフレームから再開する）。
+      if (isPlayingRef.current) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      // ドラッグ確定前（純クリックかもしれない間）はスクロールしない。
+      if (!edgeScrollArmedRef.current) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      const el = bodyRef.current;
+      const p = lastPointerRef.current;
+      if (el !== null && p !== null && rect !== null) {
+        const v = edgeScrollVelocity(p.x, rect.left, rect.right) * edgeScrollFrameScale(dt);
+        if (v !== 0) {
+          const max = Math.max(0, el.scrollWidth - el.clientWidth);
+          const next = Math.max(0, Math.min(max, el.scrollLeft + v));
+          if (next !== el.scrollLeft) {
+            // 自分が足した量として記録する（クリック/ドラッグ判定へ渡る）。
+            autoScrollDxRef.current += next - el.scrollLeft;
+            el.scrollLeft = next;
+            // スクロールした分だけドラッグ値も進める。スクロールでトラック原点
+            // （trackOriginX）がずれるため、同じポインタ位置で move をもう一度流せば
+            // 各ドラッグの onDrag が新しい原点で再計算する。これが無いと画面だけ
+            // 滑ってブロックが置き去りになる（設計書 ①「move 処理を再実行」）。
+            window.dispatchEvent(
+              new PointerEvent('pointermove', {
+                clientX: p.x,
+                clientY: p.y,
+                pointerId: p.pointerId,
+                pointerType: p.pointerType,
+                buttons: p.buttons,
+                bubbles: false,
+              }),
+            );
+          }
+        }
+      }
+      raf = requestAnimationFrame(step);
+    }
+
+    // 直前の pointerdown 位置は分からないので、最初の pointermove まで待つ
+    // （lastPointerRef が null の間 step は何もしない）。
+    window.addEventListener('pointermove', onPointerMove);
+    raf = requestAnimationFrame(step);
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+      window.removeEventListener('pointermove', onPointerMove);
+      observer?.disconnect();
+      lastPointerRef.current = null;
+      autoScrollDxRef.current = 0;
+    };
+  }, [edgeScrollWatching]);
 
   return (
     <div className="tl">
@@ -1309,7 +1636,7 @@ function TimelineBody({
               className="tl-add-menu-btn"
               aria-haspopup="menu"
               aria-expanded={addMenu.open}
-              title="効果音・画像・サブ動画・BGM・テロップを再生ヘッド位置に追加"
+              title="効果音・画像・サブ動画・BGM・字幕・テロップを再生ヘッド位置に追加"
               onClick={() => addMenu.setOpen(!addMenu.open)}
             >
               ＋ 追加
@@ -1352,6 +1679,24 @@ function TimelineBody({
                     addMenu.setOpen(false);
                   }}
                 >BGM</button>
+                <button type="button" role="menuitem" className="dd-item tl-subtitle-add"
+                  title="字幕（青）を再生ヘッド位置に追加"
+                  onClick={() => {
+                    const span = subtitleInsertSpan(state.telops, state.nextTelopId, playheadOriginal, fps);
+                    // 隣接字幕と重なって区間を確保できない位置。ブラウザダイアログ
+                    // （window.alert）はセッションを止めてしまうので、既存の一時ヒント
+                    // （4 秒で自動消滅）で理由を出す。
+                    if (span === null) {
+                      setToolHint('ここには字幕を追加できません（既存の字幕と重なります）');
+                    } else {
+                      session.apply(addSubtitleAtFrame(state, playheadOriginal, fps));
+                      // ヘッドが既存字幕の内側だと直後の空きへ寄る。押した所と違う場所に
+                      // 出るので黙ってずらさない（設計書 v2・P2-3）。
+                      if (span.shifted) setToolHint('直前の字幕の直後に追加しました');
+                    }
+                    addMenu.setOpen(false);
+                  }}
+                >字幕</button>
                 <button type="button" role="menuitem" className="dd-item tl-telop-add"
                   title="再生ヘッド位置にテロップを追加"
                   onClick={() => {
@@ -1449,6 +1794,10 @@ function TimelineBody({
               const raw = xToFrameMapped(e.clientX - trackOriginX(), pxPerFrame, displayMap);
               // 帯の起点は吸着位置。ただし beginDrag には RAW を渡す（useTimelineDrag の
               // デルタ基準＝掴んだ生フレームと一致させ、ドラッグ端の吸着ぶんのズレを防ぐ）。
+              // 範囲選択を開始したらテロップ複数選択は解除する（相互排他・設計書 §1）。
+              // これで Delete は常に「いま生きている方」だけに作用する。
+              // 動画トラックの pointerdown は頻発するので、消すものがある時だけ触る。
+              if (state.multiTelopIds.length > 0) session.setTransient(clearMultiSelection);
               cutSelRawAnchorRef.current = raw;
               cutSelAnchorRef.current = Math.max(
                 cutSelBounds.start,
@@ -1459,11 +1808,12 @@ function TimelineBody({
             onSelectMainVideo={() => session.apply({ ...state, selection: { kind: 'mainVideo' } })}
             mainVideoSelected={state.selection?.kind === 'mainVideo'}
             mainSpeed={state.mainSpeed}
+            ordering={ordering}
             keptSegments={keptSegments}
             segmentSpeeds={state.segmentSpeeds}
             layoutKeyframes={state.layoutKeyframes}
             fps={fps}
-            onSeekPlayback={(playbackFrame) => seekToOriginal(playbackToOriginal(playbackFrame, state.cutRegions))}
+            onSeekPlayback={(playbackFrame) => seekToOriginal(playbackToOriginal(playbackFrame, state.cutRegions, ordering))}
             selectedSegmentId={state.selection?.kind === 'cutSegment' ? state.selection.id : null}
             onSelectSegment={(id) => session.apply({ ...state, selection: { kind: 'cutSegment', id } })}
             onRegionClick={(region) => {
@@ -1491,6 +1841,7 @@ function TimelineBody({
             label="じまく"
             variant="subtitle"
             selectedTelopId={state.selection?.kind === 'telop' ? state.selection.id : null}
+            multiSelectedIds={state.multiTelopIds}
             liveOverride={liveTelopOverride()}
             selectedHandle={
               selectedHandle?.kind === 'telop'
@@ -1507,6 +1858,7 @@ function TimelineBody({
             label="テロップ"
             variant="manual"
             selectedTelopId={state.selection?.kind === 'telop' ? state.selection.id : null}
+            multiSelectedIds={state.multiTelopIds}
             liveOverride={liveTelopOverride()}
             selectedHandle={
               selectedHandle?.kind === 'telop'
@@ -1553,7 +1905,8 @@ function TimelineBody({
                 fadeInFrames: clip?.fadeInFrames ?? 0,
                 fadeOutFrames: clip?.fadeOutFrames ?? 0,
               };
-              session.setTransient(selectBgm(state, handle.bgmId));
+              // 関数形。この直後の beginDrag→onDrag（fade ライブ更新）と同じ最新状態の系列に載せる。
+              session.setTransient((prev) => selectBgm(prev, handle.bgmId));
               setSelectedHandle({ kind: 'bgm', handle });
               // フェードつまみはブロックの左端（fadeIn）または右端（fadeOut）を基準にする。
               const originFrame =
@@ -1581,7 +1934,8 @@ function TimelineBody({
                 fadeInFrames: clip?.fadeInFrames ?? 0,
                 fadeOutFrames: clip?.fadeOutFrames ?? 0,
               };
-              session.setTransient(selectSe(state, handle.seId));
+              // 関数形。この直後の beginDrag→onDrag（fade ライブ更新）と同じ最新状態の系列に載せる。
+              session.setTransient((prev) => selectSe(prev, handle.seId));
               setSelectedHandle({ kind: 'se', handle });
               const originFrame = handle.edge === 'end' || handle.edge === 'fadeOut' ? originEnd : originStart;
               seDrag.beginDrag(handle, e, originFrame);

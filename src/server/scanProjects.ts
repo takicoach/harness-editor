@@ -12,7 +12,7 @@ const TELOP_DIR = 'テロップテンプレート';
 /** videoConfig.ts の読み取り上限。正規の設定ファイルは数 KB。巨大ファイルによる OOM を防ぐ。 */
 const MAX_VIDEO_CONFIG_BYTES = 1024 * 1024;
 
-/** ディレクトリがハーネス形式（SuperMovie 形式互換）のプロジェクトの体裁を持つか判定する。 */
+/** ディレクトリがハーネス形式（旧形式互換）のプロジェクトの体裁を持つか判定する。 */
 export function isHarnessProject(dir: string): boolean {
   return (
     existsSync(join(dir, 'src', 'videoConfig.ts')) &&

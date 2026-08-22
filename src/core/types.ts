@@ -91,6 +91,33 @@ export interface CutRegion {
 }
 
 /**
+ * 再生順アンカー（並び替え編集の保持用）。
+ * cutData.ts の配列順（＝再生順）に並んだ、各区間の原素材範囲スナップショット。
+ * 削除区間モデル（CutRegion[]）は原素材順しか表せないため、再生順はこの列で別に保持する。
+ */
+export interface CutOrderAnchor {
+  originalStart: number;
+  originalEnd: number;
+}
+
+/**
+ * カット区間の「原素材順（単調）」と「再生順（並び替え後）」の対応表。
+ *
+ * 既存のエンジン群は「原素材−削除区間」の単調モデルで再生座標を計算する。
+ * 並び替えはその上に 1 段だけ乗る座標変換として表現し（速度スケール・トランジション
+ * 重なりと同じ段構成）、恒等順列では変換が完全に恒等になるようにしてある
+ * （＝従来プロジェクトの出力はバイト同値）。
+ */
+export interface CutOrdering {
+  /** 再生順の残す区間（エディタ内の正）。playbackStart/End・id は再生順で確定済み。 */
+  segments: CutSegment[];
+  /** segments[i] に対応する「単調（原素材順）再生座標」の区間。写像の中継専用。 */
+  monotone: { start: number; end: number }[];
+  /** 恒等（並び替えなし）。true なら全変換が恒等で、従来経路と完全に一致する。 */
+  identity: boolean;
+}
+
+/**
  * ハーネス形式の seData.ts が持つ SoundEffect。
  * startFrame はカット後（再生）タイムラインのフレーム。エディタ外では ハーネス側が直接使う。
  */
@@ -341,6 +368,16 @@ export interface VideoConfig {
   orientation: Orientation;
   /** タイトル帯の標準スタイル（TELOP_CONFIG 由来・プレビュー忠実描画用）。 */
   titleStyle: TitleStyle;
+  /**
+   * テロップ下端オフセット（px）。TELOP_CONFIG.bottomOffset 由来。
+   * プリセットで値が異なる（標準テンプレート short=200 / golf-short-gold=540）ため、
+   * プレビューの**選択枠アンカー・当たり判定**はこの実値を使う。
+   * 読み取れないとき（TELOP_CONFIG 不在・非数値）は null＝標準値へフォールバック。
+   * 移動量係数（telopVCoeff）・書き出しと同式の telopTransform は**標準固定のまま**で、
+   * この値では変えない（2026-08-17 の「エディタ⇄書き出し一致」契約）。
+   * 省略可なのは既存のテスト用リテラルとの互換のため（未指定は null と同義）。
+   */
+  telopBottomOffset?: number | null;
 }
 
 /** project-config.json（任意・参考情報）。 */
@@ -430,6 +467,12 @@ export interface EditorProject {
   transcript: Transcript;
   telops: EditorTelop[];
   cutRegions: CutRegion[];
+  /**
+   * 再生順アンカー（cutData.ts の配列順スナップショット）。
+   * cutRegions は原素材順しか表せないため、並び替え編集の順序はここで保持する。
+   * 未設定・恒等順列なら従来どおり原素材順で再生する。
+   */
+  cutOrder?: CutOrderAnchor[];
   /** 原本フレームアンカーの効果音（編集の正）。seData.ts 不在なら空配列。 */
   se: EditorSe[];
   /** 原本フレームアンカーの挿入画像（編集の正）。insertImageData.ts 不在なら空配列。 */

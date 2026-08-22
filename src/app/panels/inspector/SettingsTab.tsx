@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
 import { formatClock, frameToSec, parseSecField } from '../../../shared/format';
 import type { EditorTelop, TelopStyle } from '../../../core/types';
@@ -24,7 +25,7 @@ import { resolveTemplate } from '../../../core/telopTemplate';
 import type { TelopComponent } from '../../../preview/loadTelopComponent';
 import { swatchSampleText } from '../../../core/telopSwatch';
 import { TelopStyleGrid } from '../TelopStyleGrid';
-import { POSITION_PRESETS } from '../../preview/positionPresets';
+import { TelopPositionFields } from './TelopPositionFields';
 import { InstallCtaButton } from './shared';
 
 /** スタイルの適用範囲トグル（選ぶ「前」に決める）。 */
@@ -64,8 +65,8 @@ interface SettingsTabProps {
  */
 export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsertInstalled, bgmInstalled, installing, installErrors, dirty, telopComponent, previewWidth, previewHeight, onInstall, onEdit }: SettingsTabProps) {
   // 表示タイミングは再生（カット後）フレームでユーザーに見せる。
-  const playbackStart = originalToPlayback(telop.originalStart, state.cutRegions);
-  const playbackEnd = originalToPlayback(telop.originalEnd, state.cutRegions);
+  const playbackStart = originalToPlayback(telop.originalStart, state.cutRegions, cutOrderingOf(state));
+  const playbackEnd = originalToPlayback(telop.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   // カット区間内へ落ちている端は近似値。null なら原本フレームをそのまま表示する。
   const shownStart = playbackStart ?? telop.originalStart;
   const shownEnd = playbackEnd ?? telop.originalEnd;
@@ -92,8 +93,8 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
 
   /** 再生フレーム入力 → 原本フレームへ逆射影して timing を更新する。 */
   function commitTiming(nextStart: number, nextEnd: number): void {
-    const origStart = playbackToOriginal(nextStart, state.cutRegions);
-    const origEnd = playbackToOriginal(nextEnd, state.cutRegions);
+    const origStart = playbackToOriginal(nextStart, state.cutRegions, cutOrderingOf(state));
+    const origEnd = playbackToOriginal(nextEnd, state.cutRegions, cutOrderingOf(state), 'end');
     onEdit(setTelopTiming(state, telop.id, origStart, origEnd));
   }
 
@@ -340,65 +341,14 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
             プレビュー上で直接ドラッグ
           </span>
         </div>
-        <div className="pos-pad">
-          {POSITION_PRESETS.map((row, ri) =>
-            row.map((preset, ci) => (
-              <button
-                key={`${ri}-${ci}`}
-                className={
-                  position.x === preset.x && position.y === preset.y ? 'active' : ''
-                }
-                title={`位置プリセット (${preset.x}, ${preset.y})`}
-                onClick={() => onEdit(setTelopPosition(state, telop.id, preset.x, preset.y))}
-              />
-            )),
-          )}
-        </div>
-        <div className="num-row" style={{ marginTop: 8 }}>
-          <div className="num-field">
-            <label htmlFor="ins-pos-x" title="-1=左 / 0=中央 / 1=右">左右位置</label>
-            <input
-              id="ins-pos-x"
-              type="number"
-              step={0.1}
-              value={position.x}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v)) {
-                  onEdit(setTelopPosition(state, telop.id, v, position.y));
-                }
-              }}
-            />
-          </div>
-          <div className="num-field">
-            <label htmlFor="ins-pos-y" title="-1=上 / -0.5=中央 / 0=下（既定）">上下位置</label>
-            <input
-              id="ins-pos-y"
-              type="number"
-              step={0.1}
-              value={position.y}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v)) {
-                  onEdit(setTelopPosition(state, telop.id, position.x, v));
-                }
-              }}
-            />
-          </div>
-          <div className="num-field">
-            <label htmlFor="ins-scale" title="1=標準（0.3〜3 の範囲）">大きさ</label>
-            <input
-              id="ins-scale"
-              type="number"
-              step={0.1}
-              value={scale}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v)) onEdit(setTelopScale(state, telop.id, v));
-              }}
-            />
-          </div>
-        </div>
+        <TelopPositionFields
+          idPrefix="ins"
+          position={position}
+          scale={scale}
+          commitMode="change"
+          onPosition={(x, y) => onEdit(setTelopPosition(state, telop.id, x, y))}
+          onScale={(v) => onEdit(setTelopScale(state, telop.id, v))}
+        />
         <button
           type="button"
           className="ins-pos-apply-all"
