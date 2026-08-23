@@ -15,9 +15,10 @@
 // 値（spawn）は ensure() 内で動的 import する。型は実行時 import を伴わないため
 // トップレベルのまま安全。
 import type { IPty, IDisposable, spawn as PtySpawnFn } from 'node-pty';
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { parse, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveToolForPty, checkToolVersion } from './aiToolBin';
 import { AI_TOOLS, DEFAULT_AI_TOOL, type AiToolId } from './aiTools';
@@ -25,6 +26,67 @@ import { createOscColorResponder } from './oscColorReply';
 import { terminalColorsFor } from '../shared/terminalColors';
 
 const SCROLLBACK_MAX = 200_000;
+
+export type SpawnHelperRepairResult =
+  | { ok: true; repaired: boolean; helperPath: string | null }
+  | { ok: false; error: string; helperPath: string };
+
+/**
+ * macOS 版 node-pty は AI 本体より先に同梱の spawn-helper を posix_spawnp する。
+ * ZIP 展開や一部のパッケージ配布経路でこのファイルの実行ビットが落ちると、AI 本体が
+ * 正常でも node-pty は情報量のない `posix_spawnp failed.` だけを返す。spawn の直前に
+ * 実際にロード対象となる native ディレクトリを探し、helper の実行ビットだけを復旧する。
+ */
+export function ensureNodePtySpawnHelperExecutable(
+  nodePtyRoot: string,
+  runtime: { platform: NodeJS.Platform; arch: string } = {
+    platform: process.platform,
+    arch: process.arch,
+  },
+): SpawnHelperRepairResult {
+  if (runtime.platform !== 'darwin') return { ok: true, repaired: false, helperPath: null };
+
+  // node-pty の native loader と同じ優先順。pty.node と spawn-helper が揃う最初の
+  // ディレクトリだけを対象にし、実際には使われない別 arch の helper を触らない。
+  const nativeDirs = [
+    join(nodePtyRoot, 'build', 'Release'),
+    join(nodePtyRoot, 'build', 'Debug'),
+    join(nodePtyRoot, 'prebuilds', `darwin-${runtime.arch}`),
+  ];
+  for (const nativeDir of nativeDirs) {
+    const nativeModule = join(nativeDir, 'pty.node');
+    const helperPath = join(nativeDir, 'spawn-helper');
+    if (!existsSync(nativeModule) || !existsSync(helperPath)) continue;
+    try {
+      const mode = statSync(helperPath).mode;
+      if ((mode & 0o111) === 0o111) {
+        return { ok: true, repaired: false, helperPath };
+      }
+      chmodSync(helperPath, mode | 0o111);
+      return { ok: true, repaired: true, helperPath };
+    } catch (err) {
+      return {
+        ok: false,
+        helperPath,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  // helper が見つからない場合は従来どおり動的 import に任せる。node-pty の構成変更や
+  // Windows/Linuxを誤ってこの補正だけで起動不能にしないため、ここでは失敗扱いにしない。
+  return { ok: true, repaired: false, helperPath: null };
+}
+
+function nodePtyPackageRoot(): string | null {
+  try {
+    // node-pty@1.1.0 の main は <package>/lib/index.js。pnpm の symlink 配置でも
+    // createRequire.resolve は実体側へ解決するため、配布方式に依存せず package root を得られる。
+    const entry = createRequire(import.meta.url).resolve('node-pty');
+    return resolve(dirname(entry), '..');
+  } catch {
+    return null;
+  }
+}
 
 /** ツールごとの課金系環境変数を除去する（キーの一覧はアダプタが持つ）。 */
 export function sanitizeEnv(
@@ -190,6 +252,18 @@ export function createPtySessionManager() {
       }
       // I-3: node-pty の動的 import。ネイティブモジュールのロード失敗を dev サーバーの
       // 起動失敗に波及させず、ここで { ok: false } に落として AI タブだけがエラーを出す。
+      const nodePtyRoot = nodePtyPackageRoot();
+      if (nodePtyRoot !== null) {
+        const helper = ensureNodePtySpawnHelperExecutable(nodePtyRoot);
+        if (!helper.ok) {
+          return {
+            ok: false,
+            error:
+              `ターミナル補助プログラムの実行権限を復旧できませんでした（${helper.error}）。` +
+              'エディタを読み書き可能なフォルダへ移して、もう一度接続してください。',
+          };
+        }
+      }
       let ptySpawn: typeof PtySpawnFn;
       try {
         ({ spawn: ptySpawn } = await import('node-pty'));

@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, parse } from 'node:path';
-import { createPtySessionManager, sanitizeEnv, isSaneProjectRoot } from './ptySession';
+import {
+  createPtySessionManager,
+  ensureNodePtySpawnHelperExecutable,
+  sanitizeEnv,
+  isSaneProjectRoot,
+} from './ptySession';
 import { AI_TOOLS } from './aiTools';
 import { codexRuntimeDir } from './codexHome';
 
@@ -351,6 +356,30 @@ describe('ensure() の node-pty 動的 import 失敗（I-3）', () => {
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error).toContain('ターミナル機能の読み込みに失敗しました');
       expect(mgr.state()).toBe('idle'); // spawn まで到達していない
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('macOS node-pty spawn-helper の実行権限', () => {
+  it('ZIP展開等で実行ビットが落ちていても spawn 前に復旧する', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sme-node-pty-helper-'));
+    const nativeDir = join(dir, 'prebuilds', 'darwin-arm64');
+    const helper = join(nativeDir, 'spawn-helper');
+    try {
+      mkdirSync(nativeDir, { recursive: true });
+      writeFileSync(join(nativeDir, 'pty.node'), 'dummy');
+      writeFileSync(helper, 'dummy');
+      chmodSync(helper, 0o644);
+
+      const result = ensureNodePtySpawnHelperExecutable(dir, {
+        platform: 'darwin',
+        arch: 'arm64',
+      });
+
+      expect(result).toEqual({ ok: true, repaired: true, helperPath: helper });
+      expect(statSync(helper).mode & 0o111).toBe(0o111);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

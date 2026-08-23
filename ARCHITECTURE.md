@@ -85,6 +85,8 @@ AI タブの入力欄 → 指示の受け箱（instructionInbox・.sme-inbox.jso
 
 - 埋め込みターミナルは `src/server/ptySession.ts` / `ptyApi.ts`。起動時に従量課金系の
   環境変数（`ANTHROPIC_API_KEY` 等）を自動で外す課金保護つき（`claudeTerminalOptions.ts`）。
+  macOSでは起動直前に、実際に使う `node-pty` の `spawn-helper` 実行権限を検査・復旧し、
+  ZIP展開等に起因する `posix_spawnp failed.` を防ぐ。
 - Codex 用にはログイン情報だけを引き継ぐ隔離 `CODEX_HOME` を用意する（`codexHome.ts`。
   エディタフォルダの外に置くことで、フォルダごと ZIP 配布しても認証情報が混入しない）。
 - 配送の意味論（同一プロジェクト直列・専属優先・引き継ぎ）は
