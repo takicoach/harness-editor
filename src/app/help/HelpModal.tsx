@@ -2,7 +2,7 @@
  * HelpModal — チュートリアル図鑑。横2ペイン（検索・カテゴリ・一覧 / 選択項目の詳細）で
  * 12項目を辞書的に閲覧できるモーダル。狭幅では1カラム・アコーディオン展開に畳む
  * （CSS の media query で切替・DOM は両方持って出し分ける）。
- * spec: docs/specs/2026-07-23-help-encyclopedia.md
+ * 項目の正本は helpTopics.ts。ここは描画だけを担い、文言を持たない。
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -16,6 +16,10 @@ import {
   type HelpCategory,
   type HelpTopic,
 } from './helpTopics';
+import { loadSeenFeatures, markFeatureSeen, showNewBadge, type FeatureScope } from '../featureSeen';
+
+// 既読キーの名前空間。チュートリアル（tutorialSteps）と id が重なるため必ず分ける。
+const FEATURE_SCOPE: FeatureScope = 'help';
 
 // 画像は glob で自動列挙し「img/<topicId>.png」規約で引く。手動 import マップだと
 // topic 追加時に追記を忘れても全テストが緑のまま画像だけ割れる（helpTopics.test の
@@ -41,6 +45,22 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryFilter>('all');
   const [rawSelectedId, setSelectedId] = useState<string | null>(HELP_TOPICS[0]?.id ?? null);
+  // 新機能バッジの既読集合。開いた時点の localStorage を初期値にし、以後は
+  // 「ユーザーが項目を選んだら既読」でこの state を更新する（バッジがその場で消える）。
+  const [seenFeatures, setSeenFeatures] = useState<ReadonlySet<string>>(() =>
+    loadSeenFeatures(FEATURE_SCOPE, HELP_TOPICS.map((t) => t.id)),
+  );
+
+  /**
+   * 項目を選ぶ＝既読にする。**呼ぶのはユーザーの明示操作の経路だけ**
+   * （一覧クリック・前へ／次へ・矢印キー）。初期表示や検索による先頭寄せは自動選択なので、
+   * 「見せてもいない機能の NEW が黙って消える」を避けるため既読化しない。
+   */
+  function selectTopic(id: string): void {
+    setSelectedId(id);
+    markFeatureSeen(FEATURE_SCOPE, id);
+    setSeenFeatures((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }
 
   const filtered = useMemo(() => filterHelpTopics(HELP_TOPICS, query, category), [query, category]);
 
@@ -68,9 +88,9 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
         (target?.isContentEditable ?? false);
       if (inEditable) return;
       if (e.key === 'ArrowLeft' && prevId !== null) {
-        setSelectedId(prevId);
+        selectTopic(prevId);
       } else if (e.key === 'ArrowRight' && nextId !== null) {
-        setSelectedId(nextId);
+        selectTopic(nextId);
       }
     }
     window.addEventListener('keydown', onKey);
@@ -102,7 +122,7 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
             type="button"
             className="help-nav-btn help-prev"
             disabled={prevId === null}
-            onClick={() => prevId !== null && setSelectedId(prevId)}
+            onClick={() => prevId !== null && selectTopic(prevId)}
           >
             ← 前へ
           </button>
@@ -113,7 +133,7 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
             type="button"
             className="help-nav-btn help-next"
             disabled={nextId === null}
-            onClick={() => nextId !== null && setSelectedId(nextId)}
+            onClick={() => nextId !== null && selectTopic(nextId)}
           >
             次へ →
           </button>
@@ -185,10 +205,14 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
                       <button
                         type="button"
                         className={'help-item' + (t.id === selected?.id ? ' active' : '')}
-                        onClick={() => setSelectedId(t.id)}
+                        data-topic-id={t.id}
+                        onClick={() => selectTopic(t.id)}
                       >
                         <span className="help-item-no">{t.no}</span>
                         <span className="help-item-title">{t.title}</span>
+                        {showNewBadge(t.addedIn, t.id, seenFeatures) && (
+                          <span className="help-new-badge" aria-label="新機能">NEW</span>
+                        )}
                       </button>
                       {t.id === selected?.id && <div className="help-accordion">{renderDetail(t)}</div>}
                     </div>

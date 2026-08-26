@@ -265,3 +265,34 @@ describe('並列配送', () => {
     expect(inbox.takeNext()).toBeNull();                      // グローバルは温存する
   });
 });
+
+describe('hasProcessing（プロジェクト削除の busy 判定・I-1）', () => {
+  it('pending だけでは processing 中とみなさない（配送前は誰も書いていない）', () => {
+    const inbox = createInstructionInbox();
+    inbox.enqueue(input('赤にして', 'A'));
+    expect(inbox.hasProcessing('A')).toBe(false);
+  });
+
+  it('配送済み（processing）のプロジェクトは true・別プロジェクトは false', () => {
+    const inbox = createInstructionInbox();
+    inbox.enqueue(input('赤にして', 'A'));
+    inbox.takeNext();
+    expect(inbox.hasProcessing('A')).toBe(true);
+    expect(inbox.hasProcessing('B')).toBe(false);
+  });
+
+  it('専属配送（takeNext({projectId})）でも true になる', () => {
+    const inbox = createInstructionInbox();
+    inbox.enqueue(input('赤にして', 'A'));
+    inbox.takeNext({ projectId: 'A' });
+    expect(inbox.hasProcessing('A')).toBe(true);
+  });
+
+  it('done / failed へ報告されたら false へ戻る', () => {
+    const inbox = createInstructionInbox();
+    const a = inbox.enqueue(input('赤にして', 'A'));
+    inbox.takeNext();
+    inbox.updateStatus(a.id, 'done', 'ok');
+    expect(inbox.hasProcessing('A')).toBe(false);
+  });
+});

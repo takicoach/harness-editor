@@ -50,7 +50,7 @@ const TICK_MS = 350;
 
 /**
  * チュートリアルの進行状態。初回起動時（tutorialEnabled かつ未完了かつホーム表示）に自動開始し、
- * ⚙メニューの「チュートリアルをもう一度見る」からは環境設定と無関係に起動できる。
+ * ⚙メニュー →「チュートリアル図鑑」→「もう一度最初から見る」からは環境設定と無関係に起動できる。
  */
 export function useTutorial(inputs: TutorialInputs): TutorialApi {
   const [active, setActive] = useState(false);

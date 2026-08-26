@@ -37,7 +37,8 @@
  * どちらが「観測者」だったか曖昧になり、接続中の wireJobChannel 側が discard 済みの
  * ジョブを見て取りこぼす競合を生みうるため）。
  *
- * 設計書: docs/specs/2026-07-23-sse-unified-connection.md
+ * 契約: SSE は**この 1 本へ統合**する。新しい通知が要るときは新エンドポイントを
+ * 足すのではなく、このイベント経路のチャネルを増やす。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError } from './http';

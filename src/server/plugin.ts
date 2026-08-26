@@ -1,13 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { HttpError, sendJson, sendText } from './http';
 import { getProjectRoot, resolveProjectDir, resolvePublicAsset } from './projectRoot';
-import { scanProjects } from './scanProjects';
+import { isHarnessProject, scanProjects } from './scanProjects';
 import { parseVideoConfigStatic } from '../core';
 import { loadProjectFromDir } from './loadProjectFiles';
-import { isUploadKind, sanitizeUploadName, saveMaterialFile } from './uploadMaterial';
+import { isUploadKind, materialRelPath, sanitizeUploadName, saveMaterialFile } from './uploadMaterial';
+import { scanMaterialUsage } from './materialUsage';
+import { findBusyJobs } from './projectBusy';
+import { PROJECT_JOB_MANAGERS, killAllProjectJobs } from './jobRegistries';
+import { emptyTrash, listTrash, moveToTrash, restoreFromTrash } from './trashStore';
+import { makeAssetKey, type AssetKind } from '../shared/assetKey';
 import { createProject, createProjectLinked, precheckCreateProject } from './createProject';
 import { assertBrowsablePath, browseRoots, canCreateSymlink, listDirectory } from './browsePaths';
 import {
@@ -16,12 +21,16 @@ import {
   projectVideoFile,
 } from './videoLink';
 import { relinkVideo } from './relinkVideo';
+import { describeCopyReason, planImport, type CopyReason } from './autoLinkImport';
+import { convertProjectToLink, describeLinkMissReason, findConvertCandidate } from './convertToLink';
+import type { ImportOutcome } from '../shared/types';
 import { probeSymlinkSupport } from './symlinkProbe';
 import { streamBodyToTempFile, assertContentLengthWithin, resolveMaxUploadBytes } from './streamUpload';
 import { readJsonBody } from './readBody';
 import { triggerBackgroundInstall } from './backgroundInstall';
 import { saveProjectToDir, validateSaveRequest } from './saveProject';
 import { serveVideo } from './serveVideo';
+import { resolveTrashVideoPath } from './trashVideo';
 import { previewProxyName, resolveVideoPathForVersion } from './previewProxy';
 import { serveAsset } from './serveAsset';
 import { bundleTelopComponent } from './bundleTelop';
@@ -43,37 +52,32 @@ import {
   handleTranscribePost,
   handleTranscribeSse,
   handleTranscribeDelete,
-  transcribeJobs,
 } from './transcribeApi';
 import {
   handleDenoisePost,
   handleDenoiseSse,
   handleDenoiseDelete,
   handleDenoiseRestore,
-  denoiseJobs,
 } from './denoiseApi';
 import {
   handleRenderPost,
   handleRenderSse,
   handleRenderDelete,
   handleRenderReveal,
-  renderJobs,
 } from './renderApi';
-import { handleOpenMaterialFolder } from './openMaterialFolder';
+import { handleOpenMaterialFolder, openFolder } from './openMaterialFolder';
 import {
   handleNormalizePost,
   handleNormalizeSse,
   handleNormalizeDelete,
   handleNormalizeRestore,
   handleNormalizeStatus,
-  normalizeJobs,
 } from './normalizeApi';
 import {
   handlePreviewProxyStatus,
   handlePreviewProxyPost,
   handlePreviewProxySse,
   handlePreviewProxyDelete,
-  previewProxyJobs,
 } from './previewProxyApi';
 import {
   handleLearningDiff,
@@ -96,13 +100,41 @@ export function requireParam(url: URL, name: string): string {
   return value;
 }
 
+/** realpath 化（解決できなければ与えられたパスをそのまま使う）。 */
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * 素材ライブラリ一覧＋assetVersions（クライアントの patchLibraries が受け取る形）。
+ * プロジェクトを読めない場合は null（呼び出し側はパッチ無しで応答する）。
+ */
+function librariesPatch(dir: string): Record<string, unknown> | null {
+  try {
+    const loaded = loadProjectFromDir(dir);
+    return {
+      seLibrary: loaded.seLibrary,
+      imageLibrary: loaded.imageLibrary,
+      bgmLibrary: loaded.bgmLibrary,
+      videoLibrary: loaded.videoLibrary,
+      assetVersions: loaded.assetVersions,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** アップロード受信用の一時ディレクトリ（プロジェクトと同一ボリューム＝rename で移動できる）。 */
 function uploadTmpDir(root: string): string {
   return join(root, '.sme-upload-tmp');
 }
 
-/** /api/* のリクエストを処理する。 */
-async function handleApi(
+/** /api/* のリクエストを処理する（ルート単位のテストのため export）。 */
+export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
@@ -129,7 +161,128 @@ async function handleApi(
       sendJson(res, 200, saveProjectToDir(dir, saveReq));
       return;
     }
+    if (method === 'DELETE') {
+      if (!existsSync(dir)) {
+        throw new HttpError(404, `プロジェクトが見つかりません: ${id}`);
+      }
+      // id='.'・''・'foo/..' などはルート自身に解決する。ルートごとゴミ箱へ入れると
+      // 全プロジェクトが一度に消えるため、明示的に拒否する。
+      if (resolve(root, id) === resolve(root)) {
+        throw new HttpError(400, 'プロジェクト置き場そのものは削除できません');
+      }
+      // ルート直下にある無関係なディレクトリ（作業フォルダ・バックアップ等）を
+      // 削除 API で消せないようにする。消せるのは一覧に出るプロジェクトだけ。
+      if (!isHarnessProject(dir)) {
+        throw new HttpError(400, `ハーネス形式のプロジェクトではありません: ${id}`);
+      }
+      // 書き出し・文字起こし等が走っている最中にディレクトリごと rename すると、
+      // 実行中プロセスが消えたパスへ書き続ける。終わるまで削除させない。
+      // pty セッション（AI ターミナル）はここでは見ない: 単一セッション設計で cwd は
+      // プロジェクト置き場（root）であり、特定プロジェクトに紐づかない。これを busy 条件に
+      // 入れると、ターミナルを開いている間はどのプロジェクトも削除できなくなる。
+      // 一方 AI 指示の受け箱は projectId 単位なので busy に数える（再レビュー I-1）:
+      // processing＝エージェントがそのプロジェクトを編集中で、ディレクトリごと rename すると
+      // 消えたパスへ書き続ける。pending は誰も取っていないので削除を止めない。
+      // ジョブ 5 種は `jobRegistries.ts` の正本から導出する（killAll と同じ列挙・M-4）。
+      const busy = findBusyJobs(id, {
+        ...PROJECT_JOB_MANAGERS,
+        aiInstruction: {
+          get: (projectId) =>
+            instructionInbox.hasProcessing(projectId) ? { phase: 'processing' } : undefined,
+        },
+      });
+      if (busy.length > 0) {
+        sendJson(res, 409, { error: 'busy', jobs: busy });
+        return;
+      }
+      // moveToTrash には検証済みの相対パスだけを渡す（クライアント由来の id を
+      // そのまま join させない）。root 自体が symlink 経由の場合に備え、
+      // resolveProjectDir が返す実体パスを基準に相対化する。
+      const realRoot = safeRealpath(root);
+      const rel = relative(realRoot, dir);
+      if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+        throw new HttpError(400, `不正なプロジェクトパスです: ${id}`);
+      }
+      // プロジェクト本体を <root>/.trash/ へ tombstone として移動する（メイン動画もこれで消える）。
+      const entry = moveToTrash(realRoot, rel, 'project');
+      // 削除が通った瞬間に、そのプロジェクト宛の pending 指示を同一プロセス内で失効させる
+      // （再レビュー I-1）。残すと直後の poll が消えたパス宛の指示を配送してしまい、
+      // その stale な processing が hasProcessing を真にして再削除まで塞ぐ。
+      instructionInbox.failPendingFor(id);
+      sendJson(res, 200, { entry, projects: scanProjects(root) });
+      return;
+    }
     sendJson(res, 200, loadProjectFromDir(dir));
+    return;
+  }
+  if (url.pathname === '/api/project/reveal') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    // 開く先は **id から導出**する（クライアントから生パスを受け取らない）。
+    // resolveProjectDir が文字列封じ込め＋realpath の二段でルート外を弾く。
+    const dir = resolveProjectDir(root, id);
+    if (!existsSync(dir)) {
+      throw new HttpError(404, `プロジェクトが見つかりません: ${id}`);
+    }
+    // 不変条件: **開いてよいのは一覧に出るプロジェクトのフォルダだけ**（レビュー I-1）。
+    // resolveProjectDir はルート外への脱出しか見ないので、それだけだと
+    // `id=proj/public/foo.command` や `.app` バンドルのような**ルート配下の任意パス**を
+    // OS の open に渡せてしまう。open はディレクトリなら Finder で開くが、ファイルなら
+    // 「起動」＝実行になる。兄弟ルート（DELETE /api/project）と同じ強さに揃える。
+    const revealRel = relative(safeRealpath(root), dir);
+    if (
+      revealRel === '' ||
+      isAbsolute(revealRel) ||
+      // '..' 単体は区切りを含まないので includes('/') では落ちない。ルート自身の親を
+      // 指す形は必ず弾く（M-5。resolveProjectDir も弾くが、検査を相手の実装に委ねない）。
+      revealRel === '..' ||
+      revealRel.startsWith('..') ||
+      revealRel.includes('/') ||
+      revealRel.includes('\\')
+    ) {
+      throw new HttpError(400, `プロジェクトのフォルダではありません: ${id}`);
+    }
+    if (!statSync(dir).isDirectory() || !isHarnessProject(dir)) {
+      throw new HttpError(400, `ハーネス形式のプロジェクトではありません: ${id}`);
+    }
+    openFolder(dir, process.platform);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+  // 既存のコピー取り込みプロジェクトを、外付け等の同一実体へのリンクへ張り替える（容量回収）。
+  // candidate は「探すだけ」、convert が破壊的な置換。**候補パスはどちらもサーバの探索結果**で、
+  // クライアントから生パスを受け取らない（受け取ると任意の実体を指す symlink を作らせられる）。
+  if (url.pathname === '/api/project/link-candidate' || url.pathname === '/api/project/convert-to-link') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    if (!existsSync(dir) || !isHarnessProject(dir)) {
+      throw new HttpError(404, `プロジェクトが見つかりません: ${id}`);
+    }
+    if (url.pathname === '/api/project/link-candidate') {
+      const outcome = findConvertCandidate(root, dir);
+      // 見つからなかった理由は UI がそのまま出せる日本語で返す（クライアントで
+      // reason を日本語へ翻訳し直すと、理由が増えたとき片側だけ古くなる）。
+      sendJson(
+        res,
+        200,
+        outcome.matched ? outcome : { ...outcome, message: describeLinkMissReason(outcome.reason) },
+      );
+      return;
+    }
+    // 書き出し・文字起こし等が走っている最中にメイン動画を差し替えない
+    // （削除と同じ busy 判定を使う。実行中プロセスは消えた実体へ書き続ける）。
+    const busy = findBusyJobs(id, PROJECT_JOB_MANAGERS);
+    if (busy.length > 0) {
+      sendJson(res, 409, { error: 'busy', jobs: busy });
+      return;
+    }
+    const result = convertProjectToLink(root, dir);
+    sendJson(res, 200, { ...result, projects: scanProjects(root) });
     return;
   }
   if (url.pathname === '/api/project/status') {
@@ -227,6 +380,8 @@ async function handleApi(
     }
     const name = requireParam(url, 'name');
     const videoName = requireParam(url, 'video');
+    // ユーザーが作成モーダルで「コピーして取り込む」を明示した場合は自動リンク化しない。
+    const preferCopy = url.searchParams.get('copy') === '1';
     // 数GBを受け切ってから弾く無駄を避けるため、名前・拡張子・重複は受信前にチェックする。
     precheckCreateProject(root, name, videoName);
     // ボディはメモリに載せず一時ファイルへ直接書く。上限は HARNESS_MAX_UPLOAD_BYTES（既定32GiB）で
@@ -236,15 +391,46 @@ async function handleApi(
     // createProject 成功時は rename で移動済みなので finally の削除は no-op。
     const tmpPath = await streamBodyToTempFile(req, uploadTmpDir(root), maxUpload);
     let id: string;
+    let imported: ImportOutcome;
     try {
-      ({ id } = createProject(root, { name, videoName, videoTmpPath: tmpPath }));
+      // 受信後にマッチングを試みる（受信前に探索すると、見つからない時の待ち時間が
+      // まるごと作成の遅延になる）。同一実体が起点配下に在れば実体コピーをやめて
+      // 既存のリンク取り込みへ切り替える。曖昧なら必ずコピーへ落ちる。
+      const plan = planImport({ root, tmpPath, videoName, preferCopy });
+      let linked: { id: string; imported: ImportOutcome } | null = null;
+      if (plan.link) {
+        try {
+          // 探索結果のパスでも、取り込みの入口の封じ込め（起点配下のみ・realpath 解決）を
+          // 必ず通す。ここを通さないと「探索の実装が正しい」ことに安全性が依存する。
+          const target = assertBrowsablePath(plan.target, browseRoots());
+          const created = createProjectLinked(root, { name, targetPath: target });
+          linked = {
+            id: created.id,
+            imported: { linked: true, target, message: `外付けの実体にリンクしました（コピーなし）: ${target}` },
+          };
+        } catch (err) {
+          // 判断（planImport）だけでなく**実行段**の失敗もコピーへ落とす（レビュー I-3）。
+          // 数GBを受け切った後の最後の 1 手で 500 を返すと、取り込みが丸ごと無駄になる。
+          // 一時ファイルはこの時点でまだ消していない（削除は下の finally）ので、
+          // そのままコピーで作成できる。createProjectLinked は自身の失敗で作りかけの
+          // フォルダごと巻き戻すため、同じ名前でコピー作成し直せる。
+          console.warn(`[sme] リンク取り込みに失敗したためコピーへ切り替えます: ${(err as Error).message}`);
+        }
+      }
+      if (linked !== null) {
+        ({ id, imported } = linked);
+      } else {
+        const reason: CopyReason = plan.link ? 'link-failed' : plan.reason;
+        ({ id } = createProject(root, { name, videoName, videoTmpPath: tmpPath }));
+        imported = { linked: false, reason, message: describeCopyReason(reason) };
+      }
     } finally {
       rmSync(tmpPath, { force: true });
     }
     // プロジェクト内で直接 `npm run dev` 等を実行する時に node_modules 不在で詰まらないよう、
     // レスポンスをブロックせずバックグラウンドで npm install を開始する（Editor でのプレビュー自体には不要）。
     triggerBackgroundInstall(resolveProjectDir(root, id));
-    sendJson(res, 200, { id, projects: scanProjects(root) });
+    sendJson(res, 200, { id, imported, projects: scanProjects(root) });
     return;
   }
   if (url.pathname === '/api/upload-material') {
@@ -283,6 +469,151 @@ async function handleApi(
       videoLibrary: loaded.videoLibrary,
       assetVersions: loaded.assetVersions,
     });
+    return;
+  }
+  if (url.pathname === '/api/material') {
+    if (method !== 'DELETE') {
+      throw new HttpError(405, 'このエンドポイントは DELETE のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    const kind = requireParam(url, 'kind');
+    // アップロード時（sanitizeUploadName）と同じ NFC 正規化。macOS の濁点分解（NFD）で
+    // 送られてきた名前を、NFC で保存されている実体・ライブラリ一覧と突き合わせられるようにする。
+    const file = requireParam(url, 'file').normalize('NFC');
+    if (!isUploadKind(kind)) {
+      throw new HttpError(400, `不正な素材種別です: ${kind}`);
+    }
+    // image/video 素材はサブディレクトリ相対パスを含み得るため '/' は許可し、
+    // ディレクトリ脱出（..・先頭スラッシュ・バックスラッシュ）だけ弾く。
+    if (file.includes('..') || file.startsWith('/') || file.includes('\\')) {
+      throw new HttpError(400, `不正なファイル名です: ${file}`);
+    }
+    const dir = resolveProjectDir(root, id);
+    // メイン動画は削除対象外（プロジェクト削除でのみ消える）。プレビュープロキシも同様。
+    const mainVideo = projectVideoFile(dir);
+    if (kind === 'video' && mainVideo === null) {
+      // videoConfig.ts を読めないと「メイン動画かどうか」を判定できない。判定できないまま
+      // 通すとメイン動画そのものを削除し得るため、fail-open せず保留する。
+      sendJson(res, 409, { error: '動画設定を読めないため削除を保留します（src/videoConfig.ts を確認してください）' });
+      return;
+    }
+    if (kind === 'video' && mainVideo !== null && (file === mainVideo || file === previewProxyName(mainVideo))) {
+      throw new HttpError(400, 'メイン動画は削除できません（プロジェクトの削除でのみ消えます）');
+    }
+    // 削除できるのは「このプロジェクトの素材ライブラリに載っているファイル」だけ。
+    // public 配下の任意ファイル（設定・書き出し・他人の置いたもの）を削除 API で
+    // 消せないようにする最後の絞り込み。
+    let before: ReturnType<typeof loadProjectFromDir>;
+    try {
+      before = loadProjectFromDir(dir);
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      // プロジェクトを読めない＝素材かどうか確かめられない。500 で落とさず削除を保留する
+      // （走査失敗と同じ「未使用と誤認しない」扱い）。
+      sendJson(res, 409, { error: 'scan-failed' });
+      return;
+    }
+    const library: Record<string, string[]> = {
+      se: before.seLibrary,
+      image: before.imageLibrary,
+      bgm: before.bgmLibrary,
+      video: before.videoLibrary,
+    };
+    // NFC 同士の突合は macOS（APFS/HFS+ が NFD 寄りの名前を返しうる）を想定した正規化。
+    if (!(library[kind] ?? []).some((f) => f.normalize('NFC') === file)) {
+      throw new HttpError(400, `このプロジェクトの素材ではありません: ${file}`);
+    }
+    // 素材の実パスを realpath で封じ込め（serveAsset と同じ防御）。末端 symlink だけでなく
+    // 親ディレクトリが外を指す symlink のケースもここで弾く。
+    resolvePublicAsset(dir, relative('public', materialRelPath(kind, file)));
+    // 走査は force でも必ず行う（force は「使用中でも削除する」の意味であって
+    // 「数えない」ではない）。数えた結果は 200 応答の usedCount としてそのまま返し、
+    // クライアントの完了通知に使う。
+    const force = url.searchParams.get('force') === '1';
+    const usage = scanMaterialUsage(dir, makeAssetKey(kind as AssetKind, file));
+    // 走査失敗は「未使用」と誤認せず削除を保留する。**force でも突破させない** —
+    // force は「画面に出た使用件数を承知のうえで消す」という意思表示であって、
+    // 「参照が分からないまま消す」の承認ではない（走査が失敗した時点で、利用者は
+    // 何件使われているかを一度も見せられていない）。
+    if (!usage.ok) {
+      sendJson(res, 409, { error: 'scan-failed' });
+      return;
+    }
+    if (!force && usage.count > 0) {
+      sendJson(res, 409, { error: 'in-use', count: usage.count });
+      return;
+    }
+    markSelfWrite(id);
+    const entry = moveToTrash(dir, materialRelPath(kind, file), kind);
+    const loaded = loadProjectFromDir(dir);
+    sendJson(res, 200, {
+      entry,
+      // サーバが数えられた使用箇所数（走査できなかった場合は null）。
+      usedCount: usage.ok ? usage.count : null,
+      seLibrary: loaded.seLibrary,
+      imageLibrary: loaded.imageLibrary,
+      bgmLibrary: loaded.bgmLibrary,
+      videoLibrary: loaded.videoLibrary,
+      assetVersions: loaded.assetVersions,
+    });
+    return;
+  }
+  if (url.pathname === '/api/trash') {
+    if (method !== 'GET') {
+      throw new HttpError(405, 'このエンドポイントは GET のみ対応します');
+    }
+    const id = url.searchParams.get('id');
+    const base = id === null || id === '' ? root : resolveProjectDir(root, id);
+    sendJson(res, 200, { entries: listTrash(base) });
+    return;
+  }
+  if (url.pathname === '/api/trash/video') {
+    // ゴミ箱カードのサムネイル。配信できるのは tombstone 内のメイン動画だけで、
+    // パスはクライアントから受け取らず entryId からサーバが導出する（trashVideo.ts）。
+    if (method !== 'GET') {
+      throw new HttpError(405, 'このエンドポイントは GET のみ対応します');
+    }
+    const videoPath = resolveTrashVideoPath(root, requireParam(url, 'entryId'));
+    serveVideo(res, videoPath, req.headers.range);
+    return;
+  }
+  if (url.pathname === '/api/trash/restore' || url.pathname === '/api/trash/empty') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const body = await readJsonBody(req);
+    if (typeof body !== 'object' || body === null) {
+      throw new HttpError(400, 'リクエストボディがオブジェクトではありません');
+    }
+    const b = body as Record<string, unknown>;
+    const id = typeof b['id'] === 'string' && b['id'] !== '' ? b['id'] : null;
+    const entryId = typeof b['entryId'] === 'string' && b['entryId'] !== '' ? b['entryId'] : undefined;
+    const base = id === null ? root : resolveProjectDir(root, id);
+    if (id !== null) markSelfWrite(id);
+    let result: Record<string, unknown>;
+    if (url.pathname === '/api/trash/restore') {
+      if (entryId === undefined) throw new HttpError(400, 'entryId が必要です');
+      result = { ...restoreFromTrash(base, entryId) };
+    } else {
+      // 「全件消す」は暗黙（entryId 省略）ではなくワイヤ上で明示させる。
+      // 省略＝全消しだと、entryId の組み立てを1箇所間違えるだけでゴミ箱が全部消える。
+      const all = b['all'] === true;
+      if (entryId === undefined && !all) {
+        throw new HttpError(400, 'entryId（1件削除）または all:true（全件削除）が必要です');
+      }
+      if (entryId !== undefined && all) {
+        throw new HttpError(400, 'entryId と all:true は同時に指定できません');
+      }
+      result = { ...emptyTrash(base, entryId) };
+    }
+    // 素材ゴミ箱（id あり）の操作はライブラリ構成を変える。クライアントが
+    // プロジェクト全体を reload せず部分反映できるよう、削除 API と同じパッチを載せる
+    // （全体 reload は編集中の未保存状態を捨ててしまう）。
+    if (id !== null) {
+      const patch = librariesPatch(base);
+      if (patch !== null) result = { ...result, ...patch };
+    }
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/asset') {
@@ -439,7 +770,7 @@ async function handleApi(
   // deprecated: 従来の 8 SSE エンドポイント（/api/projects/watch・/api/watch・
   // /api/instructions/stream・/api/{render,denoise,normalize,preview-proxy,transcribe} の
   // GET）は後方互換・既存テスト温存のため残す。新規クライアントは /api/events（SSE 1本統合）
-  // を使うこと（2026-07-23 docs/specs/2026-07-23-sse-unified-connection.md）。
+  // を使うこと（SSE はブラウザの同一オリジン接続上限を食うため 1 本へ統合する）。
   if (url.pathname === '/api/transcribe') {
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
@@ -836,11 +1167,7 @@ export function smeServer(): Plugin {
       rmSync(uploadTmpDir(root), { recursive: true, force: true });
       // Vite サーバ停止時に進行中の subprocess を全 kill する。
       server.httpServer?.on('close', () => {
-        transcribeJobs.killAll();
-        denoiseJobs.killAll();
-        normalizeJobs.killAll();
-        renderJobs.killAll();
-        previewProxyJobs.killAll();
+        killAllProjectJobs();
         instructionInbox.releasePersistence();
       });
       server.middlewares.use((req, res, next) => {

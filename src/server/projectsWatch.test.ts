@@ -92,11 +92,67 @@ describe('watchAllProjectsStatus', () => {
       await new Promise((r) => setTimeout(r, 200));
       writeFileSync(
         join(projDir, '.sme', 'status.json'),
-        JSON.stringify({ stage: 'review' }) + '\n',
+        JSON.stringify({ stage: 'telop' }) + '\n',
         'utf8',
       );
       await new Promise((r) => setTimeout(r, 500));
-      expect(events.some((e) => e.id === 'proj-b' && e.status === 'review')).toBe(true);
+      expect(events.some((e) => e.id === 'proj-b' && e.status === 'telop')).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  it('out/video.mp4 の作成イベントで steps.rendered === true が差分に載る', async () => {
+    root = mkdtempSync(join(tmpdir(), 'sme-projects-watch-'));
+    const projDir = join(root, 'proj-steps');
+    makeMinimalProject(projDir);
+
+    const events: Array<{ id: string; steps?: { rendered: boolean } }> = [];
+    const stop = watchAllProjectsStatus(
+      root,
+      (e) => {
+        events.push(e as { id: string; steps?: { rendered: boolean } });
+      },
+      { debounceMs: 20 },
+    );
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      mkdirSync(join(projDir, 'out'), { recursive: true });
+      writeFileSync(join(projDir, 'out', 'video.mp4'), 'x', 'utf8');
+      await new Promise((r) => setTimeout(r, 500));
+      expect(events.some((e) => e.id === 'proj-steps' && e.steps?.rendered === true)).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  it('stage 非 null → null の変更で stageManual が true → 不在になる（クライアントの解除条件）', async () => {
+    root = mkdtempSync(join(tmpdir(), 'sme-projects-watch-'));
+    const projDir = join(root, 'proj-manual');
+    makeMinimalProject(projDir);
+    mkdirSync(join(projDir, '.sme'), { recursive: true });
+    writeFileSync(join(projDir, '.sme', 'status.json'), '{}\n', 'utf8');
+
+    const events: Array<{ id: string; stageManual?: boolean }> = [];
+    const stop = watchAllProjectsStatus(
+      root,
+      (e) => {
+        events.push(e as { id: string; stageManual?: boolean });
+      },
+      { debounceMs: 20 },
+    );
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      writeFileSync(join(projDir, '.sme', 'status.json'), JSON.stringify({ stage: 'telop' }) + '\n', 'utf8');
+      await new Promise((r) => setTimeout(r, 500));
+      expect(events.at(-1)?.stageManual).toBe(true);
+
+      writeFileSync(join(projDir, '.sme', 'status.json'), JSON.stringify({ stage: null }) + '\n', 'utf8');
+      await new Promise((r) => setTimeout(r, 500));
+      const last = events.at(-1);
+      expect(last?.stageManual).toBeUndefined();
+      // JSON 化でキーごと落ちる（= クライアント側で明示的に undefined を書き込む必要がある）。
+      expect(JSON.stringify(last)).not.toContain('stageManual');
     } finally {
       stop();
     }

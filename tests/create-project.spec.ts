@@ -148,3 +148,69 @@ test.describe('リンク取り込み', () => {
 
   });
 });
+
+// ---------------------------------------------------------------------------
+// D&D／ファイル選択の自動リンク化。ブラウザは元パスを渡さないため、サーバが
+// 登録済みブラウズルート（SME_BROWSE_ROOTS＝tests/.browse-root）から同一実体を
+// 探し、確証が取れたらコピーをやめて symlink 取り込みへ切り替える。
+// ---------------------------------------------------------------------------
+const AUTO_LINK_NAMES = ['e2e-auto-link-hit', 'e2e-auto-link-miss'] as const;
+const AUTO_LINK_VIDEO = resolve(BROWSE_ROOT, 'auto-link-source.mp4');
+// 起点の外に置いた素材（＝リンク化されない対照）。
+const OUTSIDE_VIDEO = resolve(TMP_DIR, 'outside-source.mp4');
+
+test.describe('アップロードの自動リンク化', () => {
+  const cleanup = (): void => {
+    for (const n of AUTO_LINK_NAMES) rmSync(resolve(FIXTURES_ROOT, n), { recursive: true, force: true });
+  };
+  test.beforeAll(() => {
+    cleanup();
+    mkdirSync(BROWSE_ROOT, { recursive: true });
+    mkdirSync(TMP_DIR, { recursive: true });
+    // 内容が違う 2 本（testsrc と smptebars）。同名同サイズの偶然一致を作らない。
+    execSync(
+      `ffmpeg -y -f lavfi -i testsrc=duration=2:size=320x240:rate=30 -pix_fmt yuv420p "${AUTO_LINK_VIDEO}"`,
+      { stdio: 'ignore' },
+    );
+    execSync(
+      `ffmpeg -y -f lavfi -i smptebars=duration=3:size=320x240:rate=30 -pix_fmt yuv420p "${OUTSIDE_VIDEO}"`,
+      { stdio: 'ignore' },
+    );
+  });
+  test.afterAll(() => {
+    cleanup();
+    rmSync(AUTO_LINK_VIDEO, { force: true });
+    rmSync(OUTSIDE_VIDEO, { force: true });
+  });
+
+  test('登録済みフォルダに同一実体があればコピーせずリンクになる', async ({ page }) => {
+    const name = AUTO_LINK_NAMES[0];
+    await page.goto('/');
+    // ファイル選択は「ブラウザが元パスを渡さない」経路そのもの。中身は外付けの実体と同一。
+    await page.locator('[data-testid=home-create-file]').setInputFiles(AUTO_LINK_VIDEO);
+    await page.locator('.home-create-name').fill(name);
+    await page.locator('.export-start').click();
+    await expect(page.locator('.tl-add-menu-btn')).toBeVisible({ timeout: 30_000 });
+
+    const dir = resolve(FIXTURES_ROOT, name);
+    expect(lstatSync(resolve(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(true);
+    const record = JSON.parse(
+      readFileSync(resolve(dir, '.sme', 'videoLink.json'), 'utf8'),
+    ) as { target: string };
+    expect(record.target).toBe(AUTO_LINK_VIDEO);
+  });
+
+  test('登録済みフォルダに実体が無ければ従来どおりコピーになる', async ({ page }) => {
+    const name = AUTO_LINK_NAMES[1];
+    await page.goto('/');
+    await page.locator('[data-testid=home-create-file]').setInputFiles(OUTSIDE_VIDEO);
+    await page.locator('.home-create-name').fill(name);
+    await page.locator('.export-start').click();
+    await expect(page.locator('.tl-add-menu-btn')).toBeVisible({ timeout: 30_000 });
+
+    const dir = resolve(FIXTURES_ROOT, name);
+    expect(lstatSync(resolve(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(false);
+    // リンク化していないプロジェクトには sidecar を生やさない。
+    expect(existsSync(resolve(dir, '.sme', 'videoLink.json'))).toBe(false);
+  });
+});

@@ -2,8 +2,8 @@
  * @vitest-environment jsdom
  *
  * プレビュー上のドラッグが「テロップ複数選択」中は選択全員へ同値適用されることの回帰テスト。
- * 設計書: docs/specs/2026-08-18-telop-multiselect-design.md（§3 の「揃える」意味論をプレビュー
- * ドラッグにも適用する。実機不具合: 複数選択中でもプライマリしか動かなかった）
+ * 「揃える」意味論（確定した値を選択中の全員へ書き込む）をプレビュードラッグにも適用する。
+ * 実機不具合: 複数選択中でもプライマリしか動かなかった。
  *
  * ここは **実 React の pointerdown → pointermove → pointerup を通した結線** だけを見る。
  * 座標変換そのもの（pointerToPosition / pointerToScale）は overlayGeometry.test.ts、

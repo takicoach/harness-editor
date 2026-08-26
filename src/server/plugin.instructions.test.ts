@@ -30,7 +30,8 @@ describe('plugin.ts: 起動時の受け箱永続化アタッチ', () => {
   it('サーバ停止時（既存 killAll と同じ並び）に releasePersistence を呼ぶ', () => {
     const closeIdx = pluginSrc.indexOf("server.httpServer?.on('close'");
     const closeBlock = pluginSrc.slice(closeIdx, closeIdx + 500);
-    expect(closeBlock).toContain('previewProxyJobs.killAll()');
+    // ジョブの kill は jobRegistries.ts の正本 1 箇所から導出する（再レビュー M-4）。
+    expect(closeBlock).toContain('killAllProjectJobs()');
     expect(closeBlock).toContain('instructionInbox.releasePersistence()');
   });
 });

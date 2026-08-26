@@ -4,6 +4,7 @@ import { parseVideoConfigStatic } from '../core';
 import { orientationCode } from '../shared/orientation';
 import { formatClock, formatSize } from '../shared/format';
 import type { ProjectSummary } from '../shared/types';
+import { resolveProjectSteps } from './projectSteps';
 import { resolveProjectStatus } from './projectStatus';
 import { inspectVideoLink } from './videoLink';
 
@@ -23,7 +24,13 @@ export function isHarnessProject(dir: string): boolean {
 function summarize(name: string, dir: string): ProjectSummary {
   const vcPath = join(dir, 'src', 'videoConfig.ts');
   // 走査は信頼していないプロジェクトも読むため、読み込み前にサイズ上限で DoS（巨大ファイル OOM）を弾く。
-  if (statSync(vcPath).size > MAX_VIDEO_CONFIG_BYTES) {
+  // FIFO・キャラクタデバイスは size=0 で上限を素通りし、readFileSync が書き手を待って
+  // 恒久ブロックする（一覧 API 全体が固まる）ため、通常ファイルであることも要求する。
+  const vcStat = statSync(vcPath);
+  if (!vcStat.isFile()) {
+    throw new Error('videoConfig.ts が通常ファイルではありません');
+  }
+  if (vcStat.size > MAX_VIDEO_CONFIG_BYTES) {
     throw new Error('videoConfig.ts が大きすぎます');
   }
   const vcSource = readFileSync(vcPath, 'utf8');
@@ -44,15 +51,20 @@ function summarize(name: string, dir: string): ProjectSummary {
     // 接続し直せば元に戻ることを示す（null にするとカードから動画の存在自体が消える）。
     if (videoLink === null) videoFile = null; // 動画未配置: サムネなし・サイズ不明
   }
+  // 工程判定は 1 回だけ行い、ステータス自動判定（最初の未完了工程）とステッパー表示で共有する。
+  const steps = resolveProjectSteps(dir);
   return {
     id: name,
     name,
+    // 保存先の絶対パス（ホームカードの「保存先」表示用）。
+    dir,
     orientation: orientationCode(vc.orientation),
     durationLabel: formatClock(seconds),
     sizeLabel: sizeKnown ? formatSize(sizeBytes) : '—',
     videoFile,
     ...(videoLink === null ? {} : { videoLink }),
-    ...resolveProjectStatus(dir),
+    ...resolveProjectStatus(dir, steps),
+    steps,
   };
 }
 

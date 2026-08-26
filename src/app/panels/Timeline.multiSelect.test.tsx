@@ -2,7 +2,6 @@
  * @vitest-environment jsdom
  *
  * テロップ・字幕の複数選択と一括調整の UI レベル回帰テスト。
- * 設計書: docs/specs/2026-08-18-telop-multiselect-design.md
  *
  * 純ロジック（ops / normalizeMultiSelection）の検証は telopSettingsOps.test.ts と
  * editState.test.ts が担う。ここは **実 React の pointerdown → pointermove → pointerup →

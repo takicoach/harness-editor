@@ -2,7 +2,6 @@
  * @vitest-environment jsdom
  *
  * 実測枠の純関数（矩形合併・除外規則・座標変換・0.5px 量子化・オンデマンド測定）のテスト。
- * 設計書: docs/specs/2026-08-19-measured-overlay-box-design.md §1
  *
  * jsdom の getBoundingClientRect は常に全ゼロなので、矩形は RectReader（差し替え可能な
  * 読み取り関数）で注入する。DOM の走査そのもの（子孫列挙・leaf 判定）は実 DOM で見る。

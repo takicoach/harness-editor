@@ -2452,6 +2452,45 @@ test('画像にズーム登場を設定→保存→insertImageData に enter が
 
 // ===== シーン転換 E2E スモーク =====
 
+test('つなぎ目のひし形はタイムラインを縦スクロールしても消えない（sticky 回帰）', async ({ page }) => {
+  await page.goto('/');
+  const item = page.locator('.home-card', { hasText: 'sample-project' });
+  await expect(item).toBeVisible({ timeout: 15_000 });
+  await item.click();
+  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+  const head = page.locator('.tl-join-mark[data-join-at="head"]');
+  await expect(head).toBeVisible();
+  const before = await head.boundingBox();
+  expect(before).not.toBeNull();
+
+  // まず「縦スクロールできる状態」であることを確かめる（＝この検査が空振りしていない証拠）。
+  // scrollHeight <= clientHeight ならスクロールは起きず、下の assert は何も検査しない。
+  const body = page.locator('.tl-body');
+  const scrollable = await body.evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(scrollable, '.tl-body が縦スクロールしない＝この回帰検査は成立しない').toBeGreaterThan(20);
+
+  await body.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await page.waitForFunction(() => {
+    const el = document.querySelector('.tl-body');
+    return el !== null && el.scrollTop > 20;
+  });
+
+  // sticky ならスクロール後も同じ画面座標に貼り付いたまま見えている。
+  // **座標の比較が本体**（アブレーション実測）: position:absolute へ戻すとマークは
+  // スクロール域の外へ流れるが、Playwright の toBeVisible は矩形が空でない限り true を
+  // 返すため素通りする。下の toBeCloseTo だけが旧実装を赤にする。
+  await expect(head).toBeVisible();
+  const after = await head.boundingBox();
+  expect(after).not.toBeNull();
+  expect(after!.y).toBeCloseTo(before!.y, 0);
+
+  // 実ポインタでクリックできること（描画されているだけでなく当たり判定も生きている）。
+  await head.click();
+  await page.locator('.rightdock-tab[data-tab="settings"]').click();
+  await expect(page.locator('#ins-scene-kind')).toBeVisible({ timeout: 10_000 });
+});
+
 test('頭マーカーを選び暗転フェードを設定→保存→transitionData に at:"head" が出力される', async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (err) => {

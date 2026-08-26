@@ -1,8 +1,14 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { thumbSeekTime } from './materialList';
 
 interface VideoThumbProps {
   src: string;
+  /**
+   * 読み込めなかったときの表示。**未指定（undefined）のときだけ**既定の「動画」文字を出す。
+   * `null` は「何も出さない」という明示指定として尊重する（`??` だと既定へ落ちてしまう）。
+   * ゴミ箱カードのように「動画なし」の見た目が別に決まっている場所で差し替える。
+   */
+  fallback?: ReactNode;
 }
 
 /**
@@ -13,12 +19,14 @@ interface VideoThumbProps {
  * 接続枠を食い潰して「動画がくるくる・保存が終わらない」を誘発するため（2026-07-24 実測）。
  * 転写失敗（CORS 等）時は従来どおり <video> のまま、読込不可時は「動画」文字へフォールバック。
  */
-export function VideoThumb({ src }: VideoThumbProps) {
+export function VideoThumb({ src, fallback }: VideoThumbProps) {
   const ref = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
   const [poster, setPoster] = useState<string | null>(null);
 
-  if (failed) return <span className="ml-thumb-video">動画</span>;
+  if (failed) {
+    return <>{fallback === undefined ? <span className="ml-thumb-video">動画</span> : fallback}</>;
+  }
   if (poster !== null) return <img className="ml-thumb-video-el" src={poster} alt="" />;
 
   return (

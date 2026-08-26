@@ -4,7 +4,15 @@ import { useEventChannel } from './eventBus';
 
 type ProjectStatusPatch = Pick<
   ProjectSummary,
-  'id' | 'status' | 'activityLabel' | 'activityStartedAt' | 'activityStale' | 'lastEditedAt'
+  | 'id'
+  | 'status'
+  | 'stageManual'
+  | 'activityLabel'
+  | 'activityStartedAt'
+  | 'activityStale'
+  | 'lastEditedAt'
+  // 工程ステッパー（out/video.mp4 の増減で rendered が変わる）。
+  | 'steps'
 >;
 
 /**
@@ -51,9 +59,14 @@ export function useProjectsWatch(
       return;
     }
     if (d.type !== 'status' || typeof d.id !== 'string') return;
-    const { id, status, activityLabel, activityStartedAt, activityStale, lastEditedAt } = d;
+    const { id, status, stageManual, activityLabel, activityStartedAt, activityStale, lastEditedAt, steps } = d;
     onStatusRef.current(id, {
       status,
+      // steps はサーバが毎イベント必ず載せるため、undefined 上書きの心配はない。
+      steps,
+      // stage が null（自動判定）へ戻ったイベントでは JSON からキーごと落ちるため、
+      // ここで明示的に undefined を書き込んで前回の true を打ち消す（activityLabel 等と同じ流儀）。
+      stageManual,
       activityLabel,
       activityStartedAt,
       activityStale,

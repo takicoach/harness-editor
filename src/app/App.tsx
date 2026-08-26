@@ -29,6 +29,11 @@ import { Toolbar } from './panels/Toolbar';
 import { ExportDialog } from './panels/ExportDialog';
 import { isCutsOnly } from '../shared/cutsOnly';
 import { HeavyJobConfirmDialog } from './panels/HeavyJobConfirmDialog';
+import { TrashConfirmDialog } from './panels/TrashConfirmDialog';
+import { TrashDialog } from './panels/TrashDialog';
+import { deleteMaterialRequest } from './trashApi';
+import { collectUsedAssetKeys } from './edit/materialUsage';
+import { makeAssetKey } from '../shared/assetKey';
 import type { RenderOptions } from '../shared/renderPreset';
 import { LeftColumn, type LeftTab } from './panels/LeftColumn';
 import type { DrawingKind } from './preview/PreviewOverlay';
@@ -49,7 +54,7 @@ import type { TimelineDropApi } from './panels/Timeline';
 import { Preview } from './panels/Preview';
 import { HomeDashboard } from './panels/HomeDashboard';
 import { putJsonPost } from './fetchJson';
-import type { ProjectStage } from '../server/projectStatus';
+import type { ProjectStage } from '../shared/projectStage';
 import { TranscriptPanel } from './panels/TranscriptPanel';
 import { Inspector, SettingsTab } from './panels/Inspector';
 import { RightDock } from './panels/RightDock';
@@ -112,14 +117,18 @@ export function App() {
   const handleSetStage = useCallback(
     (id: string, stage: ProjectStage) => {
       const prev = projects.find((p) => p.id === id);
-      // review/published は即バッジへ反映（自動判定に戻す場合はクライアントで解決できないため refetch に委ねる）。
-      if (stage === 'review' || stage === 'published') patchProject(id, { status: stage });
+      // 手動 stage は表示ステータス全値（正本 shared/projectStage）を即バッジへ反映し、
+      // 「手動」バッジも同時に立てる。
+      // null（自動判定に戻す）はクライアントで status を解決できないため、
+      // 手動バッジの解除だけ先に反映して status 自体は refetch に委ねる。
+      if (stage !== null) patchProject(id, { status: stage, stageManual: true });
+      else patchProject(id, { stageManual: undefined });
       void putJsonPost('/api/project/status', { id, stage })
         .then(() => refreshProjects())
         .catch((err: unknown) => {
           // status フィールドのみ巻き戻す（prev を丸ごと書き戻すと、取得後に SSE 等で
           // 変化した他フィールド — activityLabel/lastEditedAt 等 — まで巻き戻ってしまうため）。
-          if (prev) patchProject(id, { status: prev.status });
+          if (prev) patchProject(id, { status: prev.status, stageManual: prev.stageManual });
           setStatusToast(err instanceof Error ? err.message : 'ステータスの更新に失敗しました');
         });
     },
@@ -198,10 +207,18 @@ export function App() {
 
   // ホームの「動画を作成する」。作成 API → 一覧更新 → そのまま新規プロジェクトを開く。
   // 素材は2経路: アップロード（実体をコピー）と、外部実体への symlink（コピーしない）。
-  const handleCreateProject = useCallback(async (name: string, source: CreateSource) => {
-    const { id } = source.kind === 'upload'
-      ? await createProjectRequest(name, source.file)
-      : await createProjectLinkRequest(name, source.path);
+  // アップロード経路では、サーバが登録済みフォルダから同一実体を探して
+  // 自動でリンク化することがある（コピーなし）。どちらになったかは黙らせず必ず伝える
+  // — 「コピーされていない＝外付けを外すと編集できない」は利用者が知るべき違いのため。
+  const handleCreateProject = useCallback(async (name: string, source: CreateSource, preferCopy: boolean) => {
+    if (source.kind === 'upload') {
+      const { id, imported } = await createProjectRequest(name, source.file, preferCopy);
+      if (imported !== undefined) setStatusToast(imported.message);
+      await refreshProjects();
+      selectProject(id);
+      return;
+    }
+    const { id } = await createProjectLinkRequest(name, source.path);
     await refreshProjects();
     selectProject(id);
   }, [refreshProjects, selectProject]);
@@ -238,6 +255,65 @@ export function App() {
   const baseProject = open.status === 'ready' ? open.project : null;
   const saveMeta = open.status === 'ready' ? open.save : null;
   const session = useEditSession(selectedId, baseProject, saveMeta);
+
+  // 素材削除フロー（ゴミ箱方式）。usedCount はクライアント編集状態＋サーバ走査の合算。
+  // force はユーザーが使用中警告を確認済みのときのみ true。
+  // 素材ゴミ箱一覧（プロジェクト単位）。
+  const [trashOpen, setTrashOpen] = useState(false);
+
+  const [trashConfirm, setTrashConfirm] = useState<{
+    kind: MaterialKind;
+    file: string;
+    usedCount: number;
+    force: boolean;
+  } | null>(null);
+
+  const handleDeleteMaterial = useCallback(
+    (kind: MaterialKind, file: string) => {
+      // 未保存の参照を含む現行編集状態から使用箇所を数える（サーバはディスクしか見えない）。
+      const used = session === null ? 0 : collectUsedAssetKeys(session.state).get(makeAssetKey(kind, file)) ?? 0;
+      setTrashConfirm({ kind, file, usedCount: used, force: used > 0 });
+    },
+    [session],
+  );
+
+  // 削除リクエスト送信中フラグ。送信中はダイアログの両ボタンを無効化する
+  // （連打で二重送信したり、二段目の警告が出た瞬間に Enter で確定するのを防ぐ）。
+  const [trashPending, setTrashPending] = useState(false);
+
+  const confirmTrashMaterial = useCallback(() => {
+    if (trashConfirm === null || selectedId === null || trashPending) return;
+    const { kind, file, force, usedCount } = trashConfirm;
+    setTrashPending(true);
+    void deleteMaterialRequest(selectedId, kind, file, force)
+      .then((res) => {
+        if (!res.ok) {
+          if (res.code === 'in-use') {
+            // サーバ走査で新たに見つかった使用箇所を合算して再確認（既定キャンセル）。
+            // ダイアログは key で再マウントされるため autoFocus（キャンセル）が効き直す。
+            setTrashConfirm({ kind, file, usedCount: usedCount + res.count, force: true });
+            return;
+          }
+          setTrashConfirm(null);
+          setStatusToast('使用状況を確認できないため、削除を保留しました');
+          return;
+        }
+        setTrashConfirm(null);
+        patchLibraries(res.libraries);
+        // usedCount はサーバがディスクを走査して数えた実数（force で消したときも数える）。
+        setStatusToast(
+          res.usedCount !== null && res.usedCount > 0
+            ? `ゴミ箱へ移動しました: ${file}（${res.usedCount} 箇所で使われていました）`
+            : `ゴミ箱へ移動しました: ${file}`,
+        );
+      })
+      .catch((err: unknown) => {
+        setTrashConfirm(null);
+        setStatusToast(err instanceof Error ? err.message : '削除に失敗しました');
+      })
+      .finally(() => setTrashPending(false));
+  }, [trashConfirm, selectedId, trashPending, patchLibraries]);
+
   // 未保存の変更があるままタブを閉じる／リロードしようとした時にブラウザ標準の確認を出す。
   useUnsavedGuard(session?.dirty ?? false);
 
@@ -773,6 +849,8 @@ export function App() {
           onDragStart={onMaterialDragStart}
           onDropFiles={open.status === 'ready' ? handleDropFiles : undefined}
           uploadStatus={uploadRemaining > 0 ? `アップロード中… 残り${uploadRemaining}件` : null}
+          onDeleteMaterial={open.status === 'ready' ? handleDeleteMaterial : undefined}
+          onOpenTrash={open.status === 'ready' ? () => setTrashOpen(true) : undefined}
         />
         <div className="estack">
           {open.status === 'idle' && (
@@ -782,6 +860,7 @@ export function App() {
               onPick={selectProject}
               onSetStage={handleSetStage}
               onCreate={handleCreateProject}
+              onProjectsChanged={() => void refreshProjects()}
             />
           )}
           {open.status === 'loading' && (
@@ -1006,6 +1085,31 @@ export function App() {
           running={render.heavyJobConfirm.pendingConfirm.running}
           onConfirm={render.heavyJobConfirm.confirm}
           onDismiss={render.heavyJobConfirm.dismiss}
+        />
+      )}
+      {trashConfirm !== null && (
+        <TrashConfirmDialog
+          // 使用中警告（2段目）へ昇格したら再マウントさせる。props 更新だけだと
+          // autoFocus が効き直さず、フォーカスが直前の「ゴミ箱へ移動」に残ったままになる。
+          key={`${trashConfirm.file}:${trashConfirm.usedCount}:${String(trashConfirm.force)}`}
+          name={trashConfirm.file}
+          usedCount={trashConfirm.usedCount}
+          mode="trash"
+          busy={trashPending}
+          onConfirm={confirmTrashMaterial}
+          onCancel={() => setTrashConfirm(null)}
+        />
+      )}
+      {trashOpen && selectedId !== null && (
+        <TrashDialog
+          projectId={selectedId}
+          onClose={() => setTrashOpen(false)}
+          // 全体 reload は編集中の未保存状態を捨てるため使わない。サーバが返す
+          // ライブラリパッチで部分反映する（パッチが無い異常時のみ reload に退避）。
+          onChanged={(libraries) => {
+            if (libraries === null) reload();
+            else patchLibraries(libraries);
+          }}
         />
       )}
       {statusToast !== null && (

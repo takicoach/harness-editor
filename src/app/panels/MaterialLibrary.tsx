@@ -10,6 +10,7 @@ import { VideoThumb } from './VideoThumb';
 import { useAudioClips } from '../audio/useAudioClips';
 import { normalizedVolumeFromSamples } from '../audio/loudness';
 import { Waveform } from '../timeline/Waveform';
+import { TrashIcon } from '../icons/TrashIcon';
 
 interface MaterialLibraryProps {
   kind: MaterialKind;
@@ -35,6 +36,10 @@ interface MaterialLibraryProps {
   onDropFiles?: (files: File[]) => void;
   /** アップロード進行表示（「アップロード中… 残りn件」）。null なら非表示。 */
   uploadStatus?: string | null;
+  /** 素材のゴミ箱移動。未指定なら削除 UI を出さない。 */
+  onDelete?: (kind: MaterialKind, file: string) => void;
+  /** ゴミ箱一覧を開く。未指定ならボタンを出さない。 */
+  onOpenTrash?: () => void;
 }
 
 export function MaterialLibrary({
@@ -53,6 +58,8 @@ export function MaterialLibrary({
   onDragStart,
   onDropFiles,
   uploadStatus,
+  onDelete,
+  onOpenTrash,
 }: MaterialLibraryProps) {
   const [selected, setSelected] = useState<string | null>(null);
   // OS ファイルをドラッグで重ねている間のハイライト。dragenter/leave は子要素間の
@@ -125,6 +132,16 @@ export function MaterialLibrary({
             {m.label}
           </button>
         ))}
+        {onOpenTrash !== undefined && (
+          <button
+            type="button"
+            className="ml-trash-open"
+            title="ゴミ箱（削除した素材の復元）"
+            onClick={onOpenTrash}
+          >
+            ゴミ箱
+          </button>
+        )}
       </div>
 
       {rows.length === 0 ? (
@@ -180,6 +197,28 @@ export function MaterialLibrary({
               >
                 挿入
               </span>
+              {onDelete !== undefined && (
+                <span
+                  className="ml-cell-delete"
+                  role="button"
+                  title="ゴミ箱へ移動"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(kind, row.file);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onDelete(kind, row.file);
+                    }
+                  }}
+                >
+                  <TrashIcon size={14} />
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -219,6 +258,28 @@ export function MaterialLibrary({
                 >
                   挿入
                 </span>
+                {onDelete !== undefined && (
+                  <span
+                    className="ml-row-delete"
+                    role="button"
+                    title="ゴミ箱へ移動"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(kind, row.file);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDelete(kind, row.file);
+                      }
+                    }}
+                  >
+                    <TrashIcon size={14} />
+                  </span>
+                )}
               </div>
             );
           })}

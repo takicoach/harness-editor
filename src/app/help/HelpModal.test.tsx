@@ -12,9 +12,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { HelpModal } from './HelpModal';
 import { HELP_TOPICS } from './helpTopics';
+import { featureSeenKey, isNewGeneration, markFeatureSeen } from '../featureSeen';
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
 });
 
 describe('HelpModal', () => {
@@ -135,5 +137,79 @@ describe('HelpModal', () => {
     render(<HelpModal onClose={vi.fn()} onRestartTutorial={onRestartTutorial} />);
     fireEvent.click(screen.getByText('▶ もう一度最初から見る'));
     expect(onRestartTutorial).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('HelpModal の NEW バッジ', () => {
+  /**
+   * addedIn が現行世代の項目（＝NEW 候補）。既読化はユーザーの明示クリックのときだけなので、
+   * 初期選択・検索の先頭寄せで自動選択された項目を除外する必要はない。
+   */
+  const newTopics = HELP_TOPICS.filter((t) => isNewGeneration(t.addedIn));
+
+  function badgeIds(): string[] {
+    const dialog = screen.getByTestId('help-dialog');
+    return Array.from(dialog.querySelectorAll('.help-item-wrap')).flatMap((wrap) =>
+      wrap.querySelector('.help-new-badge') === null
+        ? []
+        : [wrap.querySelector('.help-item')?.getAttribute('data-topic-id') ?? ''],
+    );
+  }
+
+  it('新機能の項目にだけ NEW バッジが出る', () => {
+    expect(newTopics.length).toBeGreaterThan(0);
+    render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    expect(badgeIds().sort()).toEqual(newTopics.map((t) => t.id).sort());
+  });
+
+  it('項目を開くとその項目のバッジだけ消え、既読が localStorage に残る', () => {
+    const target = newTopics[0]!;
+    render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    const dialog = screen.getByTestId('help-dialog');
+    fireEvent.click(dialog.querySelector(`.help-item[data-topic-id="${target.id}"]`)!);
+    expect(badgeIds()).not.toContain(target.id);
+    expect(badgeIds().length).toBe(newTopics.length - 1);
+    expect(localStorage.getItem(featureSeenKey('help', target.id))).not.toBeNull();
+    // 既読化は図鑑スコープだけ（同じ id を持つチュートリアル側の NEW を消さない）。
+    expect(localStorage.getItem(featureSeenKey('tutorial', target.id))).toBeNull();
+  });
+
+  it('既読のまま開き直してもバッジは復活しない', () => {
+    const target = newTopics[0]!;
+    markFeatureSeen('help', target.id);
+    render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    expect(badgeIds()).not.toContain(target.id);
+  });
+
+  it('チュートリアルで同じ id を見ていても図鑑側の NEW は残る', () => {
+    const target = newTopics[0]!;
+    markFeatureSeen('tutorial', target.id);
+    render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    expect(badgeIds()).toContain(target.id);
+  });
+
+  it('自動選択（初期表示・検索の先頭寄せ）では既読にしない', () => {
+    render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    const dialog = screen.getByTestId('help-dialog');
+    // 開いただけ＝先頭項目が自動選択された状態では、まだ誰も既読になっていない。
+    expect(badgeIds().sort()).toEqual(newTopics.map((t) => t.id).sort());
+    for (const t of HELP_TOPICS) {
+      expect(localStorage.getItem(featureSeenKey('help', t.id))).toBeNull();
+    }
+    // 検索で絞り込むと先頭へ寄る（＝自動選択）が、それでも既読化しない。
+    const target = newTopics[0]!;
+    const input = dialog.querySelector('.help-search-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: target.title } });
+    expect(dialog.querySelector('.help-detail-pane .help-cap')?.textContent).toBe(target.title);
+    expect(localStorage.getItem(featureSeenKey('help', target.id))).toBeNull();
+  });
+
+  it('前へ／次へでの移動は明示操作なので既読にする', () => {
+    render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    const dialog = screen.getByTestId('help-dialog');
+    const second = HELP_TOPICS[1]!;
+    fireEvent.click(dialog.querySelector('.help-detail-pane .help-next')!);
+    expect(dialog.querySelector('.help-detail-pane .help-cap')?.textContent).toBe(second.title);
+    expect(localStorage.getItem(featureSeenKey('help', second.id))).not.toBeNull();
   });
 });

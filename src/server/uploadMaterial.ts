@@ -50,6 +50,11 @@ function uniqueName(dir: string, name: string): string {
   throw new HttpError(409, `同名ファイルが多すぎて保存できません: ${name}`);
 }
 
+/** 素材のプロジェクト起点相対パス（public/<subdir>/<file>）。削除 API・ゴミ箱と共有する。 */
+export function materialRelPath(kind: UploadKind, file: string): string {
+  return join('public', KIND_CONFIG[kind].subdir, file);
+}
+
 /**
  * 素材ファイルをプロジェクトの public 配下へ保存し、保存されたファイル名を返す。
  * 同名衝突時は上書きせず連番を付ける（既存素材を使っている編集を壊さないため）。

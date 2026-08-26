@@ -2,7 +2,6 @@
  * @vitest-environment jsdom
  *
  * 選択枠の実測（measured）とフォールバック（fallback）の結線テスト。
- * 設計書: docs/specs/2026-08-19-measured-overlay-box-design.md §1 / §4 / §5
  *
  * jsdom の getBoundingClientRect は既定で全ゼロ＝実測ゼロなので、**フォールバック経路**は
  * そのまま検証できる（設計 §4）。**実測経路**は getBoundingClientRect を差し替えて

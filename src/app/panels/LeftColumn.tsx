@@ -34,6 +34,8 @@ interface LeftColumnProps {
   onDragStart?: (kind: MaterialKind, file: string, e: React.PointerEvent) => void;
   onDropFiles?: (files: File[]) => void;
   uploadStatus?: string | null;
+  onDeleteMaterial?: (kind: MaterialKind, file: string) => void;
+  onOpenTrash?: () => void;
 }
 
 export function LeftColumn(props: LeftColumnProps) {
@@ -102,6 +104,8 @@ export function LeftColumn(props: LeftColumnProps) {
           onDragStart={props.onDragStart}
           onDropFiles={props.onDropFiles}
           uploadStatus={props.uploadStatus}
+          onDelete={props.onDeleteMaterial}
+          onOpenTrash={props.onOpenTrash}
         />
       )}
     </div>

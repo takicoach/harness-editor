@@ -1749,6 +1749,20 @@ function TimelineBody({
             seekToOriginal(xToFrameMapped(x, pxPerFrame, displayMap));
           }}
         >
+          {/* つなぎ目マーク（シーン転換の ◇）。**.tl-scroll の先頭に置くこと**（2026-08-26 レビュー I-1）。
+              層は position:sticky で .tl-body のスクロール域上端に貼り付くが、sticky は
+              「本来の流れ位置」より上へは出られない。CutTrack の後ろに置くと scrollTop 0 では
+              トラックの中ほどに沈み、少しスクロールして初めて上端へ来る（＝位置が動いて見える）。
+              クリックで selectJoin。 */}
+          <JoinMarkers
+            joins={joins}
+            sceneTransitions={state.sceneTransitions}
+            pxPerFrame={pxPerFrame}
+            map={displayMap}
+            tailFrame={cutSelBounds.end}
+            selectedAt={state.selection?.kind === 'join' ? state.selection.at : null}
+            onSelect={(at) => session.apply(selectJoin(state, at))}
+          />
           <TimelineRuler
             totalFrames={totalFrames}
             pxPerFrame={pxPerFrame}
@@ -1821,16 +1835,6 @@ function TimelineBody({
               // カット内側選択を得る唯一の導線。クランプを経由せず直接セットする（spec 実装制約）。
               setCutSelection({ start: region.start, end: region.end });
             }}
-          />
-          {/* つなぎ目マーク: CutTrack 直後・他トラックより手前。クリックで selectJoin。 */}
-          <JoinMarkers
-            joins={joins}
-            sceneTransitions={state.sceneTransitions}
-            pxPerFrame={pxPerFrame}
-            map={displayMap}
-            tailFrame={cutSelBounds.end}
-            selectedAt={state.selection?.kind === 'join' ? state.selection.at : null}
-            onSelect={(at) => session.apply(selectJoin(state, at))}
           />
           {/* 並び順: 動画→じまく→テロップ→画像→サブ動画→BGM→効果音（タイトルはテロップへ一本化） */}
           {/* じまく行（字幕テロップ・variant=subtitle）*/}

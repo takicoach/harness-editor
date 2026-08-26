@@ -4,10 +4,11 @@ import { resolveStatusView, formatRelativeTime, statusLabel } from './projectSta
 describe('statusLabel', () => {
   it('各ステータスに日本語ラベルを返す', () => {
     expect(statusLabel('idle')).toBe('未着手');
-    expect(statusLabel('editing')).toBe('編集中');
+    expect(statusLabel('transcribe')).toBe('文字起こし');
+    expect(statusLabel('cut')).toBe('カット');
+    expect(statusLabel('telop')).toBe('テロップ');
+    expect(statusLabel('audio')).toBe('SE・BGM');
     expect(statusLabel('rendered')).toBe('書き出し済');
-    expect(statusLabel('review')).toBe('レビュー待ち');
-    expect(statusLabel('published')).toBe('公開済');
   });
 });
 
@@ -15,21 +16,16 @@ describe('resolveStatusView', () => {
   const now = Date.parse('2026-07-09T12:00:00Z');
 
   it('activity が無ければ status のラベル・クラスを返す', () => {
-    const v = resolveStatusView({ status: 'editing' }, now);
-    expect(v.label).toBe('編集中');
-    expect(v.className).toContain('status-editing');
-    expect(v.colorClass).toBe('status-editing');
+    const v = resolveStatusView({ status: 'telop' }, now);
+    expect(v.label).toBe('テロップ');
+    expect(v.className).toContain('status-telop');
+    expect(v.colorClass).toBe('status-telop');
     expect(v.spinner).toBe(false);
-    expect(v.dimmed).toBe(false);
-  });
-
-  it('published は dimmed=true', () => {
-    expect(resolveStatusView({ status: 'published' }, now).dimmed).toBe(true);
   });
 
   it('activity ありは工程名を最優先で表示しスピナーを回す', () => {
     const v = resolveStatusView(
-      { status: 'editing', activityLabel: 'カット中', activityStartedAt: new Date(now - 5 * 60 * 1000).toISOString() },
+      { status: 'cut', activityLabel: 'カット中', activityStartedAt: new Date(now - 5 * 60 * 1000).toISOString() },
       now,
     );
     expect(v.label).toBe('カット中');
@@ -39,7 +35,7 @@ describe('resolveStatusView', () => {
 
   it('activityStartedAt が2時間を超過している場合、now を渡した時点で stale と判定される（クライアント自前判定）', () => {
     const startedAt = new Date(now - (2 * 60 * 60 * 1000 + 1)).toISOString();
-    const v = resolveStatusView({ status: 'editing', activityLabel: 'テロップ挿入中', activityStartedAt: startedAt }, now);
+    const v = resolveStatusView({ status: 'cut', activityLabel: 'テロップ挿入中', activityStartedAt: startedAt }, now);
     expect(v.label).toBe('テロップ挿入中（中断?）');
     expect(v.spinner).toBe(false);
     expect(v.className).toContain('status-stale');
@@ -48,7 +44,7 @@ describe('resolveStatusView', () => {
   it('activityStartedAt が2時間以内なら stale ではない（サーバーの activityStale=true を無視し自前判定を優先する）', () => {
     const startedAt = new Date(now - 30 * 60 * 1000).toISOString();
     const v = resolveStatusView(
-      { status: 'editing', activityLabel: 'テロップ挿入中', activityStartedAt: startedAt, activityStale: true },
+      { status: 'cut', activityLabel: 'テロップ挿入中', activityStartedAt: startedAt, activityStale: true },
       now,
     );
     expect(v.label).toBe('テロップ挿入中');
@@ -56,7 +52,7 @@ describe('resolveStatusView', () => {
   });
 
   it('activityStartedAt が解析不能なら stale 扱いにしない', () => {
-    const v = resolveStatusView({ status: 'editing', activityLabel: '処理中', activityStartedAt: 'invalid' }, now);
+    const v = resolveStatusView({ status: 'cut', activityLabel: '処理中', activityStartedAt: 'invalid' }, now);
     expect(v.spinner).toBe(true);
     expect(v.label).toBe('処理中');
   });
@@ -67,12 +63,12 @@ describe('resolveStatusView', () => {
     expect(v.spinner).toBe(false);
   });
 
-  it('published + activity でも dimmed は保たれる', () => {
+  it('書き出し済み + activity では activity が優先される', () => {
     const v = resolveStatusView(
-      { status: 'published', activityLabel: '再書き出し中', activityStartedAt: new Date(now - 1000).toISOString() },
+      { status: 'rendered', activityLabel: '再書き出し中', activityStartedAt: new Date(now - 1000).toISOString() },
       now,
     );
-    expect(v.dimmed).toBe(true);
+    expect(v.label).toBe('再書き出し中');
     expect(v.spinner).toBe(true);
   });
 });

@@ -2,7 +2,6 @@
  * @vitest-environment jsdom
  *
  * 端ドラッグ自動スクロール（edge-autoscroll）の UI レベル結線テスト。
- * 設計書: docs/specs/2026-08-20-edge-autoscroll-add-subtitle-design.md
  *
  * 速度そのもの（ゾーン・比例・クランプ）は純関数 `edgeScrollVelocity` のユニット
  * （timelineScroll.test.ts）が担う。ここは **偽 rAF で回した結果 `.tl-body` の

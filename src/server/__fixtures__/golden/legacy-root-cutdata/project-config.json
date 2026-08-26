@@ -1,0 +1,7 @@
+{
+  "format": "short",
+  "resolution": { "width": 1080, "height": 1920 },
+  "fps": 60,
+  "durationFrames": 12000,
+  "sourceVideo": "sample.mp4"
+}

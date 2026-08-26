@@ -15,6 +15,7 @@ import { isShapeInstalled } from './installShape';
 import { isTransitionInstalled } from './installTransition';
 import { isDenoiseApplied } from './denoiseState';
 import { inspectVideoLink, type VideoLinkStatus } from './videoLink';
+import { VIDEO_EXTENSIONS } from '../shared/videoExtensions';
 
 const TELOP_DIR = 'テロップテンプレート';
 const TELOP_DATA_REL = `src/${TELOP_DIR}/telopData.ts`;
@@ -27,8 +28,12 @@ const INSERT_IMAGE_DATA_REL = 'src/InsertImage/insertImageData.ts';
 /** 画像素材として認識する拡張子（uploadMaterial と共有）。 */
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 const INSERT_VIDEO_DATA_REL = 'src/InsertVideo/insertVideoData.ts';
-/** サブ動画素材として認識する拡張子（uploadMaterial と共有）。 */
-export const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm', '.m4v'];
+/**
+ * サブ動画素材として認識する拡張子。正本は `src/shared/videoExtensions.ts`。
+ * 既存の import 元（browsePaths / createProject / relinkVideo / uploadMaterial）を
+ * 壊さないよう、ここは再 export に徹する（リテラルを書き戻さないこと）。
+ */
+export { VIDEO_EXTENSIONS };
 const BGM_DATA_REL = 'src/Bgm/bgmData.ts';
 const TITLE_DATA_REL = 'src/Title/titleData.ts';
 const INSERT_SHAPE_DATA_REL = 'src/InsertShape/shapeData.ts';

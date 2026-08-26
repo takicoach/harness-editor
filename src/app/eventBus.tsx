@@ -18,7 +18,8 @@
  * **onerror では絶対に close しない**（自動再接続を殺すと恒久停止する — 既知の学び
  * feedback-sse-eventsource-no-reconnect）。close するのは unmount / projectId 変更時のみ。
  *
- * 設計書: docs/specs/2026-07-23-sse-unified-connection.md
+ * 契約: SSE は**この 1 本へ統合**する。新しい通知が要るときは新エンドポイントを
+ * 足すのではなく、この接続のチャネルを増やす（接続数はブラウザの同一オリジン上限を食う）。
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 

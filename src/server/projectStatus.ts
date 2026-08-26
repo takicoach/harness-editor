@@ -1,12 +1,20 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpError } from './http';
+import type { ProjectSteps } from '../shared/types';
 import { STALE_AFTER_MS } from '../shared/staleThreshold';
+import {
+  isDisplayStatus,
+  parseProjectStage,
+  DISPLAY_STATUSES,
+  type DisplayStatus,
+  type ProjectStage,
+} from '../shared/projectStage';
 
 const TELOP_DIR = 'テロップテンプレート';
 
-/** `.sme/status.json` に書かれる手動ステージ。null は自動判定に戻すことを表す。 */
-export type ProjectStage = 'review' | 'published' | null;
+/** 後方互換 re-export（App.tsx / HomeDashboard 等の既存 import 先）。正本は shared/projectStage。 */
+export type { ProjectStage, DisplayStatus } from '../shared/projectStage';
 
 /** AI 作業中の activity（存在すれば最優先でバッジ表示）。 */
 export interface StatusActivity {
@@ -23,41 +31,51 @@ export interface StatusFileData {
 
 /** resolveStatus に渡す解決済みの事実（IO 済み）。テスト容易化のため純データにする。 */
 export interface ResolveStatusInput {
-  /** out/video.mp4 が存在するか。 */
-  hasRenderedOutput: boolean;
-  /** telopData 以外の編集データファイルがいずれか存在するか。 */
-  hasEditData: boolean;
+  /** 工程ステッパーの判定結果（resolveProjectSteps）。自動判定の唯一の材料。 */
+  steps: ProjectSteps;
   stage: ProjectStage;
   activity: StatusActivity | null;
   /** 現在時刻（ミリ秒）。stale 判定に使う。テストで注入する。 */
   now: number;
 }
 
-/** 解決済みの表示ステータス。 */
-export type DisplayStatus = 'idle' | 'editing' | 'rendered' | 'review' | 'published';
-
 /** resolveStatus の返り値（ProjectSummary へ spread される付加フィールド）。 */
 export interface ResolvedStatus {
   status: DisplayStatus;
+  /** 手動 stage による固定か（.sme/status.json の stage が非 null）。「手動」バッジ表示用。 */
+  stageManual?: boolean;
   activityLabel?: string;
   activityStartedAt?: string;
   activityStale?: boolean;
 }
 
 /**
+ * 工程ステッパーの結果から自動ステータスを導く純関数＝「最初の未完了工程」。
+ * 判定材料は steps のみ（工程ステッパーと同じ事実を二重に判定しない）。
+ * 全工程を終えていても未書き出しなら最後の編集工程 'audio' に留まる
+ * （書き出しは工程ではなく成果物の有無で 'rendered' へ移る）。
+ */
+export function autoStatusFromSteps(steps: ProjectSteps): DisplayStatus {
+  if (steps.rendered) return 'rendered';
+  const telopDone = steps.telop === 'nonempty';
+  // どの工程にも着手していないものだけを「未着手」と呼ぶ（着手済みなら未完了工程を指す）。
+  if (!steps.transcribe && !steps.cut && !telopDone && !steps.audio) return 'idle';
+  if (!steps.transcribe) return 'transcribe';
+  if (!steps.cut) return 'cut';
+  if (!telopDone) return 'telop';
+  return 'audio';
+}
+
+/**
  * ステータスを解決する純関数。
- * 優先順位: 手動 stage（review/published）> 自動判定（rendered > editing > idle）。
+ * 優先順位: 手動 stage（D&D・バッジメニューでの固定）> 自動判定（autoStatusFromSteps）。
  * activity は status を変えず、付加フィールド（バッジ用）として返す。
  */
 export function resolveStatus(input: ResolveStatusInput): ResolvedStatus {
-  const auto: DisplayStatus = input.hasRenderedOutput
-    ? 'rendered'
-    : input.hasEditData
-      ? 'editing'
-      : 'idle';
-  const status: DisplayStatus = input.stage ?? auto;
+  const status: DisplayStatus = input.stage ?? autoStatusFromSteps(input.steps);
 
   const out: ResolvedStatus = { status };
+  if (input.stage !== null) out.stageManual = true;
   if (input.activity) {
     out.activityLabel = input.activity.label;
     out.activityStartedAt = input.activity.startedAt;
@@ -76,10 +94,8 @@ function parseActivity(value: unknown): StatusActivity | null {
   return { label: a['label'], startedAt: a['startedAt'] };
 }
 
-/** unknown を検証して ProjectStage へ。不正・未知値は null。 */
-function parseStage(value: unknown): ProjectStage {
-  return value === 'review' || value === 'published' ? value : null;
-}
+/** `.sme/status.json` の読み取り上限（巨大ファイルによる一覧走査の DoS 防止）。 */
+export const MAX_STATUS_FILE_BYTES = 64 * 1024;
 
 /**
  * `.sme/status.json` を読み取り正規化する。
@@ -90,6 +106,13 @@ export function readStatusFile(dir: string): StatusFileData {
   const path = join(dir, '.sme', 'status.json');
   let raw: string;
   try {
+    // FIFO やキャラクタデバイスは size=0 で上限を素通りし、readFileSync が書き手を待って
+    // 恒久ブロックする（scanProjects→resolveProjectStatus 経由で一覧 API と SSE が固まる）。
+    // projectSteps / scanProjects と同じガードをこの走査経路にも一貫適用する。
+    const st = statSync(path);
+    if (!st.isFile() || st.size > MAX_STATUS_FILE_BYTES) {
+      return { stage: null, activity: null };
+    }
     raw = readFileSync(path, 'utf8');
   } catch {
     return { stage: null, activity: null };
@@ -105,7 +128,7 @@ export function readStatusFile(dir: string): StatusFileData {
     return { stage: null, activity: null };
   }
   const obj = parsed as Record<string, unknown>;
-  return { stage: parseStage(obj['stage']), activity: parseActivity(obj['activity']) };
+  return { stage: parseProjectStage(obj['stage']), activity: parseActivity(obj['activity']) };
 }
 
 /**
@@ -140,15 +163,16 @@ function mtimeOrNull(path: string): number | null {
 /**
  * プロジェクトディレクトリからステータス（表示用フィールド）を解決する。
  * summarize から呼ばれ、返り値を ProjectSummary へ spread する。
+ * 自動判定の材料は呼び出し側が解決済みの steps（工程ステッパーと同一の値）を渡す
+ * — 同じ事実をここで再判定しない。ここが見る IO は mtime（lastEditedAt）だけ。
  */
 export function resolveProjectStatus(
   dir: string,
+  steps: ProjectSteps,
   now: number = Date.now(),
 ): ResolvedStatus & { lastEditedAt?: number } {
   const { stage, activity } = readStatusFile(dir);
-  const hasRenderedOutput = existsSync(join(dir, 'out', 'video.mp4'));
 
-  let hasEditData = false;
   let lastEditedAt: number | undefined;
   // telopData は lastEditedAt に算入するが「編集された」判定には使わない
   // （生成直後から必ず存在するため）。
@@ -159,11 +183,10 @@ export function resolveProjectStatus(
   for (const rel of EDIT_DATA_RELS) {
     const mt = mtimeOrNull(join(dir, rel));
     if (mt === null) continue;
-    hasEditData = true;
     if (lastEditedAt === undefined || mt > lastEditedAt) lastEditedAt = mt;
   }
 
-  const resolved = resolveStatus({ hasRenderedOutput, hasEditData, stage, activity, now });
+  const resolved = resolveStatus({ steps, stage, activity, now });
   return lastEditedAt === undefined ? resolved : { ...resolved, lastEditedAt };
 }
 
@@ -196,8 +219,11 @@ export function validateStatusRequest(body: unknown): StatusRequest {
     throw new HttpError(400, 'id が必要です');
   }
   const stage = b['stage'];
-  if (stage !== 'review' && stage !== 'published' && stage !== null) {
-    throw new HttpError(400, 'stage は "review" / "published" / null のいずれかである必要があります');
+  if (stage !== null && !isDisplayStatus(stage)) {
+    throw new HttpError(
+      400,
+      `stage は ${DISPLAY_STATUSES.map((s) => `"${s}"`).join(' / ')} / null のいずれかである必要があります`,
+    );
   }
   return { id: b['id'], stage };
 }

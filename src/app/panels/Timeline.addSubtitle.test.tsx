@@ -2,7 +2,6 @@
  * @vitest-environment jsdom
  *
  * ＋追加メニュー「字幕」の UI レベル結線テスト。
- * 設計書: docs/specs/2026-08-20-edge-autoscroll-add-subtitle-design.md
  *
  * 区間クランプ・no-op・継承の純ロジックは cutOps.test.ts が担う。ここは
  * **メニュー項目 → addSubtitleAtFrame → 状態反映**の結線と、追加できなかったときに

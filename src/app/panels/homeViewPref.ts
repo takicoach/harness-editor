@@ -1,4 +1,4 @@
-/** ホームの表示モード。panel = Notion 風ギャラリー（横並びカード）、kanban = ステータス5列。 */
+/** ホームの表示モード。panel = Notion 風ギャラリー（横並びカード）、kanban = 工程6列。 */
 export type HomeView = 'panel' | 'kanban';
 
 const VIEWS: readonly HomeView[] = ['panel', 'kanban'];

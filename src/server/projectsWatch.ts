@@ -2,13 +2,25 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { readdirSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { resolveProjectStatus } from './projectStatus';
+import { resolveProjectSteps } from './projectSteps';
 import { isHarnessProject } from './scanProjects';
 import type { ProjectSummary } from '../shared/types';
 
 /** ホーム画面のライブ更新で配信する 1 プロジェクト分のステータス差分。 */
 export type ProjectStatusEvent = Pick<
   ProjectSummary,
-  'id' | 'status' | 'activityLabel' | 'activityStartedAt' | 'activityStale' | 'lastEditedAt'
+  | 'id'
+  | 'status'
+  | 'stageManual'
+  | 'activityLabel'
+  | 'activityStartedAt'
+  | 'activityStale'
+  | 'lastEditedAt'
+  // out/video.mp4 の増減は工程ステッパーの rendered を変える。差分に載せないと
+  // ホームのステッパーだけが古いまま残る（stageManual と同型の取りこぼし）。
+  // 既知の制限: watcher は .sme と out しか通さないため、live に変わるのは rendered だけで、
+  // transcribe/cut/telop/audio は次の refreshProjects まで更新されない。
+  | 'steps'
 >;
 
 interface WatchAllProjectsStatusOptions {
@@ -104,8 +116,9 @@ export function watchAllProjectsStatus(
         timers.delete(id);
         const dir = join(root, id);
         try {
-          const status = resolveProjectStatus(dir, now());
-          onEvent({ id, ...status });
+          const steps = resolveProjectSteps(dir);
+          const status = resolveProjectStatus(dir, steps, now());
+          onEvent({ id, ...status, steps });
         } catch (err) {
           console.warn(`[sme] watchAllProjectsStatus: プロジェクト "${id}" の解決に失敗:`, err);
         }

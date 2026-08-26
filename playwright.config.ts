@@ -29,7 +29,7 @@ export default defineConfig({
       SME_NO_BACKGROUND_INSTALL: '1',
       // 初回チュートリアルの自動開始を殺す（各テストは新規コンテキスト＝localStorage 空のため、
       // これが無いと全テストの起動時にオーバーレイが出てしまう）。チュートリアル自体の e2e は
-      // ⚙メニューの「チュートリアルをもう一度見る」経由で起動する（env と無関係に動く）。
+      // ⚙メニュー →「チュートリアル図鑑」→「もう一度最初から見る」経由で起動する（env と無関係に動く）。
       SME_TUTORIAL: '0',
       // 自動保存は既定 ON（4s 静止で発火）だが、既存の保存系 e2e は「保存」ボタン
       // クリックを操作対象にしており、自動保存が横から発火すると `.tb-save.enabled`
@@ -87,9 +87,38 @@ export default defineConfig({
       testMatch: ['claude-terminal.spec.ts', 'ai-tool-switch.spec.ts'],
       workers: 1,
     },
+    // project-status-dashboard.spec.ts と kanban-dnd.spec.ts は共有フィクスチャ
+    // sample-project/.sme/status.json を書いて消す。ファイル内 mode:'serial' が守るのは
+    // ファイル内の順序だけで、default project は複数 worker が**ファイル単位で並列**に走るため、
+    // 2ファイルが同時に走ると片方の afterEach の削除がもう片方の poll を壊す（実測でフレーク）。
+    // 同じ worker に固定して直列化する。
+    // trash.spec.ts も同じ理由でここに入れる: フィクスチャ root 直下に使い捨て
+    // プロジェクトを作って消す（＝ホーム一覧の件数が動く）ため、カードを数える
+    // project-status-dashboard / kanban-dnd と同時に走らせられない。
+    // なお sample-project 自体は触らない — default project 側の複数 spec が
+    // afterEach で `git clean -fdx <sample-project>` を掛けており、workers:1 では
+    // その並列を止められないため（実測: フルスイート時のみ 2 回連続で赤）。
+    {
+      name: 'project-status',
+      // home-bulk-trash.spec.ts も同じ理由（使い捨てプロジェクトを作って消す＝件数が動く）。
+      testMatch: [
+        'project-status-dashboard.spec.ts',
+        'kanban-dnd.spec.ts',
+        'trash.spec.ts',
+        'home-bulk-trash.spec.ts',
+      ],
+      workers: 1,
+    },
     {
       name: 'default',
-      testIgnore: ['claude-terminal.spec.ts', 'ai-tool-switch.spec.ts'],
+      testIgnore: [
+        'claude-terminal.spec.ts',
+        'ai-tool-switch.spec.ts',
+        'project-status-dashboard.spec.ts',
+        'kanban-dnd.spec.ts',
+        'trash.spec.ts',
+        'home-bulk-trash.spec.ts',
+      ],
     },
   ],
 });

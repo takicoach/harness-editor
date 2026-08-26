@@ -104,9 +104,9 @@ describe('useProjectsWatch', () => {
     );
     const es = FakeEventSource.instances[0]!;
     act(() => {
-      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'editing' });
+      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'telop' });
     });
-    expect(onStatus).toHaveBeenCalledWith('p1', expect.objectContaining({ status: 'editing' }));
+    expect(onStatus).toHaveBeenCalledWith('p1', expect.objectContaining({ status: 'telop' }));
   });
 
   it('他チャネル（watch 等）のメッセージは無視する', () => {
@@ -132,8 +132,68 @@ describe('useProjectsWatch', () => {
     );
     const es = FakeEventSource.instances[0]!;
     act(() => {
-      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'editing' });
+      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'telop' });
     });
     expect(onStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('useProjectsWatch の stageManual 配信', () => {
+  it('stage 非 null → null に変わったイベントで stageManual が残留しない', () => {
+    const patches: Array<Record<string, unknown>> = [];
+    render(
+      <EventBusProvider>
+        <Probe
+          enabled={true}
+          onStatus={(_id, patch) => {
+            patches.push(patch as Record<string, unknown>);
+          }}
+        />
+      </EventBusProvider>,
+    );
+    const es = FakeEventSource.instances[0]!;
+
+    act(() => {
+      // 手動 stage 設定時。サーバは stageManual: true を載せる。
+      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'telop', stageManual: true });
+      // 自動判定へ戻したとき。サーバ側は optional なので JSON からキーごと落ちる。
+      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'cut' });
+    });
+
+    expect(patches).toHaveLength(2);
+    expect(patches[0]!.stageManual).toBe(true);
+    // patchProject は {...prev, ...patch} なので、解除には「キーが存在して undefined」が要る。
+    expect(Object.prototype.hasOwnProperty.call(patches[1]!, 'stageManual')).toBe(true);
+    const merged = { ...patches[0]!, ...patches[1]! };
+    expect(merged.stageManual ?? false).toBe(false);
+  });
+});
+
+describe('useProjectsWatch の steps 配信', () => {
+  it('SSE の steps 差分をそのままパッチとして渡す（ホームのステッパーが古いまま残らない）', () => {
+    const patches: Array<Record<string, unknown>> = [];
+    render(
+      <EventBusProvider>
+        <Probe
+          enabled={true}
+          onStatus={(_id, patch) => {
+            patches.push(patch as Record<string, unknown>);
+          }}
+        />
+      </EventBusProvider>,
+    );
+    const es = FakeEventSource.instances[0]!;
+
+    act(() => {
+      es.triggerMessage('projects', {
+        type: 'status',
+        id: 'p1',
+        status: 'rendered',
+        steps: { transcribe: true, cut: true, telop: 'nonempty', audio: true, rendered: true },
+      });
+    });
+
+    expect(patches).toHaveLength(1);
+    expect((patches[0]!.steps as { rendered?: boolean } | undefined)?.rendered).toBe(true);
   });
 });

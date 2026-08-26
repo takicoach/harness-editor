@@ -195,7 +195,7 @@ export function setAllTelopPositions(
 }
 
 // ---------------------------------------------------------------------------
-// 複数選択の一括 ops（設計書 §3 `docs/specs/2026-08-18-telop-multiselect-design.md`）
+// 複数選択の一括 ops
 //
 // 共通契約:
 // - `ids` は Set 化して重複を無視する。`telops` に実在しない ID は無視する。

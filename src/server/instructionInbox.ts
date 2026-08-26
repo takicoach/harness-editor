@@ -54,6 +54,22 @@ export interface InstructionInbox {
   abort(id: string): InstructionRecord | null;
   /** projectId のレコードを作成順で返す。 */
   list(projectId: string): InstructionRecord[];
+  /**
+   * そのプロジェクトの指示が AI へ配送済み（processing）で報告待ちか。
+   * プロジェクト削除の busy 判定に使う: processing の間はエージェントがそのプロジェクトの
+   * ファイルを書き換えている最中で、ディレクトリごと rename すると消えたパスへ書き続ける。
+   * pending は「まだ誰も取っていない」ので削除を止めない（配送は削除後に対象不在で failed になる）。
+   */
+  hasProcessing(projectId: string): boolean;
+  /**
+   * そのプロジェクトの pending を一括で failed（`PROJECT_NOT_FOUND_REPLY`）にする。失効件数を返す。
+   * プロジェクト削除が通った直後に呼ぶ: pending は「まだ誰も取っていない」ので削除は止めないが、
+   * 失効させずに残すと直後の poll が takeNext で processing にして消えたパスへ配送してしまう
+   * （エージェントが不在のディレクトリで作業を始める）。さらにその stale な processing は
+   * hasProcessing を真にし続けるため、復元後にもう一度削除しようとしても busy で弾かれる。
+   * 文言と規約は起動時復元（attachPersistence の projectDir 解決不能な pending）と同一。
+   */
+  failPendingFor(projectId: string): number;
   /** レコード変化（enqueue / updateStatus）を購読する。SSE 用。解除関数を返す。 */
   subscribe(listener: (record: InstructionRecord) => void): () => void;
   /** エージェント在席シグナルを返す（/api/agent-status 用）。projectId 指定時は dedicated も付与。 */
@@ -78,8 +94,8 @@ export interface InstructionInbox {
 const RESTART_UNKNOWN_REPLY =
   'エディタ再起動により結果を確認できませんでした。動画の状態を確認し、必要な場合のみもう一度指示してください';
 
-/** 復元時に projectDir を解決できなかった pending レコードへ付ける返答。 */
-const PROJECT_NOT_FOUND_REPLY = '対象プロジェクトが見つかりません';
+/** 対象プロジェクトが存在しない pending レコードへ付ける返答（起動時復元・削除直後で共通）。 */
+export const PROJECT_NOT_FOUND_REPLY = '対象プロジェクトが見つかりません';
 
 /**
  * 在席シグナルから「接続中」を判定する純関数。
@@ -289,6 +305,30 @@ export function createInstructionInbox(opts?: {
 
     list(projectId) {
       return [...records.values()].filter((r) => r.projectId === projectId);
+    },
+
+    hasProcessing(projectId) {
+      // 経路（専属/グローバル）は問わない。どちらで取られていても実作業は同じプロジェクトへ及ぶ。
+      for (const r of records.values()) {
+        if (r.status === 'processing' && r.projectId === projectId) return true;
+      }
+      return false;
+    },
+
+    failPendingFor(projectId) {
+      const changed: InstructionRecord[] = [];
+      for (const r of records.values()) {
+        if (r.status !== 'pending' || r.projectId !== projectId) continue;
+        r.status = 'failed';
+        r.reply = PROJECT_NOT_FOUND_REPLY;
+        r.updatedAt = now();
+        changed.push(r);
+      }
+      if (changed.length > 0) {
+        persistBestEffort();
+        for (const r of changed) emit(r);
+      }
+      return changed.length;
     },
 
     subscribe(listener) {

@@ -2,7 +2,7 @@
  * HeavyJobConfirmDialog — 重ジョブ（render/transcribe/denoise/normalize/preview-proxy）の
  * 開始 API が HTTP 409 confirmation-required を返したときに出す負荷確認ダイアログ。
  * ExportDialog.tsx のオーバーレイ＋ダイアログ構造を踏襲する。
- * 文言は docs/specs/2026-07-23-parallel-ai-instructions-design.md §4.4 の逐語。
+ * 文言は変えない（重ジョブの同時実行がなぜ危ないかを説明する唯一の場所のため）。
  */
 export interface HeavyJobConfirmDialogProps {
   /** 現在実行中の重ジョブ数。 */

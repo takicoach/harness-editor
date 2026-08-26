@@ -1,11 +1,41 @@
 import type { OrientationCode } from './orientation';
+import type { DisplayStatus } from './projectStage';
 import type { EditorProject } from '../core/types';
+
+/** telopData の静的三値判定結果（src/core/telopStatic.ts と同値集合）。 */
+export type TelopStepState = 'empty' | 'nonempty' | 'invalid';
+
+/**
+ * 工程ステッパーの自動判定（データファイルの有無ベース・手入力なし）。
+ * 文字起こし→カット→テロップ→SE/BGM→書き出し。カンバン列とは独立した情報表示。
+ */
+export interface ProjectSteps {
+  transcribe: boolean;
+  cut: boolean;
+  telop: TelopStepState;
+  audio: boolean;
+  rendered: boolean;
+}
+
+/**
+ * アップロード取り込みの結果。実体をコピーしたか、外付けの実体へリンクしたか。
+ * message は非エンジニア向けの日本語（クライアントはそのままトーストに出す）。
+ */
+export type ImportOutcome =
+  | { linked: true; target: string; message: string }
+  | { linked: false; reason: string; message: string };
 
 /** フォルダブラウザに並ぶ 1 プロジェクトの要約。サーバが生成しクライアントが消費する。 */
 export interface ProjectSummary {
   /** ルートからの相対パス（= ディレクトリ名）。API の id として使う。 */
   id: string;
   name: string;
+  /**
+   * 保存先の絶対パス（表示用）。旧サーバの応答と互換を保つため optional
+   * （無ければホームは「保存先」行を出さない）。開く操作は id 経由で行い、
+   * この値をサーバへ送り返すことはしない。
+   */
+  dir?: string;
   orientation: OrientationCode;
   /** 例 "1:45" */
   durationLabel: string;
@@ -15,8 +45,10 @@ export interface ProjectSummary {
   videoFile: string | null;
   /** メイン動画が外部実体への symlink の場合の接続先と状態（外付け取り込み）。通常は undefined。 */
   videoLink?: { target: string; state: 'ok' | 'broken' | 'mismatch' };
-  /** 解決済みの表示ステータス（手動 stage > 自動判定）。 */
-  status: 'idle' | 'editing' | 'rendered' | 'review' | 'published';
+  /** 解決済みの表示ステータス（手動 stage > 自動判定）。表示ステータス全値の正本は shared/projectStage。 */
+  status: DisplayStatus;
+  /** 手動 stage による固定か（.sme/status.json の stage が非 null）。「手動」バッジ表示用。 */
+  stageManual?: boolean;
   /** AI 作業中の工程名（`.sme/status.json` の activity）。無ければ undefined。 */
   activityLabel?: string;
   /** activity の開始時刻（ISO 8601）。無ければ undefined。 */
@@ -25,6 +57,14 @@ export interface ProjectSummary {
   activityStale?: boolean;
   /** 編集データファイル群の最新 mtimeMs（相対最終編集日時表示用）。無ければ undefined。 */
   lastEditedAt?: number;
+  /**
+   * 工程ステッパー（自動判定）。現行サーバは一覧・SSE 差分の両方で常に載せる。
+   * optional なのは steps を知らない旧サーバのレスポンスと互換を保つため
+   * （その場合はステッパーを表示しない）。
+   * 既知の制限: SSE で live に変わるのは rendered だけ（watcher が .sme と out しか通さない）。
+   * transcribe/cut/telop/audio は次の refreshProjects まで更新されない。
+   */
+  steps?: ProjectSteps;
 }
 
 /**

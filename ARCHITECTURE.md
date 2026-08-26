@@ -57,21 +57,25 @@ Vite dev サーバ (port 2109・127.0.0.1 固定)
 | ディレクトリ | 責務 |
 |---|---|
 | `src/core/` | 純ロジック（UI 非依存・テスト密度最高）。データファイルの解析/直列化（`*Data.ts`）、カット・BGM・画像などの計算エンジン（`*Engine.ts`）、座標・フレーム計算 |
-| `src/app/` | React SPA。`App.tsx` がホーム/編集画面を分岐 |
+| `src/app/` | React SPA。`App.tsx` がホーム/編集画面を分岐。ホームは `panels/HomeDashboard.tsx`（一覧⇄進行ボード切替・動画の D&D 取り込み・保存先表示・ゴミ箱・選択一括操作）。新機能の NEW バッジは `featureSeen.ts` / `useFeatureBadge.ts`（localStorage に既読を持つ） |
 | `src/app/edit/` | 編集状態。`editState.ts`（EditState と選択状態）＋操作関数群（`cutOps.ts` `telopSettingsOps.ts` `shapeOps.ts` など）。**スナップショット方式の Undo**（`history.ts`・Cmd/Ctrl+Z） |
 | `src/app/timeline/` | タイムライン描画と操作（トラック各種・ドラッグ `useTimelineDrag`・スナップ・端の自動横スクロール `timelineScroll.ts`） |
 | `src/app/preview/` | プレビュー上の選択枠・ドラッグ。**実測方式**: 描画された DOM を測って枠を出す（`measureBox.ts` `useMeasuredBox.ts` `PreviewOverlay.tsx`） |
-| `src/app/panels/` | 右ドックのパネル群（インスペクタ・じまく一覧・素材・AI タブ `ClaudePanel.tsx` / `AiTerminal.tsx`・書き出し） |
+| `src/app/panels/` | 右ドックのパネル群（インスペクタ・じまく一覧・素材・AI タブ `ClaudePanel.tsx` / `AiTerminal.tsx`・書き出し）とホーム（`HomeDashboard.tsx`・カンバン列 `homeKanban.ts`・ゴミ箱 `TrashView.tsx` / `TrashDialog.tsx` / `TrashConfirmDialog.tsx`） |
 | `src/app/help/` `src/app/tutorial/` | ヘルプ百科（`helpTopics.ts`）と初回チュートリアル |
 | `src/preview/` | Remotion 合成（`EditorComposition.tsx`）。プレビューと最終書き出しの両方で使う。プロジェクト側テンプレート部品の動的ロード（`load*Component.ts`） |
 | `src/server/` | Vite プラグインとして動く本体 API。取り込み（`createProject` `streamUpload`）・保存・書き出し（`renderJob` `renderApi` `fastCut*`）・音声処理（denoise / normalize）・焼き込み（`install*.ts`）・AI ブリッジ（下記） |
 | `src/server/mcp/` | エディタを外部ツールへ公開する MCP サーバ（`/mcp`・ツール定義は `tools.ts`） |
+| `src/server/trashStore.ts` `trashVideo.ts` | ゴミ箱（tombstone 方式の論理削除・復元・完全削除。素材とプロジェクトの両方）とゴミ箱カードのサムネイル配信 |
+| `src/server/matchVideoSource.ts` `autoLinkImport.ts` `convertToLink.ts` | 取り込み動画の「できる限りリンク化」（同一実体の探索と symlink 化・既存コピーのリンク変換） |
+| `src/server/projectSteps.ts` `projectStatus.ts` | 工程ステッパー（文字起こし→カット→テロップ→SE/BGM→書き出し）と表示ステータスの自動判定 |
+| `src/server/projectBusy.ts` `jobRegistries.ts` | 破壊的操作（削除・リンク変換）の前に実行中ジョブを検出して弾く共通判定 |
 | `src/learning/` | 編集差分からルールを蒸留する学習コード（CLI: `npm run learn`）。人の修正を診断して次回の自動編集の質を上げる仕組み |
 | `src/shapePayload/` | 図形（矢印・囲みなど）の描画部品。焼き込み時にプロジェクトへコピーされる |
-| `src/shared/` | ブラウザ/サーバ共用の小物（型・フォーマッタ・AI 待機文言 `agentPrompts.ts`） |
+| `src/shared/` | ブラウザ/サーバ共用の小物（型・フォーマッタ・AI 待機文言 `agentPrompts.ts`・**状態ドメインの正本 `projectStage.ts`**・`videoExtensions.ts`・`assetKey.ts`） |
 | `project-template/` | 新規プロジェクト作成時に複製される Remotion プロジェクトの雛形（テロップ・タイトル・効果音などの部品を含む） |
 | `tests/` | Playwright e2e（フィクスチャプロジェクトで dev サーバを起動して UI を叩く） |
-| `scripts/` | ドキュメント用 GIF / スクリーンショットの自動収録（`npm run docs:gifs`） |
+| `scripts/` | ドキュメント用 GIF / スクリーンショットの自動収録（`npm run docs:gifs` / `npm run docs:help-shots`）。ヘルプ画像は **AI ツールを PATH から外した 2 パス収録**で、起動バナーのプラン名・セッション情報・個人パスが配布物へ写り込まないようにしている |
 
 ## 5. AI ブリッジ（AI タブの仕組み）
 
@@ -90,7 +94,7 @@ AI タブの入力欄 → 指示の受け箱（instructionInbox・.sme-inbox.jso
 - Codex 用にはログイン情報だけを引き継ぐ隔離 `CODEX_HOME` を用意する（`codexHome.ts`。
   エディタフォルダの外に置くことで、フォルダごと ZIP 配布しても認証情報が混入しない）。
 - 配送の意味論（同一プロジェクト直列・専属優先・引き継ぎ）は
-  [docs/claude-bridge-loop.md](docs/claude-bridge-loop.md) を参照。
+  [AI ブリッジの配送規則](docs/claude-bridge-loop.md) を参照。
 
 ## 6. 書き出し（レンダリング）
 
@@ -116,6 +120,17 @@ AI タブの入力欄 → 指示の受け箱（instructionInbox・.sme-inbox.jso
    が基準。幾何計算はフォールバック。e2e が measured であることを検査する。
 5. **ローカル専用**: サーバは 127.0.0.1 固定・Host/Origin 検査つき。外部公開を前提にした
    変更（認証の追加より先にバインドを広げる等）はしない。
+6. **状態ドメインは 1 箇所**: 表示ステータス 6 値（`idle` / `transcribe` / `cut` / `telop` /
+   `audio` / `rendered`）とラベル・色クラスは `src/shared/projectStage.ts` が唯一の正本。
+   サーバ検証・カンバン列・ラベル/CSS はここから派生させる（手同期の正本を増やさない）。
+   `.sme/status.json` の未知値は null（自動判定）へ落として後方互換を保つ。
+7. **open→無変更 save はバイト同値**: `src/server/goldenCorpus.test.ts` が
+   `src/server/__fixtures__/golden/` の 2 プロジェクトで「開いて保存しただけ」の
+   往復を hash 比較し、既知の副作用以外の新規ファイル（sidecar）が生えないことも検査する。
+   リリース前に必ず通す。新機能の sidecar を許可リストへ足して通してはいけない。
+8. **ファイルパスをクライアントから受け取らない**: ゴミ箱のサムネイル配信・リンク化の
+   接続先はいずれもサーバ側の探索結果と ID からのみ導出する（受け取ると任意の実体を
+   指す symlink を作らせられる）。
 
 ## 8. テストの走らせ方
 
@@ -126,7 +141,8 @@ npm run test:e2e    # Playwright（フィクスチャで dev サーバを起動�
 ```
 
 - e2e は既定ポートを使うため、実エディタ起動中は
-  `npx playwright test --config playwright.isolated.config.ts`（隔離ポート）を使う。
+  `npx playwright test --config playwright.isolated.config.ts`（隔離ポート）か
+  `SME_PORT=<空きポート> npx playwright test`（他プロセスのポートを拾わない）を使う。
 - UI 文言を変えたら `src/app/help/helpTopics.ts` とチュートリアル・e2e の文言参照も追随させる。
 
 ## 9. ライセンス境界

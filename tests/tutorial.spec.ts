@@ -46,12 +46,16 @@ test('チュートリアル: ホームの？から開始し、ホーム系ステ
   // 次へ → MCP 接続案内（未接続なので接続手順の案内文が出る・埋め込みターミナル導線）
   await page.locator('.tut-next').click();
   await expect(page.locator('.tut[data-step="mcp"]')).toBeVisible();
-  await expect(page.locator('.tut-text')).toContainText('ボタンを押すだけで');
+  // 2026-08-26: 旧文言「ボタンを押すだけで」は、導入済みの環境では接続ボタン自体が出ないため
+  // 撤去した（AI タブを開くと埋め込みターミナルがそのまま立ち上がる）。
+  await expect(page.locator('.tut-text')).toContainText('「AI」タブを開くと');
   await expect(page.locator('.tut-mcp')).toContainText('AI と接続する（Claude Code を導入）');
 
   // 次へ → 進行ボード → 次へ → 動画を作成（実操作待ち・次へボタン無し）
   await page.locator('.tut-next').click();
   await expect(page.locator('.tut[data-step="board"]')).toBeVisible();
+  // 新機能ステップなので、初めて見たこの回だけ NEW バッジが出る（見た時点で既読）。
+  await expect(page.locator('.tut[data-step="board"] .tut-new-badge')).toBeVisible();
   await page.locator('.tut-next').click();
   await expect(page.locator('.tut[data-step="create"]')).toBeVisible();
   await expect(page.locator('.tut-next')).toHaveCount(0);
@@ -66,6 +70,20 @@ test('チュートリアル: ホームの？から開始し、ホーム系ステ
   await expect(page.locator('.tut')).toHaveCount(0);
   const done = await page.evaluate(() => localStorage.getItem('sme-tutorial-done'));
   expect(done).not.toBeNull();
+
+  // リロードして同じステップまで戻っても、一度見た NEW バッジは復活しない（既読は localStorage 永続）。
+  await page.reload();
+  await expect(page.locator('.home-card', { hasText: 'sample-project' })).toBeVisible({ timeout: 15_000 });
+  await page.locator('.tb-tutorial-btn').click();
+  await page.locator('.help-replay-btn').click();
+  await expect(page.locator('.tut[data-step="welcome"]')).toBeVisible();
+  await page.locator('.tut-next').click();
+  await expect(page.locator('.tut[data-step="home-intro"]')).toBeVisible();
+  await page.locator('.tut-next').click();
+  await expect(page.locator('.tut[data-step="mcp"]')).toBeVisible();
+  await page.locator('.tut-next').click();
+  await expect(page.locator('.tut[data-step="board"]')).toBeVisible();
+  await expect(page.locator('.tut[data-step="board"] .tut-new-badge')).toHaveCount(0);
 });
 
 test('チュートリアル: エディタで再実行→＋追加からテロップ追加で🎉→保存で自動前進→完了', async ({ page }) => {

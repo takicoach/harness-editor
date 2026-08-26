@@ -22,6 +22,22 @@ describe('HELP_TOPICS', () => {
     }
   });
 
+  it('同じカテゴリは配列上で連続している（HelpModal は登場順にグループ化するため、離すと見出しが割れ key も重複する）', () => {
+    const seen = new Set<string>();
+    let prev: string | null = null;
+    for (const t of HELP_TOPICS) {
+      if (t.category !== prev) {
+        expect(seen.has(t.category), `カテゴリ「${t.category}」が離れて2度出ています`).toBe(false);
+        seen.add(t.category);
+        prev = t.category;
+      }
+    }
+  });
+
+  it('no は配列順に 1 から連番', () => {
+    expect(HELP_TOPICS.map((t) => t.no)).toEqual(HELP_TOPICS.map((_, i) => i + 1));
+  });
+
   it('helpImageFor が全 topic の画像 URL を解決できる（描画側と同一の glob 規約）', async () => {
     const { helpImageFor } = await import('./HelpModal');
     for (const t of HELP_TOPICS) {
@@ -41,8 +57,15 @@ describe('filterHelpTopics', () => {
   });
 
   it('本文の部分一致でも絞り込む（大小文字無視）', () => {
-    const result = filterHelpTopics(HELP_TOPICS, 'claude code', 'all');
+    // 本文にしか出ない語 + 大小文字違いで引く（タイトルは「AI と接続する」で codex を含まない）。
+    const result = filterHelpTopics(HELP_TOPICS, 'codex', 'all');
     expect(result.map((t) => t.id)).toContain('mcp');
+  });
+
+  it('UI に存在しない「MCP」を図鑑の表題・本文に書かない（AI タブは MCP をユーザーへ露出しない）', () => {
+    for (const t of HELP_TOPICS) {
+      expect(`${t.title}${t.description}`, `topic ${t.id}`).not.toMatch(/MCP/i);
+    }
   });
 
   it('該当なしの検索語は空配列', () => {
@@ -56,7 +79,10 @@ describe('filterHelpTopics', () => {
   });
 
   it('検索語とカテゴリを両方適用する（AND）', () => {
-    const result = filterHelpTopics(HELP_TOPICS, 'テロップ', '基本');
+    // 「編集」カテゴリにしか出てこない語を「基本」で引くと 0 件。
+    // （「テロップ」は進行ボードの工程説明にも出るため AND の検体には使えない）
+    const result = filterHelpTopics(HELP_TOPICS, 'シーン転換', '基本');
+    expect(filterHelpTopics(HELP_TOPICS, 'シーン転換', 'all').length).toBeGreaterThan(0);
     expect(result).toHaveLength(0);
   });
 });

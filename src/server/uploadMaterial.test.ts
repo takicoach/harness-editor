@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sanitizeUploadName, saveMaterialFile, isUploadKind } from './uploadMaterial';
+import { sanitizeUploadName, saveMaterialFile, isUploadKind, materialRelPath } from './uploadMaterial';
 import { HttpError } from './http';
 
 let dir: string;
@@ -86,5 +86,14 @@ describe('saveMaterialFile', () => {
     const tmp = makeTmp('x');
     expect(() => saveMaterialFile(dir, 'se', 'movie.mp4', tmp)).toThrow(HttpError);
     expect(existsSync(tmp)).toBe(true);
+  });
+});
+
+describe('materialRelPath（削除・使用中判定と共有する素材相対パス）', () => {
+  it('種別サブディレクトリを反映する', () => {
+    expect(materialRelPath('se', 'beep.mp3')).toBe(join('public', 'se', 'beep.mp3'));
+    expect(materialRelPath('image', 'sub/logo.png')).toBe(join('public', 'images', 'sub/logo.png'));
+    expect(materialRelPath('bgm', 'song.mp3')).toBe(join('public', 'BGM', 'song.mp3'));
+    expect(materialRelPath('video', 'clip.mp4')).toBe(join('public', 'clip.mp4'));
   });
 });

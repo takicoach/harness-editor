@@ -1,4 +1,6 @@
-node_modules/
+# 末尾スラッシュを付けない（worktree では node_modules が symlink のことがあり、
+# `node_modules/` はディレクトリにしか当たらず `?? node_modules` として未追跡に出る）
+node_modules
 dist/
 *.log
 .DS_Store
@@ -38,3 +40,14 @@ src/server/__fixtures__/.sme-inbox.json*
 # breakdown sheets (証拠ログと生成HTMLは追跡しない)
 _breakdown/logs/
 _breakdown/*.html
+
+# ゴミ箱（tombstone）。fixture 配下でテストが作る一時ゴミ箱も含めてコミットしない
+.trash/
+
+# ローカル作業用エディタの実行状態（環境ごとに違うため追跡しない）
+.sme/
+.sme-inbox.json
+
+# パッケージマネージャは npm（package-lock.json が正）。pnpm の生成物は追跡しない
+pnpm-lock.yaml
+pnpm-workspace.yaml

@@ -50,6 +50,9 @@
   --scrollbar-thumb: rgba(255,255,255,0.08);
   --scrollbar-thumb-hover: rgba(255,255,255,0.18);
   --warn-fg: #E5C07B;
+  /* 警告色の面に載せる文字色。--warn-fg はテーマで明暗が逆転する（ダーク＝明るい黄・
+     ライト＝濃い茶）ため、文字色を固定すると片方でコントラストが崩れる。 */
+  --warn-on: #1A1A1A;
   --hl-fg: #FFE57A;
 
   /* Elevation shadows（ダーク既定＝黒系ドロップシャドウ）。
@@ -77,6 +80,15 @@
   --radius: 8px;
   --radius-md: 10px;
   --radius-lg: 12px;
+
+  /* ボタン共通系統（下の「ボタン共通系統」節で使う）。
+     高さは触りやすさの下限として持つ（ui-ux-pro-max: Touch & Interaction）。
+     モーションは 120〜170ms の範囲に収める（同 §Animation: 150-300ms・過剰演出をしない）。 */
+  --btn-h: 30px;
+  --btn-h-sm: 26px;
+  --btn-dur: 150ms;
+  --btn-dur-press: 90ms;
+  --btn-ease: cubic-bezier(0.2, 0, 0, 1);
 
   --topbar-h: 52px;
   --folder-w: 244px;
@@ -138,6 +150,7 @@
   --scrollbar-thumb: rgba(60, 52, 44, 0.20);
   --scrollbar-thumb-hover: rgba(60, 52, 44, 0.34);
   --warn-fg: #9A6B00;
+  --warn-on: #FFFFFF;
   --hl-fg: #8A6D00;
 
   /* R-6: 暖色ドロップシャドウ（warm taupe）。黒だとアイボリー面で濁って浮くため、
@@ -174,6 +187,166 @@ html, body, #root {
 
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 input, select { font: inherit; color: inherit; }
+
+/* ====================================================================
+   ボタン共通系統（アフォーダンスと状態を 1 箇所に集約）
+   --------------------------------------------------------------------
+   上の reset で button は「素のテキスト」になる。押せるものを押せるように
+   見せる責務は、画面ごとの独自スタイルではなく **この節だけ**が持つ。
+   4 階層: primary（塗り）/ secondary（枠）/ danger（破壊的）/ ghost（低強調・
+   ホバーで面が出る）。既存クラス名はセレクタ群に並べて土台を共有する
+   （E2E・チュートリアルの照準が `.trash-restore` 等のクラス名を指しているため、
+   改名せずに意匠だけ 1 系統へ寄せる）。
+   4 状態（hover / active / focus-visible / disabled）は例外なく全部に持たせる。
+   ==================================================================== */
+.btn,
+.home-create-btn, .home-create-link-btn, .home-trash-open, .home-trash-back,
+.home-select-toggle, .home-select-move,
+.trash-restore, .trash-purge, .trash-empty-all,
+.export-cancel, .export-start, .hjc-dismiss, .hjc-confirm,
+.help-nav-btn, .help-replay-btn, .tut-next, .tut-skip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--btn-h); padding: 6px 14px;
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  background: var(--bg-2); color: var(--fg-1);
+  font-size: 12px; font-weight: 600; line-height: 1.4;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition:
+    background var(--btn-dur) var(--btn-ease),
+    border-color var(--btn-dur) var(--btn-ease),
+    color var(--btn-dur) var(--btn-ease),
+    box-shadow var(--btn-dur) var(--btn-ease),
+    transform var(--btn-dur-press) var(--btn-ease);
+}
+/* 押した瞬間に沈む（apple-design §1: フィードバックは押下時＝pointer-down で返す）。 */
+.btn:active:not(:disabled),
+.home-create-btn:active:not(:disabled), .home-create-link-btn:active:not(:disabled),
+.home-trash-open:active:not(:disabled), .home-trash-back:active:not(:disabled),
+.home-select-toggle:active:not(:disabled), .home-select-move:active:not(:disabled),
+.trash-restore:active:not(:disabled), .trash-purge:active:not(:disabled),
+.trash-empty-all:active:not(:disabled),
+.export-cancel:active:not(:disabled), .export-start:active:not(:disabled),
+.hjc-dismiss:active:not(:disabled), .hjc-confirm:active:not(:disabled),
+.help-nav-btn:active:not(:disabled), .help-replay-btn:active:not(:disabled),
+.tut-next:active:not(:disabled), .tut-skip:active:not(:disabled) {
+  transform: scale(0.97);
+}
+/* キーボード操作でだけ出るリング（マウスでは出さない）。地の色に関係なく見えるよう
+   outline + offset で描く（box-shadow だと角丸の内側に沈む配置がある）。 */
+.btn:focus-visible,
+.home-create-btn:focus-visible, .home-create-link-btn:focus-visible,
+.home-trash-open:focus-visible, .home-trash-back:focus-visible,
+.home-select-toggle:focus-visible, .home-select-move:focus-visible,
+.trash-restore:focus-visible, .trash-purge:focus-visible, .trash-empty-all:focus-visible,
+.export-cancel:focus-visible, .export-start:focus-visible,
+.hjc-dismiss:focus-visible, .hjc-confirm:focus-visible,
+.help-nav-btn:focus-visible, .help-replay-btn:focus-visible,
+.tut-next:focus-visible, .tut-skip:focus-visible,
+.home-view-btn:focus-visible, .home-card-delete:focus-visible,
+.home-card-check:focus-within, .help-chip:focus-visible, .help-close:focus-visible,
+.tut-close:focus-visible, .dd-item:focus-visible, .status-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* 押せない状態は「押せそうに見せない」（薄く・カーソルも変える）。 */
+.btn:disabled,
+.home-create-btn:disabled, .home-create-link-btn:disabled,
+.home-trash-open:disabled, .home-trash-back:disabled,
+.home-select-toggle:disabled, .home-select-move:disabled,
+.trash-restore:disabled, .trash-purge:disabled, .trash-empty-all:disabled,
+.export-cancel:disabled, .export-start:disabled,
+.hjc-dismiss:disabled, .hjc-confirm:disabled,
+.help-nav-btn:disabled, .help-replay-btn:disabled,
+.tut-next:disabled, .tut-skip:disabled {
+  opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none;
+}
+
+/* --- primary: その画面の主アクション 1 個だけ（塗り＋わずかな浮き） --- */
+.btn-primary, .home-create-btn, .export-start, .tut-next {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+  font-weight: 700; box-shadow: var(--shadow-chip);
+}
+.btn-primary:hover:not(:disabled), .home-create-btn:hover:not(:disabled),
+.export-start:hover:not(:disabled), .tut-next:hover:not(:disabled) {
+  background: var(--accent-strong); border-color: var(--accent-strong);
+  box-shadow: var(--shadow-fab);
+}
+
+/* --- secondary: 枠で面を示す控えめな実行ボタン --- */
+.btn-secondary, .home-create-link-btn, .home-trash-back,
+.trash-restore, .export-cancel, .hjc-dismiss, .help-nav-btn {
+  background: var(--bg-2); border-color: var(--border-strong); color: var(--fg-0);
+}
+.btn-secondary:hover:not(:disabled), .home-create-link-btn:hover:not(:disabled),
+.home-trash-back:hover:not(:disabled), .trash-restore:hover:not(:disabled),
+.export-cancel:hover:not(:disabled), .hjc-dismiss:hover:not(:disabled),
+.help-nav-btn:hover:not(:disabled) {
+  background: var(--bg-3); border-color: var(--fg-3); color: var(--fg-0);
+}
+
+/* --- danger: 破壊的操作。枠と文字で赤を出し、ホバーで赤い面が立ち上がる --- */
+.btn-danger, .home-select-move, .trash-purge, .trash-empty-all {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger); font-weight: 700;
+}
+.btn-danger:hover:not(:disabled), .home-select-move:hover:not(:disabled),
+.trash-purge:hover:not(:disabled), .trash-empty-all:hover:not(:disabled) {
+  background: var(--danger-soft); border-color: var(--danger);
+}
+/* 不可逆の確定ボタンだけ塗りの赤にする（確認ダイアログ内でキャンセルと明確に差をつける）。 */
+/* 面は `--danger` そのままだと白文字とのコントラストが AA を割る（実測 ダーク 3.33:1 /
+   ライト 4.37:1）。黒へ 20% 寄せて 4.93 / 6.28 にする（レビュー I-3）。ホバーはさらに
+   暗くして 6.34 / 7.88（＝押せることは分かり、コントラストは base より上がる）。
+   数値は buttonAffordance.test.ts が両テーマで固定している。 */
+.btn-danger-solid, .hjc-confirm.hjc-danger {
+  background: color-mix(in srgb, var(--danger) 80%, #000);
+  border-color: color-mix(in srgb, var(--danger) 80%, #000);
+  color: #fff; font-weight: 700;
+  box-shadow: var(--shadow-chip);
+}
+.btn-danger-solid:hover:not(:disabled), .hjc-confirm.hjc-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 68%, #000);
+  border-color: color-mix(in srgb, var(--danger) 68%, #000);
+  box-shadow: var(--shadow-fab);
+}
+
+/* --- ghost: 面を持たない低強調。ホバーで面が出て「押せる」と分かる --- */
+.btn-ghost, .home-trash-open, .home-select-toggle, .tut-skip {
+  background: transparent; border-color: transparent; color: var(--fg-2); font-weight: 600;
+}
+.btn-ghost:hover:not(:disabled), .home-trash-open:hover:not(:disabled),
+.home-select-toggle:hover:not(:disabled), .tut-skip:hover:not(:disabled) {
+  background: var(--bg-2); border-color: var(--border); color: var(--fg-0);
+}
+
+/* ヘッダの低強調アクション（選択／ゴミ箱）。面は張らないが**枠は常に出す** —
+   ここが「文字のベタ打ちに見える」と指摘された箇所で、ghost の完全な無地では
+   押せることが伝わらない。ホバーで面が立ち上がるのは ghost と同じ。 */
+.home-trash-open, .home-select-toggle {
+  background: transparent; border-color: var(--border); color: var(--fg-1);
+}
+
+/* --- サイズ修飾（既定より小さい行内アクション用） --- */
+.btn-sm { min-height: var(--btn-h-sm); padding: 4px 10px; font-size: 11.5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .home-create-btn, .home-create-link-btn, .home-trash-open, .home-trash-back,
+  .home-select-toggle, .home-select-move,
+  .trash-restore, .trash-purge, .trash-empty-all,
+  .export-cancel, .export-start, .hjc-dismiss, .hjc-confirm,
+  .help-nav-btn, .help-replay-btn, .tut-next, .tut-skip {
+    transition: none;
+  }
+  .btn:active, .home-create-btn:active, .home-create-link-btn:active,
+  .home-trash-open:active, .home-trash-back:active,
+  .home-select-toggle:active, .home-select-move:active,
+  .trash-restore:active, .trash-purge:active, .trash-empty-all:active,
+  .export-cancel:active, .export-start:active, .hjc-dismiss:active, .hjc-confirm:active,
+  .help-nav-btn:active, .help-replay-btn:active, .tut-next:active, .tut-skip:active {
+    transform: none;
+  }
+}
 /* ダークモードで UA 既定の白背景に明色文字が乗って読めなくなるのを防ぐ */
 select {
   background: var(--bg-2);
@@ -1989,25 +2162,44 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 .tb-auto-save-toggle.on { background: var(--accent-soft, rgba(80,140,255,0.18)); }
 
 /* ===== タイムライン つなぎ目マーク（JoinMarkers）===== */
-.tl-join-markers { position: absolute; top: 0; left: 0; right: 0; height: 0; pointer-events: none; }
+/* マーカー層は **sticky**（2026-08-26 レビュー I-1）。absolute のままだと sticky な .tl-ruler に
+   追従せず、.tl-body の縦スクロールで一緒に流れて消える。.tl-scroll の中身は既定の
+   --timeline-h:240px（.tl-head 30px を引いた表示域 ≒209px）を超えるため縦スクロールは日常的で、
+   scrollTop がひし形の高さぶん進んだだけでフィードバックと同じ「ひし形が無い」絵に戻る。
+   **left / right は指定しない** — sticky は指定した軸ごとに貼り付くので、left:0 を書くと
+   横スクロールにも貼り付いてマークが時間軸から外れる（幅は block の既定＝.tl-scroll 全幅）。
+   DOM 上は .tl-scroll の先頭（ルーラーより前）に置く。sticky は「本来の流れ位置」より上へは
+   出られないため、CutTrack の後ろに置くと scrollTop 0 でトラックの中ほどに沈む。
+   z-index はルーラー(7)と再生ヘッド(8)より前面の 9。不変条件は joinMarkerVisibility.test.ts。 */
+.tl-join-markers { position: sticky; top: 0; height: 0; z-index: 9; pointer-events: none; }
+/* top は **必ず正の値**にする（2026-08-26）。旧値 top:-6px は .tl-scroll の外側で、親 .tl-body の
+   overflow:auto に上半分を切り落とされていた（実測: マーク y=582.3〜600.7 に対し .tl-body の上端は
+   y=591＝47% が不可視。頭マークは残った下半分も再生ヘッドの三角と重なるため、実質「ひし形が出ない」）。
+   ルーラー(30px)の内側へ完全に収める。ルーラー・再生ヘッドとの前後は親 .tl-join-markers
+   (z-index:9) が決めるので、ここの z-index はマーク同士の順序だけを担う。
+   回転後の外接高さは 13px * √2 ≒ 18.4px なので、可視域は top-2.7px から。
+   **ひし形がルーラーの時刻ラベルに重なるのは意図どおり**（M-2）。転換は「どのつなぎ目に付いているか」
+   を一目で示すのが役目で、目盛りの数字より優先する。時刻は再生ヘッドのチップでも読める。
+   不変条件は joinMarkerVisibility.test.ts が styles.css を読んで固定する。 */
 .tl-join-mark {
-  position: absolute; top: -6px; width: 13px; height: 13px; transform: translateX(-50%) rotate(45deg);
+  position: absolute; top: 6px; width: 13px; height: 13px; transform: translateX(-50%) rotate(45deg);
   background: var(--bg-4); border: 1.5px solid var(--fg-2); border-radius: 2px; cursor: pointer; pointer-events: auto; padding: 0;
   box-shadow: var(--shadow-clip);
   transition: width .1s, height .1s, top .1s, background .1s, border-color .1s, box-shadow .1s;
-  /* 頭マーカー(left:88px=0フレーム位置)はルーラー(.tl-ruler z-index:7・sticky)の
-     0フレーム目盛りと重なる。z-index:8 でルーラーより前面に出し、実ポインタで
-     クリック可能にする（近接の z-index は範囲選択 6/7 のみで安全）。 */
   z-index: 8;
 }
 /* ホバー＝クリックできる合図。 */
 .tl-join-mark:hover { border-color: var(--accent); filter: brightness(1.08); }
-/* シーン転換 設定済み＝コーラルで塗る（枠は一段暗くして輪郭を出す）。 */
+/* シーン転換 設定済み＝**ピンク**（--accent-5 / dark #e05c8a・light #c84070）で塗る
+   （枠は一段暗くして輪郭を出す）。図鑑・はじめてガイドの色の記述はこの行が正本。 */
 .tl-join-mark.set { background: var(--accent-5); border-color: color-mix(in srgb, var(--accent-5) 70%, #000); }
-/* 選択中＝拡大＋青(accent)塗り＋ fg-0 縁取り＋ accent ハロー。
+/* 選択中＝拡大＋**オレンジ**（--accent / dark #E08D6D・light #D97757）塗り＋ fg-0 縁取り＋ハロー。
+   旧コメントの「青(accent)」はブランド色刷新前の記述で、実値と食い違っていた（2026-08-26 訂正）。
    旧 white outline はライトの明るい帯で不可視だったため廃止（両テーマで確実に浮く表現へ）。 */
+/* 選択中は 16px へ拡大。中心を通常時（top:6 + 13/2 = 12.5px）に合わせるため top は 4.5px
+   （4.5 + 16/2 = 12.5）。外接高さ 16*√2 ≒ 22.6px なので可視域は 1.2px からで、ルーラー内に収まる。 */
 .tl-join-mark.selected {
-  width: 16px; height: 16px; top: -8px;
+  width: 16px; height: 16px; top: 4.5px;
   background: var(--accent); border-color: var(--fg-0);
   box-shadow: 0 0 0 3px var(--accent-soft);
   z-index: 9;
@@ -2159,35 +2351,43 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .fb-thumb .ml-thumb-video-el { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 /* ─── ホーム カードグリッド（HomeDashboard） ─── */
 .home { display: flex; flex-direction: column; background: var(--bg-1); min-height: 0; overflow: hidden; }
+/* ヘッダ。ボタンが並ぶ帯なので baseline ではなく center で高さを揃える
+   （baseline だと枠つきボタンの下端が文字基準でバラつく）。 */
 .home-head {
-  display: flex; align-items: baseline; gap: 10px;
-  padding: 18px 22px 10px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 16px 22px 12px; flex-shrink: 0;
 }
-.home-head h1 { margin: 0; font-size: var(--fs-head); font-weight: 600; color: var(--fg-0); }
-.home-count { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
-/* 新規作成ボタン（ヘッダ・空状態共通） */
-.home-create-btn {
-  padding: 6px 14px; border-radius: var(--radius-md); cursor: pointer;
-  border: 1px solid var(--accent); background: var(--accent); color: #fff;
-  font-size: 12px; font-weight: 700; align-self: center;
+/* 見出しは大きくするぶんトラッキングを詰める（apple-design §15: 大きい字ほど負の字間）。 */
+.home-head h1 {
+  margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -0.01em;
+  color: var(--fg-0); line-height: 1.3;
 }
-.home-create-btn:hover { filter: brightness(1.08); }
+.home-count { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); margin-right: 4px; }
+/* 「選択」「ゴミ箱」は表示切替とは別グループ。隙間で切って所属を目で分からせる。 */
+.home-select-toggle { margin-left: 6px; }
+/* 新規作成ボタン（ヘッダ・空状態共通）＝ホームの主アクション。
+   意匠は「ボタン共通系統」の primary が持つ。ここは配置の差分だけ。 */
+.home-create-btn { align-self: center; }
 .sme-center .home-create-btn { margin-top: 12px; }
 .home-create-dialog { gap: 12px; }
 
-/* 外付け等からリンクで取り込む導線（コピー取り込みボタンの隣） */
-.home-create-link-btn {
-  padding: 6px 12px; border-radius: var(--radius-md); cursor: pointer;
-  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-1);
-  font-size: 12px; font-weight: 600; align-self: center;
-}
-.home-create-link-btn:hover { border-color: var(--accent); color: var(--fg-0); }
+/* 外付け等からリンクで取り込む導線（コピー取り込みボタンの隣）＝secondary。 */
+.home-create-link-btn { align-self: center; }
 .sme-center .home-create-link-btn { margin-top: 8px; }
+/* 空状態・エラー時のゴミ箱導線は「復元の唯一の入口」。中央寄せの縦並びで詰まらせない。 */
+.sme-center .home-trash-open { margin-top: 10px; }
 .home-create-link-note {
   font-size: 11.5px; color: var(--fg-2); word-break: break-all;
   background: var(--bg-2); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 6px 9px;
 }
+
+/* 自動リンク化の説明と「必ずコピーする」逃げ道（アップロード経路のみ） */
+.home-create-copy-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--fg-1); cursor: pointer;
+}
+.home-create-link-hint { margin: 0; font-size: 11px; }
 
 /* ===== 外部フォルダから動画を選ぶファイラ（MediaPicker） ===== */
 .mp-dialog { width: min(560px, 100%); }
@@ -2260,11 +2460,19 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 
 /* ビュー切替（パネル/カンバン）。ヘッダ右端のセグメントボタン。 */
 .home-view-switch {
-  margin-left: auto; display: inline-flex;
-  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  margin-left: auto; display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md);
 }
-.home-view-btn { padding: 4px 12px; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; font-size: 11.5px; font-weight: 600; }
-.home-view-btn.active { background: var(--accent-soft); color: var(--accent-strong); }
+.home-view-btn {
+  min-height: 24px; padding: 4px 12px;
+  border: 0; border-radius: calc(var(--radius-md) - 3px);
+  background: transparent; color: var(--fg-2);
+  cursor: pointer; font-size: 11.5px; font-weight: 600;
+  transition: background var(--btn-dur) var(--btn-ease), color var(--btn-dur) var(--btn-ease);
+}
+.home-view-btn:hover { color: var(--fg-0); background: var(--bg-3); }
+.home-view-btn.active { background: var(--accent-soft); color: var(--accent-strong); box-shadow: var(--shadow-chip); }
+.home-view-btn.active:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 
 /* パネルビュー: Notion 風ギャラリー。カードが横並びで折り返す。 */
 .home-grid {
@@ -2275,7 +2483,7 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 }
 .home-grid .home-card { background: var(--bg-2); }
 
-/* カンバンボード: ステータス5列（制作フロー順）。狭い画面では横スクロール。 */
+/* カンバンボード: 工程ステータス6列（制作フロー順）。狭い画面では横スクロール。 */
 .home-kanban {
   flex: 1; min-height: 0;
   display: flex; gap: 12px; padding: 6px 22px 22px;
@@ -2292,14 +2500,15 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 12px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
 }
-.home-col-label { font-size: 12px; font-weight: 700; color: var(--fg-1); }
+.home-col-label { font-size: 11.5px; font-weight: 700; letter-spacing: 0.03em; color: var(--fg-1); }
 .home-col-count {
   min-width: 20px; text-align: center; padding: 1px 6px; border-radius: 999px;
   background: var(--bg-3); color: var(--fg-2);
   font-family: var(--font-mono); font-size: 11px;
 }
-/* 編集中列は AI が動いている場所なのでヘッダをアクセントで強調する。 */
-.home-col[data-status="editing"] .home-col-label { color: var(--accent-strong); }
+/* 列ヘッダの強調は持たない。6 列化で「編集中」という単一の作業列が無くなり
+   （どの工程列も等しく作業中になり得る）、特定の 1 列だけを強調する根拠が消えたため。
+   旧 `.home-col[data-status="editing"]` は該当ステータス廃止で dead rule だったので削除した。 */
 .home-col-cards {
   flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: 10px; padding: 10px;
@@ -2310,10 +2519,32 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
   border-radius: var(--radius-lg); cursor: pointer;
   transition: border-color .12s, box-shadow .12s, transform .08s;
 }
-.home-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-pop); }
+.home-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-pop); transform: translateY(-1px); }
+/* `transform` はスタッキングコンテキストを作る。作った瞬間、カードの外へ張り出す
+   `.dd-menu`（z-index:60）は**カードの内側**でしか重なれず、DOM 順で後ろの兄弟カードの
+   下に潜る（レビュー I-1）。カード自体を持ち上げて兄弟より前に置く。 */
+.home-card:hover, .home-card:focus-within { z-index: 2; }
+.home-card:active { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) {
+  .home-card { transition: none; }
+  .home-card:hover, .home-card:active { transform: none; }
+}
 .home-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.home-card.dimmed { opacity: 0.55; }
-.home-card.dimmed:hover { opacity: 0.8; }
+/* カード右上の削除アイコン。素材行と同じ「ホバー/フォーカスで出る」作法に揃える
+   （見えていない削除ボタンはクリックできない＝誤爆防止）。 */
+.home-card-delete {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-1); color: var(--fg-2); cursor: pointer;
+  opacity: 0; pointer-events: none; transition: opacity .15s, color .12s, border-color .12s;
+}
+.home-card:hover .home-card-delete,
+.home-card:focus-within .home-card-delete { opacity: 1; pointer-events: auto; }
+/* 破壊的操作なので、ホバーでは赤い面まで出して押す前に危険と分かるようにする。 */
+.home-card-delete:hover { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+.home-card-delete:active { transform: scale(0.92); }
 /* バッジのドロップダウンが隠れないよう、カード自体はクリップしない（角丸はサムネ側で吸収）。 */
 .home-card-thumb {
   position: relative; width: 100%; background: #000;
@@ -2331,7 +2562,7 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .home-card-thumb.v .ml-thumb-video-el,
 .home-card-thumb.sq .ml-thumb-video-el { object-fit: contain; }
 .home-card-thumb-empty { position: absolute; inset: 0; background: linear-gradient(180deg, #1a2330 0%, #0c1118 100%); }
-.home-card-body { display: flex; flex-direction: column; gap: 5px; padding: 10px 11px 12px; }
+.home-card-body { display: flex; flex-direction: column; gap: 6px; padding: 11px 12px 12px; }
 /* バッジはサムネ左上へ重ねる（カード基準の absolute。サムネの overflow:hidden の
    外なのでドロップダウンはクリップされない）。情報の位置を全カードで揃える。 */
 .home-card-badge-wrap {
@@ -2345,7 +2576,7 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
 }
 .home-card-name {
-  font-size: 13px; font-weight: 600; color: var(--fg-0);
+  font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; color: var(--fg-0);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .home-card-meta {
@@ -2377,11 +2608,12 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
   background: var(--status-fg, var(--fg-3));
 }
 /* 各ステータスの色（バッジ・ドット共用の CSS 変数） */
-.status-idle      { --status-fg: var(--fg-2); --status-bg: var(--bg-3); --status-bd: var(--border); }
-.status-editing   { --status-fg: #4d9fff; --status-bg: rgba(77, 159, 255, 0.14); --status-bd: rgba(77, 159, 255, 0.30); }
-.status-rendered  { --status-fg: var(--accent-4); --status-bg: rgba(63, 178, 122, 0.14); --status-bd: rgba(63, 178, 122, 0.30); }
-.status-review    { --status-fg: var(--accent-2); --status-bg: rgba(240, 160, 32, 0.16); --status-bd: rgba(240, 160, 32, 0.32); }
-.status-published { --status-fg: var(--accent-3); --status-bg: rgba(160, 112, 224, 0.16); --status-bd: rgba(160, 112, 224, 0.32); }
+.status-idle       { --status-fg: var(--fg-2); --status-bg: var(--bg-3); --status-bd: var(--border); }
+.status-transcribe { --status-fg: #4d9fff; --status-bg: rgba(77, 159, 255, 0.14); --status-bd: rgba(77, 159, 255, 0.30); }
+.status-cut        { --status-fg: var(--accent-2); --status-bg: rgba(240, 160, 32, 0.16); --status-bd: rgba(240, 160, 32, 0.32); }
+.status-telop      { --status-fg: var(--accent-3); --status-bg: rgba(160, 112, 224, 0.16); --status-bd: rgba(160, 112, 224, 0.32); }
+.status-audio      { --status-fg: #38b6c4; --status-bg: rgba(56, 182, 196, 0.14); --status-bd: rgba(56, 182, 196, 0.32); }
+.status-rendered   { --status-fg: var(--accent-4); --status-bg: rgba(63, 178, 122, 0.14); --status-bd: rgba(63, 178, 122, 0.30); }
 .status-activity  { --status-fg: var(--accent); --status-bg: var(--accent-soft); --status-bd: var(--border-focus); }
 .status-stale     { --status-fg: var(--fg-3); --status-bg: var(--bg-3); --status-bd: var(--border); }
 
@@ -2434,13 +2666,9 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .export-detail-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .export-detail-row span { width: 56px; color: var(--fg-2); }
 .export-detail-row select { flex: 1; }
+/* ダイアログのフッタ。確定を右端に置き、キャンセルをその左へ（macOS の並び）。
+   ボタン意匠は「ボタン共通系統」（export-cancel=secondary / export-start=primary）。 */
 .export-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.export-cancel, .export-start {
-  font-size: 12px; padding: 7px 14px; border-radius: var(--radius-md); cursor: pointer;
-  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-1);
-}
-.export-start { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
-.export-start:hover { filter: brightness(1.08); }
 
 /* ─── 重ジョブ負荷確認ダイアログ（HeavyJobConfirmDialog） ─── */
 .hjc-overlay {
@@ -2457,12 +2685,20 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 }
 .hjc-text { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--fg-0); }
 .hjc-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.hjc-dismiss, .hjc-confirm {
-  font-size: 12px; padding: 7px 14px; border-radius: var(--radius-md); cursor: pointer;
-  border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--fg-1);
+/* 確定は「注意（警告色）」が既定。不可逆の完全削除だけ `.hjc-danger` が付いて
+   赤の塗り（btn-danger-solid 相当）になる（「ボタン共通系統」参照）。 */
+.hjc-confirm {
+  background: var(--warn-fg); border-color: var(--warn-fg); color: var(--warn-on); font-weight: 700;
+  box-shadow: var(--shadow-chip);
 }
-.hjc-confirm { background: var(--warn-fg); border-color: var(--warn-fg); color: #1a1a1a; font-weight: 700; }
-.hjc-confirm:hover { filter: brightness(1.08); }
+/* ホバーは**必ず黒へ**寄せる。`--warn-on`（文字色）へ寄せるとライトでは文字色＝白に
+   近づき、面と文字の差が縮んで AA を割る（実測 3.77:1・レビュー I-2）。黒固定なら
+   ダーク 7.79 / ライト 5.76 でどちらも AA。 */
+.hjc-confirm:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn-fg) 88%, #000);
+  border-color: color-mix(in srgb, var(--warn-fg) 88%, #000);
+  box-shadow: var(--shadow-fab);
+}
 
 /* ─── 2点アニメ設定（MotionSettings） ─── */
 .ins-motion select { width: 100%; }
@@ -2509,6 +2745,13 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 }
 .tut-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .tut-text { margin: 0; font-size: 13px; line-height: 1.8; color: var(--fg-0); white-space: pre-line; }
+/* 新機能ステップの目印。図鑑側の .help-new-badge と同じ意匠（アクセント色の小型ピル）。 */
+.tut-new-badge {
+  align-self: flex-start; margin-bottom: -4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 1px 5px; border-radius: 8px;
+  background: var(--accent); color: #fff;
+}
 
 /* マスコット: CSS 描画のクレイ風の顔（画像不使用）。 */
 .tut-mascot {
@@ -2538,23 +2781,20 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .tut-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .tut-progress { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); }
 .tut-actions { display: flex; gap: 8px; }
-.tut-skip {
-  padding: 5px 10px; border-radius: var(--radius-sm); border: 0;
-  background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11.5px;
-}
-.tut-skip:hover { color: var(--fg-1); }
-.tut-next {
-  padding: 5px 16px; border-radius: var(--radius-sm);
-  background: var(--accent); border: 1px solid var(--accent-strong);
-  color: #fff; cursor: pointer; font-size: 12px; font-weight: 700;
-}
-.tut-next:hover { background: var(--accent-strong); }
+/* 吹き出しのフッタ。あとで＝ghost / はじめる・次へ＝primary（「ボタン共通系統」）。 */
+.tut-skip { min-height: var(--btn-h-sm); padding: 4px 12px; font-size: 11.5px; }
+.tut-next { min-height: var(--btn-h-sm); padding: 4px 16px; }
 .tut-close {
-  position: absolute; top: 6px; right: 8px; width: 20px; height: 20px;
-  border: 0; background: transparent; color: var(--fg-3);
+  position: absolute; top: 6px; right: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--fg-3);
   cursor: pointer; font-size: 14px; line-height: 1; padding: 0;
+  transition: background var(--btn-dur) var(--btn-ease), color var(--btn-dur) var(--btn-ease),
+    border-color var(--btn-dur) var(--btn-ease);
 }
-.tut-close:hover { color: var(--fg-0); }
+.tut-close:hover { background: var(--bg-3); border-color: var(--border); color: var(--fg-0); }
 
 /* 紙吹雪（テロップ追加のお祝い）。 */
 .tut-confetti { position: fixed; inset: 0; overflow: hidden; }
@@ -2595,17 +2835,24 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .help-title { font-size: 13px; font-weight: 700; color: var(--fg-0); }
 .help-count { font-size: 10.5px; color: var(--fg-3); }
 .help-replay-btn {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto;
   background: var(--accent-soft); color: var(--accent-strong);
-  border: 1px solid var(--border-focus); border-radius: var(--radius);
-  padding: 4px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+  border-color: var(--border-focus);
+  min-height: var(--btn-h-sm); padding: 4px 10px; font-size: 11.5px; font-weight: 700;
 }
-.help-replay-btn:hover { filter: brightness(1.08); }
+.help-replay-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 26%, transparent); border-color: var(--accent);
+}
+/* 閉じる（×）＝アイコンの ghost。ホバーで面が出て「押せる」と分かるようにする。 */
 .help-close {
-  width: 22px; height: 22px; border: 0; background: transparent; color: var(--fg-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--fg-3);
   cursor: pointer; font-size: 14px; line-height: 1; padding: 0;
+  transition: background var(--btn-dur) var(--btn-ease), color var(--btn-dur) var(--btn-ease),
+    border-color var(--btn-dur) var(--btn-ease);
 }
-.help-close:hover { color: var(--fg-0); }
+.help-close:hover { background: var(--bg-3); border-color: var(--border); color: var(--fg-0); }
 
 .help-body { display: flex; min-height: 0; flex: 1 1 auto; overflow: hidden; }
 .help-list-pane {
@@ -2627,7 +2874,9 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
   background: var(--bg-2); border: 1px solid var(--border); color: var(--fg-2);
   cursor: pointer;
 }
+.help-chip:hover { background: var(--bg-3); border-color: var(--border-strong); color: var(--fg-0); }
 .help-chip.on { background: var(--accent-soft); border-color: var(--border-focus); color: var(--accent-strong); }
+.help-chip.on:hover { background: color-mix(in srgb, var(--accent) 26%, transparent); border-color: var(--accent); }
 .help-list { display: flex; flex-direction: column; gap: 2px; }
 .help-group { display: flex; flex-direction: column; }
 .help-item-wrap { display: flex; flex-direction: column; }
@@ -2648,6 +2897,14 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 }
 .help-item.active .help-item-no { background: var(--accent); color: #fff; font-weight: 700; }
 .help-item-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 新機能バッジ。既存の「手動」バッジと同じ小型ピル型で、こちらはアクセント色で目を引かせる
+   （項目を開くと消えるので、居座って邪魔にはならない）。 */
+.help-new-badge {
+  margin-left: auto; flex: none;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 1px 5px; border-radius: 8px;
+  background: var(--accent); color: #fff;
+}
 .help-empty { font-size: 11.5px; color: var(--fg-3); padding: 10px 9px; }
 
 .help-detail-pane {
@@ -2665,13 +2922,13 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 }
 .help-desc { font-size: 11.5px; line-height: 1.7; color: var(--fg-1); margin: 0; }
 .help-nav { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
-.help-nav-btn {
-  background: var(--bg-2); border: 1px solid var(--border-strong); color: var(--fg-1);
-  border-radius: var(--radius); padding: 5px 14px; font-size: 11px; cursor: pointer;
-}
-.help-nav-btn:hover:not(:disabled) { background: var(--bg-3); }
-.help-nav-btn:disabled { opacity: 0.4; cursor: default; }
+/* 前へ／次へ＝secondary（意匠は「ボタン共通系統」）。ナビなので寸法だけ 1 段小さく。 */
+.help-nav-btn { min-height: var(--btn-h-sm); padding: 4px 14px; font-size: 11.5px; }
+/* 次へは進行方向なのでアクセント寄りにする（塗りにはしない＝主アクションではない）。 */
 .help-next { border-color: var(--border-focus); color: var(--accent-strong); }
+.help-next:hover:not(:disabled) {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong);
+}
 .help-nav-count { color: var(--fg-3); font-size: 10px; }
 
 /* 狭幅（目安 640px 未満）: 1カラム・リスト全幅＋選択項目直下にアコーディオン展開。 */
@@ -2722,3 +2979,215 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .clt-env-note { font-size: 11px; color: var(--warn-fg); }
 .clt-actions { display: flex; gap: 8px; }
 .clt-exit { padding: 8px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+/* ==== 工程ステッパー（ホームカード） ==== */
+.home-card-steps {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.home-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--fg-2, #888);
+}
+.home-step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border, #ccc);
+}
+.home-step-label {
+  white-space: nowrap;
+}
+.home-step.done .home-step-dot {
+  background: var(--accent, #3a7);
+}
+.home-step.done {
+  color: var(--fg-0, #333);
+}
+.home-step.invalid .home-step-dot {
+  background: var(--warn-fg, #d90);
+}
+/* 手動 stage 固定バッジ */
+.home-card-manual {
+  margin-left: 4px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #ccc);
+  color: var(--fg-2, #888);
+}
+
+/* 進行ボード: ドラッグ中の drop 先ハイライト。枠線だけだと「ここに落ちる」が弱いので
+   面（accent-tint）も出す。empty 列は薄く沈んでいるので、drop 先の間だけ戻す。 */
+.home-col.drop-target {
+  outline: 2px dashed var(--accent, #3a7);
+  outline-offset: -2px;
+  background: var(--accent-tint);
+  opacity: 1;
+}
+
+/* ホームD&D: ドラッグ中の全面ヒントと通知 */
+.home { position: relative; }
+.home-drop-hint {
+  position: absolute;
+  inset: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--fg-0);
+  background: color-mix(in srgb, var(--bg-1) 80%, transparent);
+  pointer-events: none;
+  z-index: 5;
+}
+.home-drop-notice {
+  /* 作成モーダルのスクリム（.export-overlay: z-index 1200）より上に出す。
+     absolute + z-index:6 だと複数ドロップ時の「1件目のみ取り込みます」通知が
+     スクリムの下に沈んで読めなかった（バッチE レビュー指摘②）。 */
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--fg-0);
+  font-size: 12px;
+  z-index: 1300;
+  /* 5 秒間ヘッダのボタンを覆って奪う／通知の上をドラッグで通過すると dragleave が
+     失われて homeDragDepth が固着しハイライトが残る、の 2 バグを同時に断つ
+     （バッチE レビュー指摘①）。 */
+  pointer-events: none;
+}
+
+/* 素材ライブラリの削除ボタン（hover 表示） */
+.ml-cell-delete,
+.ml-row-delete {
+  opacity: 0;
+  cursor: pointer;
+  /* 中身は SVG アイコン（TrashIcon）。行の他の要素とベースラインを揃える。 */
+  display: inline-flex;
+  align-items: center;
+  transition: opacity 0.15s;
+  /* 見えていない削除ボタンをクリックできないようにする（透明なままの誤爆防止）。
+     キーボード操作は focus-within で可視化されてから届く。 */
+  pointer-events: none;
+}
+.ml-cell:hover .ml-cell-delete,
+.ml-cell:focus-within .ml-cell-delete,
+.ml-row:hover .ml-row-delete,
+.ml-row:focus-within .ml-row-delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ml-trash-open {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* ゴミ箱一覧 */
+.trash-dialog { min-width: 420px; }
+.trash-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  border-bottom: 1px solid var(--border, #ddd);
+}
+.trash-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-date { font-size: 11px; color: var(--fg-2); }
+.trash-none { color: var(--fg-2); }
+.trash-empty-all { margin-right: auto; }
+/* 行内アクション（素材ゴミ箱の行・プロジェクトゴミ箱のカード共通）。
+   復元＝secondary・完全削除／空にする＝danger（意匠は「ボタン共通系統」）。
+   行に収まるよう寸法だけ 1 段小さくする。 */
+.trash-restore, .trash-purge, .trash-empty-all {
+  min-height: var(--btn-h-sm); padding: 4px 10px; font-size: 11.5px;
+}
+
+.dd-sep { border: none; border-top: 1px solid var(--border, #ddd); margin: 4px 0; }
+.dd-item-danger { color: var(--danger, #c33); }
+.dd-item-danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+
+/* ─── 選択モード（複数選択 → 一括ゴミ箱移動） ─── */
+/* 選択モードのトグル。ghost が既定・オンの間はアクセントの面を張って「今この状態」を示す。 */
+.home-select-toggle.active {
+  background: var(--accent-soft); color: var(--accent-strong); border-color: var(--accent);
+}
+.home-select-toggle.active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--accent-strong);
+}
+.home-select-bar {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  margin: 0 22px 8px; padding: 8px 12px;
+  border: 1px solid var(--accent); border-radius: var(--radius-md);
+  background: var(--accent-soft); color: var(--fg-0); font-size: 12px;
+}
+.home-select-count { font-weight: 700; margin-right: auto; }
+/* 一括ゴミ箱移動＝danger（意匠は「ボタン共通系統」）。バー内なので寸法だけ 1 段小さく。 */
+.home-select-move { min-height: var(--btn-h-sm); padding: 4px 12px; }
+/* カード左上のチェック。削除アイコン（右上）と場所で衝突させない。 */
+.home-card-check {
+  position: absolute; top: 6px; left: 6px; z-index: 3;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: var(--radius-sm);
+  background: var(--bg-1); border: 1px solid var(--border); cursor: pointer;
+}
+.home-card.select-mode { cursor: pointer; }
+/* 選択モード中はチェック（左上）がステータスバッジと同じ場所に重なり、バッジが
+   「・BGM」のように途中から欠けて読めなくなる。バッジをチェックの右へ逃がす。 */
+.home-card.select-mode .home-card-badge-wrap { left: 38px; }
+/* 素の青いチェックはテーマから浮くのでアクセント色に揃える。 */
+.home-card-check input { accent-color: var(--accent); cursor: pointer; }
+.home-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.home-bulk-notice {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  margin: 0 22px 8px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-3); color: var(--fg-0); font-size: 12px;
+}
+/* 一括確認ダイアログの件名一覧。長くなりすぎないよう畳んで縦スクロールする。 */
+.hjc-names {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  max-height: 30vh; overflow-y: auto;
+  font-size: 11.5px; color: var(--fg-2);
+}
+.home-bulk-notice .export-cancel { margin-left: auto; }
+.hjc-names li { padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ─── ゴミ箱ビュー（ルート＝プロジェクトのゴミ箱・ホームと同じ画面領域） ─── */
+.trash-view-actions { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; }
+.trash-view .home-grid .trash-card { background: var(--bg-2); cursor: default; }
+/* 開く操作を持たないカードなので、ホバーで浮かせない（押せそうに見せない）。 */
+.trash-view .trash-card:hover { border-color: var(--border); box-shadow: none; }
+.trash-card .home-card-body { gap: 6px; padding: 12px; }
+.trash-card-path {
+  font-size: 11px; color: var(--fg-3); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.trash-card-actions { display: flex; gap: 8px; margin-top: 2px; }
+
+/* カードの保存先・リンク先の実体パス（非エンジニア向けに日本語ラベル＋等幅パス）。 */
+.home-card-path,
+.home-card-link {
+  font-size: 10.5px; color: var(--fg-3); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* direction:rtl で末尾を残す小技は使わない — 日本語ラベルと混在すると
+     「保存先:」が行末へ回り込んで読めなくなる。全文は title（tooltip）で出す。 */
+}
+.home-card-link.warn { color: var(--danger, #c33); }

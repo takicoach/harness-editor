@@ -2,7 +2,6 @@
  * @vitest-environment jsdom
  *
  * 図形のプレビュー操作（クリック選択・本体ドラッグ移動・ハンドルでリサイズ）の結線テスト。
- * 設計書: docs/specs/2026-08-19-measured-overlay-box-design.md §2
  *
  * ここは **実 React の pointerdown → pointermove → pointerup を通した結線** を見る。
  * クランプ契約そのもの（平行移動保持・同一参照）は shapeOps.test.ts が担う。

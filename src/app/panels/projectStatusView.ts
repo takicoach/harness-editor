@@ -1,5 +1,6 @@
 import type { ProjectSummary } from '../../shared/types';
 import { STALE_AFTER_MS } from '../../shared/staleThreshold';
+import { STATUS_LABEL, statusColorClass } from '../../shared/projectStage';
 
 /** カード／一覧のステータス表示に使う解決済みビュー。 */
 export interface StatusView {
@@ -7,33 +8,13 @@ export interface StatusView {
   label: string;
   /** バッジの CSS クラス（`status-badge` + 色クラス）。 */
   className: string;
-  /** 色クラスのみ（ドット等バッジ外の要素で再利用）。例 'status-editing'。 */
+  /** 色クラスのみ（ドット等バッジ外の要素で再利用）。例 'status-telop'。 */
   colorClass: string;
   /** スピナーを回すか（AI 作業中かつ stale でない時のみ true）。 */
   spinner: boolean;
-  /** 公開済みでカードをグレーアウトすべきか。 */
-  dimmed: boolean;
 }
 
-/** 表示ステータス → 日本語ラベル。 */
-const STATUS_LABEL: Record<ProjectSummary['status'], string> = {
-  idle: '未着手',
-  editing: '編集中',
-  rendered: '書き出し済',
-  review: 'レビュー待ち',
-  published: '公開済',
-};
-
-/** 表示ステータス → 色分けクラス（サフィックスのみ）。 */
-const STATUS_CLASS: Record<ProjectSummary['status'], string> = {
-  idle: 'idle',
-  editing: 'editing',
-  rendered: 'rendered',
-  review: 'review',
-  published: 'published',
-};
-
-/** 表示ステータスの日本語ラベルを返す。 */
+/** 表示ステータスの日本語ラベルを返す（正本は shared/projectStage）。 */
 export function statusLabel(status: ProjectSummary['status']): string {
   return STATUS_LABEL[status];
 }
@@ -68,7 +49,6 @@ export function resolveStatusView(
   },
   now: number = Date.now(),
 ): StatusView {
-  const dimmed = p.status === 'published';
   if (p.activityLabel !== undefined && p.activityLabel !== '') {
     if (isActivityStale(p.activityStartedAt, now)) {
       return {
@@ -76,7 +56,6 @@ export function resolveStatusView(
         className: 'status-badge status-stale',
         colorClass: 'status-stale',
         spinner: false,
-        dimmed,
       };
     }
     return {
@@ -84,16 +63,14 @@ export function resolveStatusView(
       className: 'status-badge status-activity',
       colorClass: 'status-activity',
       spinner: true,
-      dimmed,
     };
   }
-  const colorClass = `status-${STATUS_CLASS[p.status]}`;
+  const colorClass = statusColorClass(p.status);
   return {
     label: STATUS_LABEL[p.status],
     className: `status-badge ${colorClass}`,
     colorClass,
     spinner: false,
-    dimmed,
   };
 }
 

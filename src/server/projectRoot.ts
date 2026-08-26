@@ -8,7 +8,7 @@ export function getProjectRoot(): string {
 }
 
 /** path がちょうど root か root 配下に収まるかを文字列で判定する。 */
-function isContained(path: string, root: string): boolean {
+export function isContained(path: string, root: string): boolean {
   return path === root || path.startsWith(root + sep);
 }
 
