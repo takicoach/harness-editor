@@ -24,11 +24,6 @@ projects/
 # codex の隔離設定ディレクトリ（CODEX_HOME・auth.json のリンクと codex 自身の状態）
 .codex-runtime/
 
-# 作業用ディレクトリ（設計・レビューの下書き置き場。公開物には含めない）
-.superpowers/
-.dynamic-app-dev/
-.sdd/
-
 # 学習ループ e2e のグローバルストア（テスト実行時に生成・掃除）
 tests/.learning-home/
 src/server/__fixtures__/learning-diff-tmp*/
