@@ -2,7 +2,7 @@
 // そのまま写した回帰フィクスチャ。id 6 は原素材 602-1383 なのに再生順は 6 番目
 // （＝再生順と原素材順が一致しない）。案A の写像・往復保存の正しさをここで固定する。
 export const CUT_DATA_REORDERED_SOURCE = `// src/cutData.ts
-// SuperMovie Cut (retake 2/2): 音声スパイク検出+ffmpegフレーム目視検証で実演スイング3箇所を保護。
+// Cut (retake 2/2): 音声スパイク検出+ffmpegフレーム目視検証で実演スイング3箇所を保護。
 export interface CutSegment {
   id: number;
   originalStart: number;

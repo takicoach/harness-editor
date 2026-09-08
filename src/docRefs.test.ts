@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path';
 const REPO = resolve(import.meta.dirname, '..');
 const SELF = resolve(import.meta.filename);
 const SCAN_DIRS = ['src', 'docs', 'scripts'];
-const SCAN_FILES = ['README.md', 'ARCHITECTURE.md'];
+const SCAN_FILES = ['README.md'];
 const EXT = /\.(ts|tsx|md|mjs)$/;
 
 /**

@@ -101,7 +101,7 @@
   --folder-col: var(--folder-w);
   --rightdock-col: var(--rightdock-w);
   /* Phase 2 Plan B: 4 トラック構成（動画/テロップ/画像/SE）にあわせて 152 → 192px へ拡張。 */
-  /* 内訳: tl-head(30) + tl-ruler(30) + 4*tl-track(34) = 196px + 余白 */
+  /* 内訳: tl-head(30) + tl-ruler(36) + 4*tl-track(34) = 202px + 余白 */
   --timeline-h: 240px; /* JS 適用前のフォールバック。実値は useTimelineHeight が反映 */
   --row-pad-y: 14px;
 }
@@ -617,6 +617,20 @@ select option { background: var(--bg-2); color: var(--fg-0); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .tb-render-error .tb-render-label { color: var(--danger); }
+/* 失敗の理由は本文として読ませる（status-ia-2）。ホバー専用の title に隠さない。 */
+.tb-render-error { align-items: flex-start; max-width: 420px; }
+.tb-render-error-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.tb-render-error-msg {
+  color: var(--fg-2); font-size: 11.5px; line-height: 1.35;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+/* 対処法つきの詳細はホバーに隠さず本文に出す（サイクル 3 Important）。長文は畳んでスクロール。 */
+.tb-render-error-detail {
+  color: var(--fg-3); font-size: 11px; line-height: 1.35;
+  max-height: 4.5em; overflow-y: auto; overflow-wrap: anywhere;
+}
+.tb-render-retry { flex: 0 0 auto; }
 .tb-render-reveal {
   padding: 4px 10px; background: var(--accent); color: #fff;
   border-radius: var(--radius-sm); font-size: 11.5px; font-weight: 600;
@@ -674,11 +688,15 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 .ml-open-folder:hover { border-color: var(--border-strong); background: var(--bg-3); }
 
 .ml-list { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; overflow-y: auto; min-height: 0; }
-.ml-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; cursor: grab; }
+/* 波形は固定 120px の canvas だが、左カラム（244px）では名前の列を食い潰して
+   `beep.mp3` が「bee…」まで潰れていた（G-4 実測: 名前 clientWidth 31px / 必要 57px）。
+   波形の列に上限を与え、canvas は CSS で列幅へ縮める（描画解像度は 120px のまま）。 */
+.ml-row { display: grid; grid-template-columns: minmax(0, 84px) minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; cursor: grab; }
 .ml-row:hover { background: var(--bg-2); }
 .ml-row.selected { box-shadow: 0 0 0 2px var(--fg-0); }
 .ml-row.playing { background: var(--bg-3, rgba(255,255,255,0.06)); }
-.ml-row-wave { opacity: 0.7; }
+/* canvas はインラインで width=120px を持つので、列幅へ縮めるのは max-width で行う（width では負ける）。 */
+.ml-row-wave { opacity: 0.7; max-width: 100%; }
 .ml-row-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); }
 .ml-row-state { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
 .ml-insert { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-1); color: var(--fg-2); cursor: pointer; }
@@ -1096,9 +1114,14 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 /* ===== ルーラー（スクラブ帯） ===== */
 /* トラックと差別化した「浮いた操作帯」。左右ドラッグで再生位置を動かす場所だと視覚的に伝える:
    微グラデ＋2px ベースライン＋ ew-resize カーソル＋ホバー/スクラブ中の accent フィードバック。 */
+/* 高さは 30 → 36px（サイクル 4 レビュー Important）。時刻ラベルの帯（上）と
+   つなぎ目マークの帯（下）を **縦に分ける** ための 6px。fit 倍率ではマークが数十個
+   並ぶので、横方向の間引きだけでは「4◇◇◇◇◇◇」のようにラベルが読めなくなる。
+   帯を分ければ倍率に関わらずラベルとひし形の矩形は交差しない（不変条件は
+   joinMarkerVisibility.test.ts が styles.css を読んで固定する）。 */
 .tl-ruler {
   position: sticky; top: 0; z-index: 7;
-  height: 30px;
+  height: 36px;
   border-bottom: 2px solid var(--ruler-baseline);
   background: linear-gradient(var(--ruler-bg-top), var(--ruler-bg-bot));
   cursor: ew-resize;
@@ -1114,9 +1137,11 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 }
 /* minor 目盛りは短く（上寄り）＝major の時刻ラベル線と主従をつける。 */
 .tl-tick.minor { bottom: 20px; border-left-color: var(--border); }
+/* ラベル帯は上段（top:1px + line-height:11px ＝ 1〜12px）。下段（13px 以降）は
+   つなぎ目マーク専用。line-height を明示するのは、帯の下端を CSS から一意に読めるようにするため。 */
 .tl-tick-label {
-  position: absolute; top: 5px; left: 4px;
-  font-family: var(--font-mono); font-size: 10px; color: var(--fg-2);
+  position: absolute; top: 1px; left: 4px;
+  font-family: var(--font-mono); font-size: 10px; line-height: 11px; color: var(--fg-2);
   white-space: nowrap; pointer-events: none;
 }
 
@@ -2175,14 +2200,15 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 /* top は **必ず正の値**にする（2026-08-26）。旧値 top:-6px は .tl-scroll の外側で、親 .tl-body の
    overflow:auto に上半分を切り落とされていた（実測: マーク y=582.3〜600.7 に対し .tl-body の上端は
    y=591＝47% が不可視。頭マークは残った下半分も再生ヘッドの三角と重なるため、実質「ひし形が出ない」）。
-   ルーラー(30px)の内側へ完全に収める。ルーラー・再生ヘッドとの前後は親 .tl-join-markers
+   ルーラー(36px)の内側へ完全に収める。ルーラー・再生ヘッドとの前後は親 .tl-join-markers
    (z-index:9) が決めるので、ここの z-index はマーク同士の順序だけを担う。
    回転後の外接高さは 13px * √2 ≒ 18.4px なので、可視域は top-2.7px から。
-   **ひし形がルーラーの時刻ラベルに重なるのは意図どおり**（M-2）。転換は「どのつなぎ目に付いているか」
-   を一目で示すのが役目で、目盛りの数字より優先する。時刻は再生ヘッドのチップでも読める。
-   不変条件は joinMarkerVisibility.test.ts が styles.css を読んで固定する。 */
+   **旧仕様の「ひし形が時刻ラベルに重なるのは意図どおり（M-2）」は撤回**（サイクル 4 レビュー Important）。
+   fit 倍率が既定の初期画面になった今、ラベルは数十個のひし形に覆われて読めなくなる
+   （fit 倍率と 1280×720 での実測）。マークは中心 24.5px の下段（15.3〜33.7px）に置き、
+   ラベル帯（1〜12px）と交差させない。不変条件は joinMarkerVisibility.test.ts。 */
 .tl-join-mark {
-  position: absolute; top: 6px; width: 13px; height: 13px; transform: translateX(-50%) rotate(45deg);
+  position: absolute; top: 18px; width: 13px; height: 13px; transform: translateX(-50%) rotate(45deg);
   background: var(--bg-4); border: 1.5px solid var(--fg-2); border-radius: 2px; cursor: pointer; pointer-events: auto; padding: 0;
   box-shadow: var(--shadow-clip);
   transition: width .1s, height .1s, top .1s, background .1s, border-color .1s, box-shadow .1s;
@@ -2196,16 +2222,24 @@ select option { background: var(--bg-2); color: var(--fg-0); }
 /* 選択中＝拡大＋**オレンジ**（--accent / dark #E08D6D・light #D97757）塗り＋ fg-0 縁取り＋ハロー。
    旧コメントの「青(accent)」はブランド色刷新前の記述で、実値と食い違っていた（2026-08-26 訂正）。
    旧 white outline はライトの明るい帯で不可視だったため廃止（両テーマで確実に浮く表現へ）。 */
-/* 選択中は 16px へ拡大。中心を通常時（top:6 + 13/2 = 12.5px）に合わせるため top は 4.5px
-   （4.5 + 16/2 = 12.5）。外接高さ 16*√2 ≒ 22.6px なので可視域は 1.2px からで、ルーラー内に収まる。 */
+/* 選択中は 16px へ拡大。中心を通常時（top:18 + 13/2 = 24.5px）に合わせるため top は 16.5px
+   （16.5 + 16/2 = 24.5）。外接高さ 16*√2 ≒ 22.6px なので可視域は 13.2〜35.8px＝
+   ラベル帯（〜12px）と交差せず、ルーラー(36px)の内側に収まる。 */
 .tl-join-mark.selected {
-  width: 16px; height: 16px; top: 4.5px;
+  width: 16px; height: 16px; top: 16.5px;
   background: var(--accent); border-color: var(--fg-0);
   box-shadow: 0 0 0 3px var(--accent-soft);
   z-index: 9;
 }
 /* 設定済み＋選択中＝コーラル塗りは保ちつつ、拡大＋縁取り＋ハローで「選択」を重ねる。 */
 .tl-join-mark.set.selected { background: var(--accent-5); }
+/* 束ねたマーク（密集時）＝件数バッジ付き。ひし形が 45 度回っているので数字は逆回転で水平に戻す。 */
+.tl-join-mark.cluster { display: flex; align-items: center; justify-content: center; }
+.tl-join-mark-count {
+  transform: rotate(-45deg);
+  font-family: var(--font-mono); font-size: 8px; line-height: 1; color: var(--fg-0);
+  pointer-events: none;
+}
 
 /* ===== 残す区間（keptSegments）・速度バッジ・カット0件ヒント ===== */
 .tl-kept-segment { position: absolute; top: 0; bottom: 0; cursor: pointer; }
@@ -2312,6 +2346,7 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .tb-warn-badge {
   padding: 4px 10px; border-radius: 999px; border: 1px solid var(--warn-fg);
   background: none; color: var(--warn-fg); font-size: var(--fs-note); font-weight: 600; cursor: pointer;
+  white-space: nowrap; /* 内訳（警告 n・更新 m）が折り返さない・status-ia-4 */
 }
 .tb-warn-menu { min-width: 320px; max-height: 50vh; overflow-y: auto; }
 .tb-warn-list { margin: 0; padding: 0 10px 8px 26px; font-size: var(--fs-body); color: var(--fg-1); }
@@ -2570,10 +2605,28 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
   position: absolute; top: 8px; left: 8px; z-index: 2;
 }
 .home-card-badge-wrap .status-badge {
-  /* ステータス色の下に暗色の下敷きを重ね、明るい映像の上でも文字が沈まないようにする。 */
-  background: linear-gradient(var(--status-bg, var(--bg-3)), var(--status-bg, var(--bg-3))), rgba(12, 12, 12, 0.55);
+  /* ステータス色の下に暗色の下敷きを重ね、明るい映像の上でも文字が沈まないようにする。
+     下敷きが 55% では白いサムネイル（およびライトテーマの空サムネイル）の上で中間グレーに
+     しかならず、全ステータスがコントラスト 1.2〜1.8:1 まで落ちて読めなかった
+     （G-4 実測。tests/home-badge-contrast.spec.ts が最悪条件＝白の上で 4.5:1 を固定する）。 */
+  background: linear-gradient(var(--status-bg, var(--bg-3)), var(--status-bg, var(--bg-3))), rgba(12, 12, 12, 0.88);
   backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+/* カード上のバッジは「暗いチップ」に固定されるため、文字色もテーマ非依存の明色に固定する。
+   ライトテーマのステータス色は明るい地に載せる前提で暗く（telop 1.19:1 / rendered 1.53:1）、
+   暗いチップの上では読めない。面（--status-bg）の色味は各ステータスの既定を活かす。 */
+.home-card-badge-wrap .status-idle,
+.home-card-badge-wrap .status-stale {
+  --status-fg: #D6D3CA; --status-bg: rgba(255, 255, 255, 0.10); --status-bd: rgba(255, 255, 255, 0.18);
+}
+.home-card-badge-wrap .status-transcribe { --status-fg: #7AB8FF; }
+.home-card-badge-wrap .status-cut        { --status-fg: #F0A020; }
+.home-card-badge-wrap .status-telop      { --status-fg: #C0A0F0; }
+.home-card-badge-wrap .status-audio      { --status-fg: #38B6C4; }
+.home-card-badge-wrap .status-rendered   { --status-fg: #5CD39B; }
+.home-card-badge-wrap .status-activity   {
+  --status-fg: #F0A888; --status-bg: rgba(240, 168, 136, 0.16); --status-bd: rgba(240, 168, 136, 0.32);
 }
 .home-card-name {
   font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; color: var(--fg-0);
@@ -2951,7 +3004,10 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 
 /* ---- 埋め込み AI ターミナル（AiTerminal.tsx）---- */
 .clt { display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
-.clt-term { flex: 1; min-height: 220px; background: #101418; border-radius: var(--radius-md); overflow: hidden; }
+/* 余白なしだと border-radius の角丸が 1 行目の先頭文字を削る（G-4 実測: 端末 1 行目の先頭文字）。
+   地色は AiTerminal が shared/terminalColors.ts の値をインラインで当てる（ここは未マウント時の
+   フォールバック。ハードコードを 2 箇所に増やさないため dark 側だけ置く）。 */
+.clt-term { flex: 1; min-height: 220px; padding: 6px 8px; background: #101418; border-radius: var(--radius-md); overflow: hidden; }
 /* AI タブのツール切替（使えるツールが2つ以上のときだけ描画される） */
 .clt-tools { display: flex; gap: 6px; padding: 4px 6px 0; }
 .clt-tool {

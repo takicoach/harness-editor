@@ -5,6 +5,8 @@ import { buildWordChips } from '../../core/wordChips';
 import { isTranscriptAlignedWithVideo } from '../../core/transcript';
 import { moveTelop, setTelopTiming, removeTelops } from '../edit/telopSettingsOps';
 import { clearMultiSelection, toggleMultiTelopSelection } from '../edit/editState';
+import type { EditState } from '../edit/editState';
+import { restoreDragTarget, type DragCancelTarget } from './dragCancel';
 import { addSe, moveSe, resizeSe, selectSe, setSeFadeIn, setSeFadeOut, finalizeAddedSe } from '../edit/seOps';
 import { addImage, moveImage, retimeImage, selectImage } from '../edit/imageOps';
 import { addVideoInsert, moveVideoInsert, retimeVideoInsert, selectVideoInsert, videoInsertMaxEnd } from '../edit/videoInsertOps';
@@ -798,6 +800,33 @@ function TimelineBody({
    * ドラッグとして確定した場合（onCommit）は捨てる＝修飾キー＋ドラッグではトグルしない。
    */
   const telopMultiPendingRef = useRef<number | null>(null);
+
+  /**
+   * ドラッグ開始直前の EditState（監査 interaction-3 の「pre-drag 復元」）。
+   * `.tl-scroll` の onPointerDownCapture（各つまみの bubble ハンドラより先）で掴む。
+   * ドラッグ中に setTransient で書き換わるもの（SE / BGM のフェード長など）を、
+   * 取り消し時にそのまま巻き戻すために使う。履歴には積まれていないので
+   * setTransient で戻せば十分（Undo 履歴を汚さない）。
+   */
+  const preDragStateRef = useRef<EditState>(session.state);
+  function rememberPreDragState(): void {
+    preDragStateRef.current = session.state;
+  }
+
+  /**
+   * ドラッグ取り消しの共通処理（pointercancel / Escape）。
+   * 確定は行わず、**掴んだ対象の中身**と吸着ガイドの表示だけを戻す。
+   * ライブ表示（liveOverride 系）は drag が null になった時点で自然に消える。
+   *
+   * 選択（selection / multiTelopIds）は戻さない。preDragStateRef は
+   * 「掴んだ対象を選択する前」を掴んでいるので、EditState 全体を戻すと選択だけが
+   * 1 つ前の対象へ跳ね、矢印キーの対象（selectedHandle）と食い違う。
+   * 復元範囲は dragCancel.ts の restoreDragTarget が持つ。
+   */
+  function cancelDragCommon(target: DragCancelTarget): void {
+    session.setTransient((prev) => restoreDragTarget(prev, preDragStateRef.current, target));
+    setSnapHit(null);
+  }
   const seDragOriginRef = useRef<{ start: number; end: number; fadeInFrames: number; fadeOutFrames: number }>({
     start: 0, end: 0, fadeInFrames: 0, fadeOutFrames: 0,
   });
@@ -852,6 +881,8 @@ function TimelineBody({
       // スクラブはプレビュー移動のみ。状態コミット不要。
     },
     // onClick は意図的に未指定。コミットが空なので純クリックで呼ばれても副作用がない。
+    // スクラブは状態を変えないので、取り消しは「再生ヘッドをそのまま残す」だけでよい。
+    onCancel: () => setSnapHit(null),
   });
 
   // 吸着しきい値（px ではなくフレーム）。ズームに依存させ、画面上 8px 相当にする。
@@ -902,6 +933,7 @@ function TimelineBody({
     },
     // 純クリックは選択のみ（selectedHandle は onHandleDown で設定済み・区間は動かさない）。
     onClick: () => setSnapHit(null),
+    onCancel: () => cancelDragCommon({ kind: 'cut' }),
   });
 
   // ドラッグ中のカット区間をライブ表示用に組み立てる。
@@ -954,6 +986,10 @@ function TimelineBody({
       // 範囲選択カットとは相互排他（両方が同時に生きる状態を作らない）。
       setCutSelection(null);
       session.setTransient((prev) => toggleMultiTelopSelection(prev, pending));
+    },
+    onCancel: (handle) => {
+      telopMultiPendingRef.current = null;
+      cancelDragCommon({ kind: 'telop', id: handle.telopId });
     },
   });
 
@@ -1031,6 +1067,7 @@ function TimelineBody({
     },
     // 純クリックは選択のみ（onHandleDown で選択済み）。履歴も積まず区間も動かさない。
     onClick: () => setSnapHit(null),
+    onCancel: (handle) => cancelDragCommon({ kind: 'se', id: handle.seId }),
   });
 
   // ドラッグ中の SE 区間をライブ表示用に組み立てる。
@@ -1093,6 +1130,11 @@ function TimelineBody({
     },
     // onClick は意図的に未指定。範囲選択はクリック自体が「選択解除＋頭出し」という
     // 意味を持つ操作なので、純クリックでも onCommit を通す必要がある。
+    // 取り消し（pointercancel / Escape）は帯を確定させず、引いていた帯を捨てる。
+    onCancel: () => {
+      setSnapHit(null);
+      setCutSelection(null);
+    },
   });
 
   // 描画用の選択帯。ドラッグ中はライブ、離した後は確定済み cutSelection。
@@ -1224,6 +1266,7 @@ function TimelineBody({
     onSelectEntity: (id) => session.setTransient((prev) => selectImage(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'image', handle }),
     afterCommit: () => setSnapHit(null),
+    onCancel: (id) => cancelDragCommon({ kind: 'image', id }),
     buildOverride: (id, start, end) => ({ imageId: id, originalStart: start, originalEnd: end }),
   });
 
@@ -1246,6 +1289,7 @@ function TimelineBody({
     onSelectEntity: (id) => session.setTransient((prev) => selectVideoInsert(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'videoInsert', handle }),
     afterCommit: () => setSnapHit(null),
+    onCancel: (id) => cancelDragCommon({ kind: 'videoInsert', id }),
     buildOverride: (id, start, end) => ({ videoInsertId: id, originalStart: start, originalEnd: end }),
   });
 
@@ -1335,6 +1379,7 @@ function TimelineBody({
     },
     // 純クリックは選択のみ（onHandleDown で選択済み）。履歴も積まず区間も動かさない。
     onClick: () => setSnapHit(null),
+    onCancel: (handle) => cancelDragCommon({ kind: 'bgm', id: handle.bgmId }),
   });
 
   // Task 2: じまく・テロップ両行で共有する onHandleDown コールバック。
@@ -1400,6 +1445,7 @@ function TimelineBody({
     onSelectEntity: (id) => session.setTransient((prev) => selectShape(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'shape', handle }),
     afterCommit: () => setSnapHit(null),
+    onCancel: (id) => cancelDragCommon({ kind: 'shape', id }),
     buildOverride: (id, start, end) => ({ shapeId: id, originalStart: start, originalEnd: end }),
   });
 
@@ -1740,6 +1786,7 @@ function TimelineBody({
           className="tl-scroll"
           style={{ width: trackWidth }}
           onPointerLeave={() => onHighlightRange(null)}
+          onPointerDownCapture={rememberPreDragState}
           onPointerDown={(e) => {
             const target = e.target as HTMLElement;
             if (target.classList.contains('tl-handle') || target.closest('.tl-telop')) return;

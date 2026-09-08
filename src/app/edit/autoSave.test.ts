@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { shouldFireAutoSave, parseAutoSaveDelayOverride, type AutoSaveDecisionInput } from './autoSave';
+import {
+  shouldFireAutoSave,
+  shouldForceAutoSave,
+  parseAutoSaveDelayOverride,
+  MAX_AUTO_SAVE_DEFERRALS,
+  type AutoSaveDecisionInput,
+} from './autoSave';
 
 function base(overrides: Partial<AutoSaveDecisionInput> = {}): AutoSaveDecisionInput {
   return {
@@ -34,6 +40,20 @@ describe('shouldFireAutoSave', () => {
 
   it('フォーカスがテキスト編集要素にある間は発火しない', () => {
     expect(shouldFireAutoSave(base({ focusInEditable: true }))).toBe(false);
+  });
+});
+
+describe('shouldForceAutoSave（先送りの打ち切り・data-safety-10）', () => {
+  it('上限に達していなければ打ち切らない', () => {
+    expect(shouldForceAutoSave(MAX_AUTO_SAVE_DEFERRALS - 1, false)).toBe(false);
+  });
+
+  it('上限に達したら入力欄にカーソルが残っていても保存する', () => {
+    expect(shouldForceAutoSave(MAX_AUTO_SAVE_DEFERRALS, false)).toBe(true);
+  });
+
+  it('IME 変換中は上限に達しても打ち切らない（変換を壊さない）', () => {
+    expect(shouldForceAutoSave(MAX_AUTO_SAVE_DEFERRALS + 10, true)).toBe(false);
   });
 });
 

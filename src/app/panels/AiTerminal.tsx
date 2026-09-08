@@ -13,6 +13,7 @@ import { fetchJson, putJsonPost } from '../fetchJson';
 import { nextTerminalPhase, type Phase } from './claudeTerminalState';
 import { useThemeValue } from '../layout/useThemeValue';
 import { terminalOptions, terminalTheme } from './claudeTerminalOptions';
+import { terminalColorsFor } from '../../shared/terminalColors';
 import { DEFAULT_AI_TOOL, type AiToolId } from '../../shared/aiToolId';
 import { shouldShowToolSwitcher, usableTools, pickInitialTool, type ToolInfo } from './aiToolSwitcher';
 
@@ -377,7 +378,15 @@ export function AiTerminal() {
       )}
       {(phase === 'connected' || phase === 'exited' || phase === 'takeover') && (
         <>
-          <div className="clt-term" ref={hostRef} data-testid="claude-terminal" />
+          <div
+            className="clt-term"
+            ref={hostRef}
+            data-testid="claude-terminal"
+            /* 枠の地色は端末の配色と同じ出所から取る。CSS 側に色を書くと light/dark の
+               2 値が styles.css と shared/terminalColors.ts に二重定義になり、
+               ライトテーマで白い端末のまわりに黒い額縁が出る（G-4 実測）。 */
+            style={{ background: terminalColorsFor(theme).background }}
+          />
           {phase === 'connected' && (
             <div className="clt-actions">
               <button type="button" className="clt-waiting-btn" disabled={waiting}

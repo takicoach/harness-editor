@@ -25,7 +25,7 @@ interface UseTimelineDragOptions<H> {
   map?: DisplayMap;
   /** ドラッグ移動のたびに呼ばれる。返り値が「確定する原本フレーム」（吸着適用済み）。 */
   onDrag: (handle: H, rawFrame: number) => number;
-  /** pointerup / pointercancel で呼ばれる。最終フレームで状態をコミットする。 */
+  /** pointerup で呼ばれる。最終フレームで状態をコミットする（pointercancel では呼ばれない）。 */
   onCommit: (handle: H, finalFrame: number) => void;
   /**
    * 「純クリック」（pointerdown から pointerup までポインタが CLICK_MOVE_THRESHOLD_PX を
@@ -54,6 +54,18 @@ interface UseTimelineDragOptions<H> {
    * 移動量に化けてクリックがドラッグに化ける。未指定なら 0＝画面 X の差だけで判定（従来式）。
    */
   getAutoScrollDx?: () => number;
+  /**
+   * ドラッグの**取り消し**（監査 interaction-3）。
+   *
+   * 以前は `pointerup` と `pointercancel` を同じ `onUp` に繋いでいたため、ブラウザ／OS が
+   * ジェスチャを打ち切っても「その時点の位置」で確定していた。掴んだ後に「やっぱりやめる」
+   * 経路も無かった。ここは
+   *   - pointercancel（割り込み）
+   *   - ドラッグ中の Escape
+   * の 2 つから呼ばれ、**コミットせずに** ドラッグ前の状態へ戻す責任を持つ。
+   * 未指定なら「何も確定せずドラッグを終える」だけ（ライブ表示は setDrag(null) で消える）。
+   */
+  onCancel?: (handle: H) => void;
 }
 
 interface UseTimelineDragResult<H> {
@@ -68,7 +80,7 @@ interface UseTimelineDragResult<H> {
 
 /**
  * タイムラインのつまみドラッグを管理する汎用フック。
- * window へ pointermove / pointerup / pointercancel を貼り、終了時に必ず外す。
+ * window へ pointermove / pointerup / pointercancel / keydown(Escape) を貼り、終了時に必ず外す。
  */
 export function useTimelineDrag<H>({
   getTrackOriginX,
@@ -78,11 +90,12 @@ export function useTimelineDrag<H>({
   onCommit,
   onClick,
   getAutoScrollDx,
+  onCancel,
 }: UseTimelineDragOptions<H>): UseTimelineDragResult<H> {
   const [drag, setDrag] = useState<DragState<H> | null>(null);
   // 最新のコールバック・値を ref で持ち、リスナを貼り直さずに済むようにする。
-  const stateRef = useRef({ getTrackOriginX, pxPerFrame, map, onDrag, onCommit, onClick, getAutoScrollDx });
-  stateRef.current = { getTrackOriginX, pxPerFrame, map, onDrag, onCommit, onClick, getAutoScrollDx };
+  const stateRef = useRef({ getTrackOriginX, pxPerFrame, map, onDrag, onCommit, onClick, getAutoScrollDx, onCancel });
+  stateRef.current = { getTrackOriginX, pxPerFrame, map, onDrag, onCommit, onClick, getAutoScrollDx, onCancel };
   // ドラッグ中の最新フレームを ref に保持（pointerup でコミットに使う）。
   const dragRef = useRef<DragState<H> | null>(null);
   dragRef.current = drag;
@@ -148,13 +161,32 @@ export function useTimelineDrag<H>({
       setDrag(null);
     }
 
+    // 取り消し（確定しない）。pointercancel と Escape の共通出口。
+    function onCancelDrag(): void {
+      const current = dragRef.current;
+      if (current !== null) stateRef.current.onCancel?.(current.handle);
+      setDrag(null);
+    }
+
+    function onKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Escape') return;
+      // ドラッグ中の Escape は「このドラッグをやめる」。他の Escape 購読
+      // （カット選択の解除・モーダル閉じ）へ流さない。
+      e.preventDefault();
+      e.stopPropagation();
+      onCancelDrag();
+    }
+
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('pointercancel', onCancelDrag);
+    // capture 相で拾う（先に走る他の Escape ハンドラに横取りさせない）。
+    window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('pointercancel', onCancelDrag);
+      window.removeEventListener('keydown', onKeyDown, true);
     };
     // drag が null↔非null に変わったときだけリスナを貼り直す。
   }, [drag === null]);

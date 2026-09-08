@@ -1,5 +1,5 @@
 import type { EditState } from '../edit/editState';
-import { selectionIsSubtitle } from '../dockTab';
+import { selectionIsSubtitle, type DockTab } from '../dockTab';
 
 export type LayoutPreset = 'standard' | 'tall-dock' | 'subtitle' | 'waveform';
 
@@ -9,9 +9,14 @@ const KEY = 'sme-layout';
 /**
  * 字幕編集モードかつ字幕（じまく）選択中のとき、文字起こしの隣に設定側パネル（subpanel）を出す。
  * テキストベース編集（文字起こし一覧）と設定を横並びで同時に見られるようにする。
+ *
+ * ただし右ドックが「設定」タブのときは出さない。subpanel と設定タブは同じ SettingsTab を
+ * 描くため、両方出すと**同じフォームが 2 つ**並び、`ins-telop-manual` などの id が文書内で
+ * 重複する（`label[for]` は先頭の要素だけを指し、もう一方はラベルから操作できない）。
+ * 実測: G-4 ビジュアル検品（subtitle プリセット・設定タブ）で重複 id 7 件。
  */
-export function showsSubtitlePanel(state: EditState, layout: LayoutPreset): boolean {
-  return layout === 'subtitle' && selectionIsSubtitle(state);
+export function showsSubtitlePanel(state: EditState, layout: LayoutPreset, activeTab: DockTab): boolean {
+  return layout === 'subtitle' && activeTab !== 'settings' && selectionIsSubtitle(state);
 }
 
 /** localStorage からレイアウトを読む。未設定・不正値は standard。 */

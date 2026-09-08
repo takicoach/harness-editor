@@ -9,12 +9,19 @@ const subtitleSel = mk({ kind: 'telop', id: 1 }, [{ id: 1, manual: false }]);
 const bgmSel = mk({ kind: 'bgm', id: 1 });
 
 describe('showsSubtitlePanel', () => {
-  it('subtitle モード＋字幕選択は true', () => expect(showsSubtitlePanel(subtitleSel, 'subtitle')).toBe(true));
-  it('subtitle モード＋BGM は false', () => expect(showsSubtitlePanel(bgmSel, 'subtitle')).toBe(false));
-  it('subtitle モード＋未選択は false', () => expect(showsSubtitlePanel(mk(null), 'subtitle')).toBe(false));
-  it('standard モードは字幕でも false', () => expect(showsSubtitlePanel(subtitleSel, 'standard')).toBe(false));
-  it('tall-dock モードは字幕でも false', () => expect(showsSubtitlePanel(subtitleSel, 'tall-dock')).toBe(false));
-  it('waveform モードは字幕でも false', () => expect(showsSubtitlePanel(subtitleSel, 'waveform')).toBe(false));
+  it('subtitle モード＋字幕選択は true', () => expect(showsSubtitlePanel(subtitleSel, 'subtitle', 'transcript')).toBe(true));
+  it('subtitle モード＋BGM は false', () => expect(showsSubtitlePanel(bgmSel, 'subtitle', 'transcript')).toBe(false));
+  it('subtitle モード＋未選択は false', () => expect(showsSubtitlePanel(mk(null), 'subtitle', 'transcript')).toBe(false));
+  it('standard モードは字幕でも false', () => expect(showsSubtitlePanel(subtitleSel, 'standard', 'transcript')).toBe(false));
+  it('tall-dock モードは字幕でも false', () => expect(showsSubtitlePanel(subtitleSel, 'tall-dock', 'transcript')).toBe(false));
+  it('waveform モードは字幕でも false', () => expect(showsSubtitlePanel(subtitleSel, 'waveform', 'transcript')).toBe(false));
+  // G-4（ビジュアル検品）実測: 字幕モードで設定タブを開くと、右ドックの設定と subpanel に
+  // **同じ設定フォームが 2 つ**出て、id（ins-telop-manual / ins-start / ins-pos-x など）が
+  // 文書内で重複していた（label の for が先頭の要素だけを指す＝もう一方が操作不能）。
+  it('subtitle モードでも設定タブなら false（設定フォームの二重表示・id 重複を防ぐ）', () =>
+    expect(showsSubtitlePanel(subtitleSel, 'subtitle', 'settings')).toBe(false));
+  it('subtitle モード＋AI タブは true（設定は出ていないので併置してよい）', () =>
+    expect(showsSubtitlePanel(subtitleSel, 'subtitle', 'ai')).toBe(true));
 });
 
 describe('load/saveLayout', () => {

@@ -7,6 +7,13 @@
 /** dirty から保存発火までの静止時間（ミリ秒）。 */
 export const AUTO_SAVE_DELAY_MS = 4000;
 
+/**
+ * テキスト編集中を理由に自動保存を先送りできる回数の上限。
+ * これを超えたら、フォーカスが入力欄に残っていても保存する（監査 data-safety-10）。
+ * 以前は上限が無く、字幕欄にカーソルを残したまま手を止めると永久に未保存で残っていた。
+ */
+export const MAX_AUTO_SAVE_DEFERRALS = 3;
+
 export type AutoSaveStatus = 'idle' | 'saving' | 'error';
 
 export interface AutoSaveDecisionInput {
@@ -33,6 +40,16 @@ export function shouldFireAutoSave(input: AutoSaveDecisionInput): boolean {
   if (input.saveStatus !== 'idle') return false;
   if (input.focusInEditable) return false;
   return true;
+}
+
+/**
+ * テキスト編集中の先送りを打ち切って保存すべきか。
+ * IME 変換中は文字が確定していないため、上限に達していても打ち切らない
+ *（変換中の割り込み保存は入力を壊しかねない）。
+ */
+export function shouldForceAutoSave(deferrals: number, composing: boolean): boolean {
+  if (composing) return false;
+  return deferrals >= MAX_AUTO_SAVE_DEFERRALS;
 }
 
 /**

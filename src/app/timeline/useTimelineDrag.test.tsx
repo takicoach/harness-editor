@@ -27,6 +27,8 @@ interface HarnessProps {
   getAutoScrollDx?: () => number;
   /** トラック原点。ズーム・パネル開閉で動く状況を再現する（既定は 0 固定）。 */
   getTrackOriginX?: () => number;
+  /** ドラッグ取り消し（pointercancel / Escape）。 */
+  onCancel?: (handle: Handle) => void;
 }
 
 const PX_PER_FRAME = 2;
@@ -34,7 +36,7 @@ const ORIGIN_FRAME = 100;
 /** つまみを掴む画面 X（トラック原点は 0・ガター分だけ右にある）。 */
 const GRAB_X = TRACK_LABEL_GUTTER_PX + ORIGIN_FRAME * PX_PER_FRAME;
 
-function Harness({ onCommit, onClick, snap, getAutoScrollDx, getTrackOriginX }: HarnessProps) {
+function Harness({ onCommit, onClick, snap, getAutoScrollDx, getTrackOriginX, onCancel }: HarnessProps) {
   const { drag, beginDrag } = useTimelineDrag<Handle>({
     getTrackOriginX: getTrackOriginX ?? (() => 0),
     pxPerFrame: PX_PER_FRAME,
@@ -42,6 +44,7 @@ function Harness({ onCommit, onClick, snap, getAutoScrollDx, getTrackOriginX }: 
     onCommit,
     ...(onClick ? { onClick } : {}),
     ...(getAutoScrollDx ? { getAutoScrollDx } : {}),
+    ...(onCancel ? { onCancel } : {}),
   });
   return (
     <div
@@ -194,5 +197,71 @@ describe('useTimelineDrag: 移動量に数えるもの／数えないもの', ()
     fireEvent.pointerMove(window, { clientX: GRAB_X + 40 });
     expect(el.dataset.moved).toBe('true');
     fireEvent.pointerUp(window, { clientX: GRAB_X + 40 });
+  });
+});
+
+describe('useTimelineDrag: 取り消し（監査 interaction-3）', () => {
+  function beginAndMove(): {
+    commits: [Handle, number][];
+    cancels: Handle[];
+    el: HTMLElement;
+  } {
+    const commits: [Handle, number][] = [];
+    const cancels: Handle[] = [];
+    const { getByTestId } = render(
+      <Harness
+        onCommit={(h, f) => commits.push([h, f])}
+        onCancel={(h) => cancels.push(h)}
+      />,
+    );
+    const el = getByTestId('handle');
+    fireEvent.pointerDown(el, { clientX: GRAB_X, clientY: 0 });
+    fireEvent.pointerMove(window, { clientX: GRAB_X + 60, clientY: 0 });
+    return { commits, cancels, el };
+  }
+
+  it('pointercancel は確定しない（その時点の位置で置き去りにしない）', () => {
+    const { commits, cancels, el } = beginAndMove();
+    fireEvent.pointerCancel(window, { clientX: GRAB_X + 60, clientY: 0 });
+    expect(commits).toHaveLength(0);
+    expect(cancels).toEqual(['h']);
+    expect(el.dataset['frame']).toBe('none');
+  });
+
+  it('ドラッグ中の Escape で取り消せる（掴んだ後にやめられる）', () => {
+    const { commits, cancels, el } = beginAndMove();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(commits).toHaveLength(0);
+    expect(cancels).toEqual(['h']);
+    expect(el.dataset['frame']).toBe('none');
+  });
+
+  it('Escape 以外のキーでは取り消さない', () => {
+    const { commits, cancels } = beginAndMove();
+    fireEvent.keyDown(window, { key: 'a' });
+    expect(cancels).toHaveLength(0);
+    fireEvent.pointerUp(window, { clientX: GRAB_X + 60, clientY: 0 });
+    expect(commits).toHaveLength(1);
+  });
+
+  it('取り消した後の pointerup では確定しない（二重終了で復活しない）', () => {
+    const { commits } = beginAndMove();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.pointerUp(window, { clientX: GRAB_X + 60, clientY: 0 });
+    expect(commits).toHaveLength(0);
+  });
+
+  it('pointerup は従来どおり確定する（取り消し経路が確定を壊さない）', () => {
+    const { commits, cancels } = beginAndMove();
+    fireEvent.pointerUp(window, { clientX: GRAB_X + 60, clientY: 0 });
+    expect(commits).toHaveLength(1);
+    expect(cancels).toHaveLength(0);
+  });
+
+  it('ドラッグしていないときの Escape は無視される（購読が漏れていない）', () => {
+    const cancels: Handle[] = [];
+    render(<Harness onCommit={() => {}} onCancel={(h) => cancels.push(h)} />);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(cancels).toHaveLength(0);
   });
 });

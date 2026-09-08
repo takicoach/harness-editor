@@ -107,6 +107,25 @@ describe('.tl-join-mark の可視性', () => {
     expect(bottom).toBeLessThanOrEqual(RULER_HEIGHT_PX);
   });
 
+  /**
+   * 時刻ラベルの帯と交差しない（サイクル 4 レビュー Important）。
+   *
+   * fit 倍率が既定の初期画面になったため、ひし形が時刻ラベルの上に重なると
+   * 「4◇◇◇◇◇◇」のようにラベルが読めない（fit 倍率と 1280×720 での実測）。
+   * 横方向の間引き（clusterJoinMarks）だけでは 1 個残ったひし形がラベルに乗るので、
+   * **帯を縦に分ける**のが不変条件。数値はすべて styles.css から読む。
+   */
+  it('時刻ラベルの帯と縦に交差しない（通常・選択中とも）', () => {
+    const labelTop = px('.tl-tick-label', 'top');
+    const labelBottom = labelTop + px('.tl-tick-label', 'line-height');
+    for (const sel of ['.tl-join-mark', '.tl-join-mark.selected']) {
+      const [top] = rotatedSpan(px(sel, 'top'), px(sel, 'width'));
+      expect(top, `${sel} の上端がラベル帯（〜${labelBottom}px）に食い込んでいる`).toBeGreaterThanOrEqual(
+        labelBottom,
+      );
+    }
+  });
+
   it('選択で中心がずれない（拡大しても同じ位置で大きくなる）', () => {
     const normalCenter = px('.tl-join-mark', 'top') + px('.tl-join-mark', 'width') / 2;
     const selectedCenter =

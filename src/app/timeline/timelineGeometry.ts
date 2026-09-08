@@ -89,27 +89,63 @@ export interface RulerTick {
 /** major 目盛りの候補間隔（秒）。狭い方から、major が画面上で詰まらない最初の値を選ぶ。 */
 const MAJOR_SECONDS_CANDIDATES = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
 /** major 目盛りの最小ピクセル間隔（これ未満なら次の粗い候補へ）。 */
-const MIN_MAJOR_GAP_PX = 64;
+export const MIN_MAJOR_GAP_PX = 64;
+
+/**
+ * 候補間隔 majorFrames で目盛りを置いたときの、**実際の画面上の**最小隣接間隔（px）。
+ *
+ * 目盛りの配置は `frameToXMapped`（表示マップ経由）なのに、間隔の選択は等速前提の
+ * `sec*fps*pxPerFrame` だけで行っていた（監査 interaction-5）。区間速度 rate>1 の区間は
+ * 表示長が 1/rate に潰れるため、rate=4 なら実間隔は想定の 1/4 になり時刻ラベルが重なる。
+ * ここで隣接 tick の実 X 差分の最小値を返し、呼び出し側が MIN_MAJOR_GAP_PX で検算する。
+ *
+ * 隣接ペアが 1 組も無い（tick が 1 本以下）ときは Infinity（＝制約なし）を返す。
+ */
+function minMappedMajorGapPx(
+  totalFrames: number,
+  majorFrames: number,
+  pxPerFrame: number,
+  map: DisplayMap,
+): number {
+  let min = Infinity;
+  let prevX = frameToXMapped(0, pxPerFrame, map);
+  for (let frame = majorFrames; frame <= totalFrames; frame += majorFrames) {
+    const x = frameToXMapped(frame, pxPerFrame, map);
+    const gap = x - prevX;
+    if (gap < min) min = gap;
+    prevX = x;
+  }
+  return min;
+}
 
 /**
  * 原本総フレーム・ズーム・fps から、ルーラーの目盛り配列を算出する。
  * major は時刻ラベル付き、その間に minor を 1 本ずつ（major 間隔の半分の位置）入れる。
  * 総フレーム 0 でも先頭 major（frame=0）だけは返す。
+ *
+ * `map` を渡すと、等速換算の間隔だけでなく **表示マップ適用後の実 px 間隔**でも
+ * MIN_MAJOR_GAP_PX を検算する（速度を上げた区間でラベルが重ならない・監査 interaction-5）。
+ * `map` 省略時・identity のときは従来と完全に同じ結果。
  */
 export function rulerTicks(
   totalFrames: number,
   pxPerFrame: number,
   fps: number,
+  map?: DisplayMap,
 ): RulerTick[] {
   const safeFps = fps > 0 ? fps : 30;
   // major 間隔（秒）を、ピクセル間隔が MIN_MAJOR_GAP_PX 以上になる最初の候補から選ぶ。
   let majorSeconds = MAJOR_SECONDS_CANDIDATES[MAJOR_SECONDS_CANDIDATES.length - 1] ?? 600;
   for (const sec of MAJOR_SECONDS_CANDIDATES) {
     const gapPx = sec * safeFps * pxPerFrame;
-    if (gapPx >= MIN_MAJOR_GAP_PX) {
-      majorSeconds = sec;
-      break;
+    if (gapPx < MIN_MAJOR_GAP_PX) continue;
+    // 表示マップがあるときは実配置でも検算する（速度区間で潰れた間隔を弾く）。
+    if (map !== undefined && !map.identity) {
+      const frames = Math.max(1, Math.round(sec * safeFps));
+      if (minMappedMajorGapPx(totalFrames, frames, pxPerFrame, map) < MIN_MAJOR_GAP_PX) continue;
     }
+    majorSeconds = sec;
+    break;
   }
   const majorFrames = Math.max(1, Math.round(majorSeconds * safeFps));
   const ticks: RulerTick[] = [];

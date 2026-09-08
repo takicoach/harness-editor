@@ -35,6 +35,12 @@ interface UseTimelineEdgeDragOptions<Id, H extends EdgeHandle, O> {
   onBeginSelectedHandle: (handle: H) => void;
   /** commit 後の共通後処理（setSnapHit(null) 等）。 */
   afterCommit?: () => void;
+  /**
+   * ドラッグ取り消し（pointercancel / Escape）。掴んだ対象の中身をドラッグ前へ戻す（監査 interaction-3）。
+   * **対象 ID を渡す**（サイクル 4 レビュー Important）。何を掴んでいたか分からないと
+   * EditState 全体を巻き戻すしかなく、選択まで巻き添えで戻ってしまう。
+   */
+  onCancel?: (id: Id) => void;
   /** ライブ表示用オーバーライドの組み立て。 */
   buildOverride: (id: Id, start: number, end: number) => O;
   /** 端ドラッグ自動スクロールが足した累積 px（useTimelineDrag へそのまま渡す）。 */
@@ -85,6 +91,10 @@ export function useTimelineEdgeDrag<Id, H extends EdgeHandle, O>(
     // 純クリック（移動ゼロ）は onHandleDown の選択だけで完結させ、コミットしない。
     // 後片付け（吸着ガイドの消去）は commit 時と同じ afterCommit を通す。
     onClick: () => {
+      opts.afterCommit?.();
+    },
+    onCancel: (handle) => {
+      opts.onCancel?.(opts.getId(handle));
       opts.afterCommit?.();
     },
   });

@@ -48,6 +48,8 @@ export function SettingsMenu({
         ref={dd.triggerRef}
         className="tb-icon-btn tb-settings-btn"
         title="設定（レイアウト・ダッキング・テーマ）"
+        aria-label="設定（レイアウト・ダッキング・テーマ）"
+        data-testid="toolbar-settings"
         aria-haspopup="menu"
         aria-expanded={dd.open}
         onClick={() => dd.setOpen(!dd.open)}

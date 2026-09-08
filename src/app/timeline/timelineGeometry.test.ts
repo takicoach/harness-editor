@@ -11,6 +11,7 @@ import {
   frameToXMapped,
   widthMapped,
   xToFrameMapped,
+  MIN_MAJOR_GAP_PX,
 } from './timelineGeometry';
 import { buildDisplayMap } from '../../core/timelineDisplayMap';
 
@@ -183,5 +184,46 @@ describe('rulerTicks', () => {
     const coarseMajors = coarse.filter((t) => t.kind === 'major');
     const fineMajors = fine.filter((t) => t.kind === 'major');
     expect(fineMajors.length).toBeGreaterThanOrEqual(coarseMajors.length);
+  });
+});
+
+describe('rulerTicks（表示マップ検算・監査 interaction-5）', () => {
+  // rate=4 の案件。残す区間は表示長が 1/4 に潰れるため、等速換算の間隔選択では
+  // 実 px 間隔が MIN_MAJOR_GAP_PX(64) の 1/4 になり時刻ラベルが重なる。
+  const fps = 30;
+  const total = 9000; // 5 分
+  const map4 = buildDisplayMap(
+    total,
+    [],
+    [{ id: 1, originalStart: 0, originalEnd: total }],
+    {},
+    4,
+  );
+
+  it('rate=4 では major 間隔が等速時より粗くなる（ラベルが重ならない）', () => {
+    // 等速換算で 1 秒 = 30*2.2 = 66px ≧ 64 → 従来は 1 秒間隔を選ぶ。
+    const ppf = 2.2;
+    const uniform = rulerTicks(total, ppf, fps).filter((t) => t.kind === 'major');
+    const scaled = rulerTicks(total, ppf, fps, map4).filter((t) => t.kind === 'major');
+    expect(uniform[1]?.frame).toBe(30); // 1 秒間隔（従来）
+    expect(scaled[1]?.frame).toBeGreaterThan(30); // 粗い候補へ後退した
+  });
+
+  it('rate=4 で選ばれた間隔は実配置でも 64px 以上を保つ', () => {
+    const ppf = 2.2;
+    const majors = rulerTicks(total, ppf, fps, map4).filter((t) => t.kind === 'major');
+    for (let i = 1; i < majors.length; i++) {
+      const a = frameToXMapped(majors[i - 1]!.frame, ppf, map4);
+      const b = frameToXMapped(majors[i]!.frame, ppf, map4);
+      expect(b - a).toBeGreaterThanOrEqual(MIN_MAJOR_GAP_PX);
+    }
+  });
+
+  it('identity マップを渡しても map 省略時と同一結果（既存挙動を変えない）', () => {
+    const idMap = buildDisplayMap(total, [], [{ id: 1, originalStart: 0, originalEnd: total }], {}, 1);
+    expect(idMap.identity).toBe(true);
+    for (const ppf of [0.2, 1, 2.2, 8]) {
+      expect(rulerTicks(total, ppf, fps, idMap)).toEqual(rulerTicks(total, ppf, fps));
+    }
   });
 });

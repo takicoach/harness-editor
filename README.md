@@ -184,8 +184,6 @@ npm run test:e2e    # Playwright UI スモーク
 起動済みだとそちらへ接続してしまうので、先に停止してください。2109 を実エディタが使用中で止められない
 場合は隔離ポート(5199)で動く `npx playwright test --config playwright.isolated.config.ts` を使います。
 
-コードベースの地図は [ARCHITECTURE.md](ARCHITECTURE.md) にあります。
-
 ---
 
 ## ライセンス

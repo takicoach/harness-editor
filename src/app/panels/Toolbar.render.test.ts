@@ -1,22 +1,88 @@
 /**
+ * @vitest-environment jsdom
+ */
+/**
  * Toolbar 書き出しボタンの表示ロジック（describeRenderView / renderPhaseLabel）の
  * ユニットテスト。Toolbar.shape.test.ts と同じく DOM レンダリングを伴わない
- * 純関数の確認に徹する。
+ * 純関数の確認に徹する（末尾の書き出し失敗表示のテストのみ実 DOM で検証する）。
  */
-import { describe, it, expect } from 'vitest';
-import { describeRenderView, describeSaveButton, renderPhaseLabel, warnBadgeLabel } from './Toolbar';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { createElement } from 'react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
+import {
+  Toolbar,
+  describeRenderView,
+  describeSaveButton,
+  renderErrorHint,
+  renderPhaseLabel,
+  warnBadgeLabel,
+} from './Toolbar';
 import type { RenderState } from '../useRenderJob';
 
-describe('warnBadgeLabel', () => {
-  it('warnings があると件数付きのラベルを返す・0件なら null', () => {
-    expect(warnBadgeLabel(['a', 'b'])).toBe('⚠ 2');
+afterEach(cleanup);
+
+/** Toolbar を実 DOM で描くための最小 props（書き出し状態だけを差し替えて使う）。 */
+const toolbarBaseProps = {
+  projectName: 'p',
+  canUndo: false,
+  canRedo: false,
+  dirty: false,
+  saving: false,
+  active: true,
+  onUndo: () => {},
+  onRedo: () => {},
+  onSave: () => {},
+  theme: 'dark' as const,
+  onToggleTheme: () => {},
+  layout: 'standard' as const,
+  onLayoutChange: () => {},
+  ducking: { enabled: false, strength: 'mid' as const },
+  onDuckingChange: () => {},
+  onRenderStart: () => {},
+  onRenderCancel: () => {},
+  onRenderReveal: () => {},
+  onRenderDismiss: () => {},
+  warnings: [],
+};
+
+describe('warnBadgeLabel（status-ia-4）', () => {
+  it('警告だけなら「警告 N 件」・0件なら null', () => {
+    expect(warnBadgeLabel(['a', 'b'])).toEqual({
+      label: '⚠ 警告 2 件',
+      aria: '検証の警告 2 件。押すと内容を表示',
+    });
     expect(warnBadgeLabel([])).toBeNull();
+    expect(warnBadgeLabel([], 0)).toBeNull();
   });
 
-  it('古い部品の件数を合算する（通知の一本化）', () => {
-    expect(warnBadgeLabel(['a'], 2)).toBe('⚠ 3');
-    expect(warnBadgeLabel([], 1)).toBe('⚠ 1');
-    expect(warnBadgeLabel([], 0)).toBeNull();
+  it('部品の更新だけなら「更新 N 件」（警告と言わない）', () => {
+    const view = warnBadgeLabel([], 1);
+    expect(view?.label).toBe('⚠ 更新 1 件');
+    expect(view?.aria).toContain('部品の更新 1 件');
+    expect(view?.label).not.toContain('警告');
+  });
+
+  it('両方あるときは内訳を並べる（合算した記号にしない）', () => {
+    expect(warnBadgeLabel(['a'], 2)).toEqual({
+      label: '⚠ 警告 1・更新 2',
+      aria: '検証の警告 1 件、部品の更新 2 件。押すと内容を表示',
+    });
+  });
+
+  it('バッジは data-testid と aria-label を持ち、更新のみでも「警告」と表示しない', () => {
+    const { getByTestId } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: { status: 'idle' } as RenderState,
+        warnings: [],
+        stalePacks: ['telop'],
+        onPackUpgrade: async () => true,
+      }),
+    );
+    const badge = getByTestId('toolbar-warn-badge');
+    expect(badge.textContent).toBe('⚠ 更新 1 件');
+    expect(badge.getAttribute('aria-label')).toContain('部品の更新 1 件');
+    expect(badge.textContent).not.toContain('警告');
   });
 });
 
@@ -129,6 +195,107 @@ describe('describeRenderView', () => {
     expect(describeRenderView(state)).toEqual({
       kind: 'error',
       message: '書き出しに失敗しました',
+      hint: null,
     });
+  });
+});
+
+describe('書き出し失敗の表示と再試行（status-ia-2）', () => {
+  it('renderErrorHint は既知の code を非エンジニア向けの文にする・未知は null', () => {
+    expect(renderErrorHint('render-failed')).toContain('書き出しの途中で止まりました');
+    expect(renderErrorHint('rename-failed')).toContain('空き容量');
+    expect(renderErrorHint('network')).toContain('通信');
+    expect(renderErrorHint('no-such-code')).toBeNull();
+  });
+
+  it('describeRenderView は error に hint を載せる', () => {
+    const state: RenderState = { status: 'error', error: { code: 'render-failed', message: 'exit 1' } };
+    expect(describeRenderView(state)).toEqual({
+      kind: 'error',
+      message: 'exit 1',
+      hint: renderErrorHint('render-failed'),
+    });
+  });
+
+  it('失敗時は理由がホバーせずに読め、「もう一度書き出す」で onRenderStart が呼ばれる', () => {
+    const onRenderStart = vi.fn();
+    const { getByTestId } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: { status: 'error', error: { code: 'render-failed', message: 'exit 1' } },
+        onRenderStart,
+      }),
+    );
+    // 本文（title 属性ではなく可視テキスト）に理由が出ている。
+    expect(getByTestId('render-error').textContent).toContain('書き出しの途中で止まりました');
+    fireEvent.click(getByTestId('render-retry'));
+    expect(onRenderStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('対処法つきの失敗は、その対処法がホバーせずに本文で読める（サイクル 3 Important）', () => {
+    const { getByTestId } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: {
+          status: 'error',
+          error: {
+            code: 'render-no-output',
+            message:
+              '書き出しプロセスは正常終了しましたが、出力ファイルが生成されませんでした。' +
+              'プロジェクトの node_modules/.remotion を削除して再実行してください。',
+          },
+        },
+      }),
+    );
+    const text = getByTestId('render-error').textContent ?? '';
+    // 汎用文だけにせず、唯一の対処法（.remotion の削除）を可視テキストに出す。
+    expect(text).toContain('動画ファイルができていませんでした');
+    expect(text).toContain('.remotion');
+  });
+
+  it('未知の code では生のメッセージを本文に出す', () => {
+    const { getByTestId } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: { status: 'error', error: { code: 'no-such-code', message: '謎の失敗' } },
+      }),
+    );
+    expect(getByTestId('render-error').textContent).toContain('謎の失敗');
+  });
+});
+
+describe('書き出し領域の live region とアイコンボタンの命名（status-ia-3 / -11）', () => {
+  it('tb-render は role="status" の live region で、状態を data-state に出す', () => {
+    const { getByTestId } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: { status: 'running', phase: 'rendering', percent: 50, startedAt: 0 },
+      }),
+    );
+    const region = getByTestId('render-status');
+    expect(region.getAttribute('role')).toBe('status');
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.getAttribute('data-state')).toBe('running');
+  });
+
+  it('失敗は割り込みで伝える別ノード（assertive）に入る', () => {
+    const { getByTestId } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: { status: 'error', error: { code: 'render-failed', message: 'x' } },
+      }),
+    );
+    expect(getByTestId('render-status').getAttribute('data-state')).toBe('error');
+    expect(getByTestId('render-error').getAttribute('aria-live')).toBe('assertive');
+  });
+
+  it('tb-icon-btn は例外なく aria-label を持つ（undo/redo の取りこぼし検出）', () => {
+    const { container } = render(
+      createElement(Toolbar, { ...toolbarBaseProps, renderState: { status: 'idle' } as RenderState }),
+    );
+    const icons = Array.from(container.querySelectorAll('button.tb-icon-btn'));
+    expect(icons.length).toBeGreaterThan(0);
+    const missing = icons.filter((b) => (b.getAttribute('aria-label') ?? '') === '');
+    expect(missing.map((b) => b.getAttribute('title'))).toEqual([]);
   });
 });

@@ -8,14 +8,57 @@ import type { DuckingSettings } from '../../core/types';
 import type { RenderState } from '../useRenderJob';
 import { RenderProgressRing } from './RenderProgressRing';
 
+/** ⚠ バッジの表示（見える文字と読み上げ名）。 */
+export interface WarnBadgeView {
+  /** バッジに表示する文言。 */
+  label: string;
+  /** aria-label／title に使う説明。 */
+  aria: string;
+}
+
 /**
- * ⚠ バッジのラベルを組み立てる（純関数）。検証の警告と部品更新の合算件数。
- * 0件なら非描画のため null。
+ * ⚠ バッジの表示を組み立てる（純関数・status-ia-4）。
+ *
+ * 検証の警告と部品の更新は性質が違うので、合算した記号（旧「⚠ 1」）にせず
+ * 内訳から文を組む。どちらも 0 件ならバッジ自体を出さないため null。
  */
-export function warnBadgeLabel(warnings: string[], stalePackCount = 0): string | null {
-  const count = warnings.length + stalePackCount;
-  if (count === 0) return null;
-  return `⚠ ${count}`;
+export function warnBadgeLabel(warnings: string[], stalePackCount = 0): WarnBadgeView | null {
+  const warn = warnings.length;
+  const stale = stalePackCount;
+  if (warn + stale === 0) return null;
+  if (stale === 0) return { label: `⚠ 警告 ${warn} 件`, aria: `検証の警告 ${warn} 件。押すと内容を表示` };
+  if (warn === 0) return { label: `⚠ 更新 ${stale} 件`, aria: `部品の更新 ${stale} 件。押すと内容を表示` };
+  return {
+    label: `⚠ 警告 ${warn}・更新 ${stale}`,
+    aria: `検証の警告 ${warn} 件、部品の更新 ${stale} 件。押すと内容を表示`,
+  };
+}
+
+/**
+ * 書き出し失敗の分類文言（純関数・status-ia-2）。
+ * サーバ（renderJob.fail）と useRenderJob が付ける code から
+ * 「何が起きたのか・次に何をすればよいか」を非エンジニア向けの 1 文で返す。
+ * 未知の code は null（生の message だけを出す）。
+ */
+export function renderErrorHint(code: string): string | null {
+  switch (code) {
+    case 'npm-install-failed':
+      return '書き出しの準備（必要な部品の取り込み）に失敗しました。ネットワークにつながっているか確認してください。';
+    case 'render-no-output':
+      return '書き出しは終わりましたが、動画ファイルができていませんでした。もう一度お試しください。';
+    case 'rename-failed':
+      return 'できあがった動画を保存できませんでした。保存先の空き容量を確認してください。';
+    case 'render-failed':
+      return '書き出しの途中で止まりました。もう一度お試しください。';
+    case 'finalize-failed':
+      return '仕上げ（画質の調整）の途中で止まりました。もう一度お試しください。';
+    case 'spawn-failed':
+      return '書き出しを始められませんでした。アプリを起動し直してからお試しください。';
+    case 'network':
+      return 'アプリとの通信が切れました。アプリが動いているか確認してください。';
+    default:
+      return null;
+  }
 }
 
 /** 書き出し UI の表示に必要な情報（描画から分離した純データ）。 */
@@ -23,7 +66,7 @@ export type RenderView =
   | { kind: 'idle' }
   | { kind: 'running'; label: string; percent: number | null; showBar: boolean }
   | { kind: 'done'; warning?: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string; hint: string | null };
 
 /**
  * running 状態の表示ラベルを組み立てる（純関数）。
@@ -121,7 +164,7 @@ export function describeRenderView(state: RenderState): RenderView {
     case 'done':
       return state.warning === undefined ? { kind: 'done' } : { kind: 'done', warning: state.warning };
     case 'error':
-      return { kind: 'error', message: state.error.message };
+      return { kind: 'error', message: state.error.message, hint: renderErrorHint(state.error.code) };
   }
 }
 
@@ -219,7 +262,7 @@ export function Toolbar({
   const saveBtn = describeSaveButton(active, dirty, saving);
   const renderView = describeRenderView(renderState);
   const warnDd = useDropdown();
-  const warnLabel = warnBadgeLabel(warnings, stalePacks.length);
+  const warnBadge = warnBadgeLabel(warnings, stalePacks.length);
   // 部品更新の実行中フラグ（旧 PackUpgradeBanner の busy を引き継ぎ）。
   const [packBusy, setPackBusy] = useState(false);
 
@@ -270,24 +313,26 @@ export function Toolbar({
         </div>
       </div>
       <div className="tb-r">
-        {warnLabel !== null && (
+        {warnBadge !== null && (
           <div className="dd tb-warn" ref={warnDd.rootRef}>
             <button
               type="button"
               ref={warnDd.triggerRef}
               className="tb-warn-badge"
-              title="検証の警告を表示"
+              data-testid="toolbar-warn-badge"
+              title={warnBadge.aria}
+              aria-label={warnBadge.aria}
               aria-haspopup="menu"
               aria-expanded={warnDd.open}
               onClick={() => warnDd.setOpen(!warnDd.open)}
             >
-              {warnLabel}
+              {warnBadge.label}
             </button>
             {warnDd.open && (
               <div className="dd-menu tb-warn-menu">
                 {stalePacks.length > 0 && onPackUpgrade !== undefined && (
                   <>
-                    <div className="dd-section">部品の更新</div>
+                    <div className="dd-section">部品の更新（{stalePacks.length}件）</div>
                     <div className="tb-pack-upgrade" role="status">
                       <span>部品の更新があります（{stalePacks.length}件）</span>
                       <button
@@ -310,7 +355,7 @@ export function Toolbar({
                 )}
                 {warnings.length > 0 && (
                   <>
-                    <div className="dd-section">検証の警告</div>
+                    <div className="dd-section">検証の警告（{warnings.length}件）</div>
                     <ul className="tb-warn-list">
                       {warnings.map((w, i) => (
                         <li key={i}>{w}</li>
@@ -325,6 +370,8 @@ export function Toolbar({
         <button
           className="tb-icon-btn"
           title="元に戻す（Ctrl/Cmd+Z）"
+          aria-label="元に戻す"
+          data-testid="toolbar-undo"
           disabled={!active || !canUndo}
           onClick={onUndo}
         >
@@ -333,6 +380,8 @@ export function Toolbar({
         <button
           className="tb-icon-btn"
           title="やり直す（Ctrl/Cmd+Shift+Z）"
+          aria-label="やり直す"
+          data-testid="toolbar-redo"
           disabled={!active || !canRedo}
           onClick={onRedo}
         >
@@ -350,7 +399,17 @@ export function Toolbar({
           <span>{saveBtn.label}</span>
         </button>
         <div className="tb-divider" />
-        <div className="tb-render" role="group" aria-label="書き出し">
+        {/* status-ia-3: 書き出しの実行中・完了・失敗を包む live region。
+            目を離していても読み上げ／AI エージェントへ状態変化が伝わる。
+            失敗だけは割り込んで伝えたいので別ノード（assertive）に分ける。 */}
+        <div
+          className="tb-render"
+          role="status"
+          aria-live="polite"
+          data-testid="render-status"
+          data-state={renderView.kind}
+          aria-label="書き出し"
+        >
           {renderView.kind === 'idle' && (
             <button
               className="tb-render-btn"
@@ -405,10 +464,29 @@ export function Toolbar({
             </div>
           )}
           {renderView.kind === 'error' && (
-            <div className="tb-render-error">
-              <span className="tb-render-label" title={renderView.message}>
-                書き出し失敗
-              </span>
+            // status-ia-2: 失敗理由はホバー専用にしない。理由を本文として出し、
+            // 「もう一度書き出す」を × の隣に置いて押し直すだけで再挑戦できるようにする。
+            <div className="tb-render-error" data-testid="render-error" role="alert" aria-live="assertive">
+              <div className="tb-render-error-text">
+                <span className="tb-render-label">書き出し失敗</span>
+                <span className="tb-render-error-msg">{renderView.hint ?? renderView.message}</span>
+                {/*
+                  汎用文（hint）だけにすると、対処法を持つ code
+                  （例 render-no-output の「node_modules/.remotion を削除して再実行」）が
+                  ホバー専用に戻ってしまう。サーバの message も本文として併記する。
+                */}
+                {renderView.hint !== null && renderView.message !== '' && renderView.message !== renderView.hint && (
+                  <span className="tb-render-error-detail">{renderView.message}</span>
+                )}
+              </div>
+              <button
+                className="btn btn-secondary btn-sm tb-render-retry"
+                data-testid="render-retry"
+                title="もう一度書き出す"
+                onClick={onRenderStart}
+              >
+                もう一度書き出す
+              </button>
               <button
                 className="tb-render-x"
                 title="閉じる"

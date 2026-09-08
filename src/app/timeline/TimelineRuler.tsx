@@ -16,7 +16,7 @@ interface TimelineRulerProps {
 
 /** 時間ルーラー。major 目盛りに時刻ラベル、minor は線のみ。ドラッグでスクラブ。 */
 export function TimelineRuler({ totalFrames, pxPerFrame, fps, onScrubStart, map }: TimelineRulerProps) {
-  const ticks = rulerTicks(totalFrames, pxPerFrame, fps);
+  const ticks = rulerTicks(totalFrames, pxPerFrame, fps, map);
   return (
     <div className="tl-ruler" onPointerDown={(e) => onScrubStart(e)}>
       <div className="tl-ruler-gutter" aria-hidden="true" />

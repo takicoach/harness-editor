@@ -641,7 +641,7 @@ export function App() {
   }
 
   // 字幕編集モードかつ字幕選択中なら、文字起こしの隣に設定側パネル（subpanel）を出す。
-  const subPanelOn = session ? showsSubtitlePanel(session.state, layout) : false;
+  const subPanelOn = session ? showsSubtitlePanel(session.state, layout, activeTab) : false;
   const selectedSubtitle =
     subPanelOn && session && session.state.selection?.kind === 'telop'
       ? session.state.telops.find((t) => t.id === (session.state.selection as { kind: 'telop'; id: number }).id)
