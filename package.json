@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.legacy-fixtures.json",
     "learn": "node --import tsx src/learning/bin.ts",
     "aggregate-cuts": "node --import tsx src/server/aggregateCutLearningBin.ts",
-    "docs:gifs": "node scripts/record-guide-gifs.mjs",
+    "docs:shots": "node scripts/capture-guide-shots.mjs",
     "docs:help-shots": "node scripts/capture-help-shots.mjs",
     "desktop:dev": "HARNESS_DESKTOP_NODE=$(command -v node) npm --prefix desktop start",
     "desktop:mac": "npm --prefix desktop run package:mac",
