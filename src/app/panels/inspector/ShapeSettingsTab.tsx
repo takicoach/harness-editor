@@ -1,3 +1,4 @@
+import { AssetTimingSection, useAssetTimingDisplay } from './AssetTimingSection';
 import { useState, useEffect } from 'react';
 import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
@@ -25,6 +26,7 @@ interface ShapeSettingsTabProps {
  * 図形選択時のインスペクタ本体（受入基準: 色6プリセット/太さ3段/不透明度スライダー/表示区間/CTA）。
  */
 export function ShapeSettingsTab({ shape, state, fps, shapeInstalled, installing, installErrors, dirty, onInstall, onEdit }: ShapeSettingsTabProps) {
+  const timing = useAssetTimingDisplay();
   const playbackStart = originalToPlayback(shape.originalStart, state.cutRegions, cutOrderingOf(state));
   const playbackEnd = originalToPlayback(shape.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   const shownStart = playbackStart ?? shape.originalStart;
@@ -76,7 +78,7 @@ export function ShapeSettingsTab({ shape, state, fps, shapeInstalled, installing
       <div className="ins-section">
         <div className="ins-label"><span>図形 #{shape.id}（{shape.kind}）</span></div>
         <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-          {`${formatClock(frameToSec(shape.originalStart, fps))} — ${formatClock(frameToSec(shape.originalEnd, fps))}`}
+          {timing?.label ?? `${formatClock(frameToSec(shape.originalStart, fps))} — ${formatClock(frameToSec(shape.originalEnd, fps))}`}
         </div>
       </div>
 
@@ -133,7 +135,7 @@ export function ShapeSettingsTab({ shape, state, fps, shapeInstalled, installing
       </div>
 
       {/* 表示区間（秒）（受入基準）。 */}
-      <div className="ins-section">
+<AssetTimingSection>
         <div className="ins-label"><span>表示する時間（秒）</span></div>
         {!editable && (
           <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 6px' }}>
@@ -168,7 +170,7 @@ export function ShapeSettingsTab({ shape, state, fps, shapeInstalled, installing
             />
           </div>
         </div>
-      </div>
+      </AssetTimingSection>
 
       <div className="ins-section">
         <button className="tx-mini-btn" onClick={() => onEdit(removeShape(state, shape.id))}>

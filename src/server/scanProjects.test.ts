@@ -4,21 +4,21 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { scanProjects, isHarnessProject } from './scanProjects';
+import { scanProjects, isSuperMovieProject } from './scanProjects';
 
 const FIXTURE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 
-describe('isHarnessProject', () => {
+describe('isSuperMovieProject', () => {
   it('videoConfig.ts と telopData.ts を持つディレクトリを真と判定する', () => {
-    expect(isHarnessProject(join(FIXTURE_ROOT, 'sample-project'))).toBe(true);
+    expect(isSuperMovieProject(join(FIXTURE_ROOT, 'sample-project'))).toBe(true);
   });
   it('ハーネス形式でないディレクトリは偽', () => {
-    expect(isHarnessProject(FIXTURE_ROOT)).toBe(false);
+    expect(isSuperMovieProject(FIXTURE_ROOT)).toBe(false);
   });
 });
 
 describe('scanProjects', () => {
-  it('ルート配下のハーネス形式プロジェクトを列挙する', () => {
+  it('ルート配下のハーネス形式の案件を列挙する', () => {
     const projects = scanProjects(FIXTURE_ROOT);
     const sample = projects.find((p) => p.id === 'sample-project');
     expect(sample).toBeDefined();

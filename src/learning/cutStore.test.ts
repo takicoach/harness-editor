@@ -47,8 +47,8 @@ const entry = (
 });
 
 describe('cutStore', () => {
-  beforeEach(() => { process.env.HARNESS_LEARNING_HOME = mkdtempSync(join(tmpdir(), 'sme-learn-')); });
-  afterEach(() => { delete process.env.HARNESS_LEARNING_HOME; });
+  beforeEach(() => { process.env.SUPERMOVIE_LEARNING_HOME = mkdtempSync(join(tmpdir(), 'sme-learn-')); });
+  afterEach(() => { delete process.env.SUPERMOVIE_LEARNING_HOME; });
 
   it('recordApprovedCutFeedback は jsonl 追記と cut_rules.json 更新を行う（異なる動画で2回観測）', () => {
     recordApprovedCutFeedback([entry('えーと', { videoId: 'v1' })]);

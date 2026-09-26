@@ -79,6 +79,18 @@ describe('history スタック', () => {
     expect(current(h).nextTelopId).toBe(1);
   });
 
+  it('同一 state（無変化）を push しても履歴は動かない — redo 分岐も上限も守る', () => {
+    let h = createHistory(st(0));
+    h = pushState(h, st(1));
+    h = undo(h); // redo 可能な状態
+    const before = h;
+    // op が「対象が無い」ときに返す同一参照を積もうとしたケース
+    h = pushState(h, current(h));
+    expect(h).toBe(before);
+    expect(canRedo(h)).toBe(true);
+    expect(canUndo(h)).toBe(false);
+  });
+
   it('履歴は HISTORY_LIMIT 件で頭から切り捨てる', () => {
     let h = createHistory(st(0));
     for (let i = 1; i <= HISTORY_LIMIT + 5; i++) {

@@ -1,17 +1,9 @@
 /**
- * AI タブ（実験: feat/simplified-ai-tab）。
- * 「初心者には画面が渋滞していて怖い」というオーナーの実機フィードバックを受け、
- * 在席表示・指示の履歴/入力欄・上下2段折りたたみを撤去し、埋め込みターミナル
- * （AiTerminal）だけの単純な画面にした UI 簡素化の実験版。
- *
- * サーバー側（受け箱 instructionInbox・/api/instructions・/api/agent-status・
- * MCP の get_next_instruction / report_instruction_status）は一切変更していない。
- * 別ターミナルで動かす Claude Code からは従来どおり使える。このパネルの UI を
- * 差し替えているだけなので、元の複合 UI（在席2段表示・指示履歴・打ち切り導線）に
- * 戻したい場合は git でこのファイルの変更を revert すればよい。
+ * 案件ごとの依頼入力・履歴。実行は既存のMCP受け箱を使い、接続用端末は明示的に開く。
+ * showTerminalの既存ゲートは、非表示のAIタブで接続処理を開始しないために維持する。
  */
 import type { InstructionContext } from '../../shared/types';
-import { AiTerminal } from './AiTerminal';
+import { AiRequestPanel } from './AiRequestPanel';
 
 interface ClaudePanelProps {
   /** 開いているプロジェクト id。null のとき送信不可。 */
@@ -20,8 +12,9 @@ interface ClaudePanelProps {
   open: boolean;
   /** 折りたたみトグル。 */
   onToggle: () => void;
-  /** 送信時に「今見ている文脈」を読み取る（再生位置・選択）。簡素化版では未使用（インターフェース維持）。 */
+  /** 送信時の再生位置・選択を読み取る。受付確認では送信時の値を再利用する。 */
   buildContext: () => InstructionContext;
+  onOpenActivity?: () => void;
   /** ドック埋め込み（aside/折りたたみトグル無し・常時展開・中身のみ）。 */
   embedded?: boolean;
   /**
@@ -34,6 +27,9 @@ interface ClaudePanelProps {
 }
 
 export function ClaudePanel({
+  projectId,
+  buildContext,
+  onOpenActivity,
   open,
   onToggle,
   embedded = false,
@@ -49,7 +45,7 @@ export function ClaudePanel({
     );
   }
 
-  const body = showTerminal ? <AiTerminal /> : null;
+  const body = showTerminal && projectId ? <AiRequestPanel key={projectId} projectId={projectId} buildContext={buildContext} onOpenActivity={onOpenActivity} /> : null;
 
   if (embedded) {
     return <div className="cl cl-embedded">{body}</div>;

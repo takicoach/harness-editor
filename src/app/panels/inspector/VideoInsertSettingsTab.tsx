@@ -1,28 +1,27 @@
+import { AssetTimingSection, useAssetTimingDisplay } from './AssetTimingSection';
 import { useState, useEffect } from 'react';
 import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
+import { videoInsertSourceOverflowFrames, videoInsertHasNoPlayableFrames } from '../../../core/videoInsertEngine';
 import { formatClock, frameToSec, parseSecField } from '../../../shared/format';
 import type { EditorVideoInsert } from '../../../core/types';
 import type { EditState } from '../../edit/editState';
 import {
   retimeVideoInsert, setVideoInsertFile, setVideoInsertScale, setVideoInsertInPoint, setVideoInsertPlaybackRate,
   applySourceOffsetToFile, removeVideoInsert, setVideoInsertEnter, setVideoInsertExit,
-  videoInsertMaxEnd, videoInsertOverflowFrames,
 } from '../../edit/videoInsertOps';
+import { assetUrl } from '../materialList';
+import { useSourceDurationFrames } from '../../audio/useSourceDurationFrames';
 import { VideoSyncWaveform } from '../VideoSyncWaveform';
 import { AnimControls, sliderToRate, rateToSlider } from './shared';
 
 interface VideoInsertSettingsTabProps {
   videoInsert: EditorVideoInsert;
+  /** Rate on the final timeline, including main-video speed. */
+  effectivePlaybackRate?: number;
   state: EditState;
   fps: number;
   videoLibrary: string[];
-  /**
-   * サブ動画素材の実フレーム長（file → frames）。未プローブ・読めない素材はキーごと存在しない。
-   * 実尺が分かる素材だけ「素材の長さ」を出し、区間を素材内へクランプする。
-   * **任意にしない**: 渡し忘れるとクランプが silent OFF になるため、tsc に検出させる。
-   */
-  videoDurations: Record<string, number>;
   projectId: string;
   assetVersions?: Record<string, string>;
   onLive: (next: EditState) => void;
@@ -30,32 +29,32 @@ interface VideoInsertSettingsTabProps {
 }
 
 /** サブ動画選択時のインスペクタ本体（ファイル・大きさ・イン点同期・表示区間・削除）。 */
-export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, videoDurations, projectId, assetVersions, onLive, onEdit }: VideoInsertSettingsTabProps) {
+export function VideoInsertSettingsTab({ videoInsert, effectivePlaybackRate, state, fps, videoLibrary, projectId, assetVersions, onLive, onEdit }: VideoInsertSettingsTabProps) {
+  const timing = useAssetTimingDisplay();
   const playbackStart = originalToPlayback(videoInsert.originalStart, state.cutRegions, cutOrderingOf(state));
   const playbackEnd = originalToPlayback(videoInsert.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
   const shownStart = playbackStart ?? videoInsert.originalStart;
   const shownEnd = playbackEnd ?? videoInsert.originalEnd;
-  const editable = playbackStart !== null && playbackEnd !== null;
+  const editable = timing !== null || (playbackStart !== null && playbackEnd !== null);
   const scale = videoInsert.scale ?? 1;
   const rate = videoInsert.playbackRate ?? 1;
   const rateLabel = Number.isInteger(rate) ? `${rate}x` : `${rate.toFixed(2)}x`;
   const sourceInFrame = videoInsert.sourceInFrame;
-  const durationFrames = videoInsert.originalEnd - videoInsert.originalStart;
-  const sourceWindowFrames = Math.max(1, Math.round(durationFrames * rate));
+  const durationFrames = timing ? timing.end - timing.start : videoInsert.originalEnd - videoInsert.originalStart;
+  const sourceWindowFrames = Math.max(1, Math.round(durationFrames * (timing ? effectivePlaybackRate ?? rate : rate)));
   const fileOptions = videoLibrary.includes(videoInsert.file)
     ? videoLibrary
     : [videoInsert.file, ...videoLibrary];
 
-  // 素材の実フレーム長（プローブ済みのファイルのみ）。未知なら実尺表示もクランプもしない。
-  const sourceFrames = videoDurations[videoInsert.file];
-  // 参照先がライブラリに無い（ファイル欠落・リネーム）。プローブは走らないので「確認中」にしない。
-  const missingFromLibrary = !videoLibrary.includes(videoInsert.file);
-  // イン点や速度の変更で素材の終端を越えた量（ソース座標のフレーム数）。
-  const overflowFrames = videoInsertOverflowFrames(videoInsert, sourceFrames, state.cutRegions);
-  const overflowing = overflowFrames !== null && overflowFrames > 0;
-  /** 確定する start を基準にした originalEnd の上限（実尺不明なら undefined＝クランプなし）。 */
-  const endLimit = (start: number): number | undefined =>
-    videoInsertMaxEnd(videoInsert, sourceFrames, start, state.cutRegions);
+  // ソース長超過ヒント（R-1）。デコードは VideoSyncWaveform の波形取得と同じ副産物なので追加コストは低い。
+  // 音声なし・取得失敗で長さ不明なら null（警告なし）。実クランプは保存時にサーバ側 ffprobe が担う。
+  const subUrl = videoInsert.file === '' ? null : assetUrl(projectId, videoInsert.file, assetVersions);
+  const sourceLengthFrames = useSourceDurationFrames(subUrl, fps);
+  const overflowFrames = videoInsertSourceOverflowFrames(videoInsert, sourceLengthFrames);
+  const overflowSec = overflowFrames !== null && overflowFrames > 0 ? frameToSec(overflowFrames, fps) : null;
+  // X-2(a): 超過の中でも「クランプでは直せない＝再生できるフレームが1枚も残っていない」場合は
+  // 「保存時に自動調整されます」が嘘になる（保存しても直らない）。取るべき行動ごと出し分ける。
+  const noPlayableFrames = videoInsertHasNoPlayableFrames(videoInsert, sourceLengthFrames);
 
   const [startStr, setStartStr] = useState(frameToSec(shownStart, fps).toFixed(2));
   const [endStr, setEndStr] = useState(frameToSec(shownEnd, fps).toFixed(2));
@@ -67,19 +66,12 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
   function commitStart(): void {
     const frame = parseSecField(startStr, shownStart, fps);
     if (frame === null) { setStartStr(frameToSec(shownStart, fps).toFixed(2)); return; }
-    const start = playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state));
-    onEdit(retimeVideoInsert(state, videoInsert.id, start, videoInsert.originalEnd, endLimit(start)));
+    onEdit(retimeVideoInsert(state, videoInsert.id, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state)), videoInsert.originalEnd));
   }
   function commitEnd(): void {
     const frame = parseSecField(endStr, shownEnd, fps);
     if (frame === null) { setEndStr(frameToSec(shownEnd, fps).toFixed(2)); return; }
-    onEdit(retimeVideoInsert(
-      state,
-      videoInsert.id,
-      videoInsert.originalStart,
-      playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state)),
-      endLimit(videoInsert.originalStart),
-    ));
+    onEdit(retimeVideoInsert(state, videoInsert.id, videoInsert.originalStart, playbackToOriginal(frame, state.cutRegions, cutOrderingOf(state))));
   }
   function commitIn(): void {
     const frame = parseSecField(inStr, sourceInFrame, fps);
@@ -92,7 +84,7 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
       <div className="ins-section">
         <div className="ins-label"><span>サブ動画 #{videoInsert.id}</span></div>
         <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-          {`${formatClock(frameToSec(videoInsert.originalStart, fps))} — ${formatClock(frameToSec(videoInsert.originalEnd, fps))}`}
+          {timing?.label ?? `${formatClock(frameToSec(videoInsert.originalStart, fps))} — ${formatClock(frameToSec(videoInsert.originalEnd, fps))}`}
         </div>
       </div>
 
@@ -105,16 +97,6 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
         >
           {fileOptions.map((f) => (<option key={f} value={f}>{f}</option>))}
         </select>
-        {/* 素材の実尺。プローブできた素材だけ出す（不明なまま推定値を出さない）。 */}
-        <p className="ins-vi-source-len">
-          {sourceFrames !== undefined
-            ? `素材の長さ: ${formatClock(frameToSec(sourceFrames, fps))}（${frameToSec(sourceFrames, fps).toFixed(2)} 秒）`
-            : missingFromLibrary
-              // ライブラリに無い＝ファイル自体が消えている/名前が違う。プローブは永遠に終わらないので
-              // 「確認中」と出し続けると原因を誤解させる。
-              ? '素材が見つかりません（public/ にファイルがありません）。プレビューにも表示されません'
-              : '素材の長さ: 確認中（読み取れない素材は区間を制限しません）'}
-        </p>
       </div>
 
       <div className="ins-section">
@@ -186,14 +168,6 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
             />
           </div>
         </div>
-        {/* イン点は波形で合わせる同期点なので勝手にクランプしない。代わりに超過を知らせる
-            （区間の伸ばしすぎは retimeVideoInsert 側でクランプ済み・ここはイン点/速度由来）。 */}
-        {overflowing && (
-          <p className="ins-vi-overflow-warn">
-            素材の終わりを {frameToSec(overflowFrames ?? 0, fps).toFixed(2)} 秒ぶん超えています。
-            超えた分は最後のコマで静止します（再生開始位置を戻すか、表示する時間を短くしてください）。
-          </p>
-        )}
         <button
           className="tx-mini-btn"
           onClick={() => onEdit(applySourceOffsetToFile(state, videoInsert.id))}
@@ -201,6 +175,16 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
         >
           このソースの他クリップにも適用
         </button>
+        {overflowSec !== null && (
+          <p
+            className="ins-vi-source-overflow-warn"
+            style={{ fontSize: 11, color: 'var(--danger, #c0392b)', margin: '6px 0 0' }}
+          >
+            {noPlayableFrames
+              ? 'このサブ動画は再生できる範囲が残っていません（開始位置がソースの終わりより後です）。開始位置を戻すか、クリップを削除してください。'
+              : `再生開始位置から先がソースの実長を約${overflowSec.toFixed(2)}秒超えています。保存時に終了位置が自動調整されます。`}
+          </p>
+        )}
       </div>
 
       <AnimControls
@@ -218,7 +202,7 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
         defaultKind="none"
       />
 
-      <div className="ins-section">
+<AssetTimingSection>
         <div className="ins-label"><span>表示する時間（秒）</span></div>
         {!editable && (
           <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 6px' }}>
@@ -254,7 +238,7 @@ export function VideoInsertSettingsTab({ videoInsert, state, fps, videoLibrary, 
             />
           </div>
         </div>
-      </div>
+      </AssetTimingSection>
 
       <div className="ins-section">
         <button className="tx-mini-btn" onClick={() => onEdit(removeVideoInsert(state, videoInsert.id))}>

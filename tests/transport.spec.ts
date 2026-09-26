@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openEditor } from './helpers';
+import { openEditor, useTempProject } from './helpers';
 
 /**
  * トランスポート操作（←→ コマ送り・JKL）と、アンカー固定ズームの回帰テスト。
@@ -7,8 +7,13 @@ import { openEditor } from './helpers';
  * 再生ヘッドの画面 X がズーム前後でほぼ動かないことを固定する。
  */
 
+// 共有 sample-project は smoke / heavy-job-confirm の afterEach が git checkout/clean で
+// 巻き戻すため、その窓に重なると読み込みが壊れる（helpers.ts の useTempProject 参照）。
+// このファイルは保存を伴わない読み取り専用の検証なので、専用コピーへ隔離するだけで足りる。
+const projectId = useTempProject('transport-tmp');
+
 test('←→ でコマ送りでき、Shift＋→ は 1 秒進む', async ({ page }) => {
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // ルーラーをクリックして頭出し（つまみ非選択の状態を作る）。
   const ruler = page.locator('.tl-ruler');
@@ -37,7 +42,7 @@ test('←→ でコマ送りでき、Shift＋→ は 1 秒進む', async ({ page
 });
 
 test('L で早送り・K で停止（速度バッジが出て消える）', async ({ page }) => {
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   const badge = page.locator('.tl-rate-badge');
   await expect(badge).toHaveCount(0);
@@ -53,7 +58,7 @@ test('L で早送り・K で停止（速度バッジが出て消える）', asyn
 });
 
 test('ズームしても再生ヘッドは画面上の同じ位置に留まる', async ({ page }) => {
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // まず十分に拡大し、さらに横スクロールした状態を作る（先頭付近・スクロール不能な幅では
   // そもそもアンカーを固定しようがなく、この機能の対象外）。上限 12px/frame でクランプ。

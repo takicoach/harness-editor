@@ -3,7 +3,8 @@ import { LayoutSwitcher } from './LayoutSwitcher';
 import { useDropdown } from '../useDropdown';
 import type { LayoutPreset } from '../layout/layoutPreset';
 import type { WaveformPref } from '../layout/waveformPref';
-import type { DuckingSettings, DuckingStrength } from '../../core/types';
+import type { DuckingSettings } from '../../core/types';
+import {DuckingControls} from './DuckingControls';
 
 interface SettingsMenuProps {
   active: boolean;
@@ -61,30 +62,7 @@ export function SettingsMenu({
           <div className="dd-section">レイアウト</div>
           <LayoutSwitcher value={layout} onChange={onLayoutChange} />
           <div className="dd-section">ダッキング（喋り中に BGM を下げる）</div>
-          <div className="tb-ducking" role="group" aria-label="ダッキング">
-            <button
-              className={'tb-duck-toggle' + (ducking.enabled ? ' on' : '')}
-              disabled={!active}
-              aria-pressed={ducking.enabled}
-              title={ducking.enabled ? 'ダッキング ON（喋り中に BGM を下げる）' : 'ダッキング OFF'}
-              onClick={() => onDuckingChange({ ...ducking, enabled: !ducking.enabled })}
-            >
-              <span>{ducking.enabled ? 'ON' : 'OFF'}</span>
-            </button>
-            <div className="tb-duck-strength">
-              {(['weak', 'mid', 'strong'] as DuckingStrength[]).map((s) => (
-                <button
-                  key={s}
-                  className={'tb-duck-lv' + (ducking.strength === s ? ' active' : '')}
-                  disabled={!active || !ducking.enabled}
-                  aria-pressed={ducking.strength === s}
-                  onClick={() => onDuckingChange({ ...ducking, strength: s })}
-                >
-                  {s === 'weak' ? '弱' : s === 'mid' ? '中' : '強'}
-                </button>
-              ))}
-            </div>
-          </div>
+          <DuckingControls value={ducking} disabled={!active} onChange={patch=>onDuckingChange({...ducking,...patch})}/>
           {onWaveformPrefChange !== undefined && (
             <>
               <div className="dd-section">波形の高さ</div>

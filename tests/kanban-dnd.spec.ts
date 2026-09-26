@@ -1,17 +1,34 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
+import { createTempProject, removeTempProject } from './helpers';
 
-const STATUS_FILE = join(
-  import.meta.dirname,
-  '..',
-  'src/server/__fixtures__/sample-project/.sme/status.json',
-);
+/**
+ * 共有フィクスチャ `sample-project` は使わず、テストごとの専用コピーを対象にする。
+ * 理由（project-status-dashboard.spec.ts と同じ）: default project 側の spec が
+ * afterEach で `git clean -fdx sample-project` を掛け続けており（`.sme/` は gitignore
+ * 済み＝ -x の対象）、これがフルスイート実行のほぼ全域で数百ms間隔で発火する。
+ * ドラッグ後にサーバーが書いた `.sme/status.json` がその git clean に消され、
+ * 本ファイルの poll が `undefined` を見て落ちる（実測: フルスイート 5 回目で再現。
+ * カード移動と手動バッジは成功していて status.json だけが消えていた）。
+ * 待ち時間を伸ばしても消される側なので、共有をやめて衝突自体を無くす。
+ */
+let projectId = '';
+let projectDir = '';
+let STATUS_FILE = '';
 
 test.describe.configure({ mode: 'serial' });
 
-test.afterEach(() => {
-  if (existsSync(STATUS_FILE)) rmSync(STATUS_FILE);
+test.beforeEach(() => {
+  ({ id: projectId, dir: projectDir } = createTempProject('kanban-tmp'));
+  STATUS_FILE = join(projectDir, '.sme', 'status.json');
+});
+
+test.afterEach(async ({ page }) => {
+  // ページを閉じてから消す（開いたままだとクライアント発の要求が削除中の
+  // プロジェクトへ飛び、サーバーが .sme/ を作り直して ENOTEMPTY になる）。
+  await page.close();
+  removeTempProject(projectDir);
 });
 
 async function openKanban(page: import('@playwright/test').Page) {
@@ -22,7 +39,7 @@ async function openKanban(page: import('@playwright/test').Page) {
 
 test('進行ボード: カードを別列へドラッグ → stage 固定・手動バッジ・status.json 書込', async ({ page }) => {
   await openKanban(page);
-  const card = page.locator('.home-col .home-card', { hasText: 'sample-project' });
+  const card = page.locator('.home-col .home-card', { hasText: projectId });
   await expect(card).toBeVisible();
 
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
@@ -33,9 +50,9 @@ test('進行ボード: カードを別列へドラッグ → stage 固定・手�
 
   // カードがテロップ列へ移動し、手動バッジが出る
   await expect(
-    page.locator('.home-col[data-status="telop"] .home-card', { hasText: 'sample-project' }),
+    page.locator('.home-col[data-status="telop"] .home-card', { hasText: projectId }),
   ).toBeVisible();
-  await expect(page.locator('.home-card .home-card-manual')).toBeVisible();
+  await expect(card.locator('.home-card-manual')).toBeVisible();
 
   // サーバへ手動 stage が永続化される
   await expect
@@ -49,14 +66,14 @@ test('進行ボード: カードを別列へドラッグ → stage 固定・手�
 
 test('進行ボード: idle 列への手動移動も受理される（全6値）', async ({ page }) => {
   await openKanban(page);
-  const card = page.locator('.home-col .home-card', { hasText: 'sample-project' });
+  const card = page.locator('.home-col .home-card', { hasText: projectId });
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
   await card.dispatchEvent('dragstart', { dataTransfer });
   const idleCol = page.locator('.home-col[data-status="idle"]');
   await idleCol.dispatchEvent('dragover', { dataTransfer });
   await idleCol.dispatchEvent('drop', { dataTransfer });
   await expect(
-    page.locator('.home-col[data-status="idle"] .home-card', { hasText: 'sample-project' }),
+    page.locator('.home-col[data-status="idle"] .home-card', { hasText: projectId }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -69,7 +86,7 @@ test('進行ボード: idle 列への手動移動も受理される（全6値）
 
 test('進行ボード: 削除アイコンを掴んでもカードはドラッグされない（実ポインタ操作）', async ({ page }) => {
   await openKanban(page);
-  const card = page.locator('.home-col .home-card', { hasText: 'sample-project' });
+  const card = page.locator('.home-col .home-card', { hasText: projectId });
   await expect(card).toBeVisible();
   const colStatus = await card.locator('xpath=ancestor::div[@data-status][1]').getAttribute('data-status');
   // 移動先はカードが今いる列以外（1 列目が同じなら 2 列目を使う）。
@@ -90,16 +107,16 @@ test('進行ボード: 削除アイコンを掴んでもカードはドラッグ
 
   // カードは元の列に留まり、手動バッジも status.json も生まれない。
   await expect(
-    page.locator(`.home-col[data-status="${colStatus}"] .home-card`, { hasText: 'sample-project' }),
+    page.locator(`.home-col[data-status="${colStatus}"] .home-card`, { hasText: projectId }),
   ).toBeVisible();
-  await expect(page.locator('.home-card .home-card-manual')).toHaveCount(0);
+  await expect(card.locator('.home-card-manual')).toHaveCount(0);
   await page.waitForTimeout(500);
   expect(existsSync(STATUS_FILE)).toBe(false);
 });
 
 test('進行ボード: 同一列内 drop は何も起こさない（列間移動専用）', async ({ page }) => {
   await openKanban(page);
-  const card = page.locator('.home-col .home-card', { hasText: 'sample-project' });
+  const card = page.locator('.home-col .home-card', { hasText: projectId });
   await expect(card).toBeVisible();
   // カードが現在いる列を特定して同じ列へ drop
   const colStatus = await card
@@ -112,7 +129,7 @@ test('進行ボード: 同一列内 drop は何も起こさない（列間移動
   await sameCol.dispatchEvent('dragover', { dataTransfer });
   await sameCol.dispatchEvent('drop', { dataTransfer });
   // 手動バッジは付かず、status.json も書かれない
-  await expect(page.locator('.home-card .home-card-manual')).toHaveCount(0);
+  await expect(card.locator('.home-card-manual')).toHaveCount(0);
   await page.waitForTimeout(500);
   expect(existsSync(STATUS_FILE)).toBe(false);
 });

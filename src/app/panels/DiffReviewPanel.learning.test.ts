@@ -66,3 +66,13 @@ describe('TELOP_LEARNING_SCOPE_NOTE', () => {
     expect(TELOP_LEARNING_SCOPE_NOTE).toContain('対象外');
   });
 });
+
+describe('learningDoneSummary（新画面・設計書 D9）', () => {
+  it('記録済みまたは重複で弾いた分があれば「（うち K 件は記録済みまたは重複のため数えていません）」を同じ文に足す', () => {
+    expect(learningDoneSummary(0, 0, 0, 3)).toBe('修正 0 件を記録しました（ルール昇格 0 件）（うち 3 件は記録済みまたは重複のため数えていません）。');
+  });
+  it('弾いた分が無ければ OSS と同じ文のまま', () => {
+    expect(learningDoneSummary(2, 1, 1)).toBe('修正 2 件を記録しました（ルール昇格 1 件・競合 1 件はスキップ）。');
+    expect(learningDoneSummary(2, 1, 0, 0)).toBe('修正 2 件を記録しました（ルール昇格 1 件）。');
+  });
+});

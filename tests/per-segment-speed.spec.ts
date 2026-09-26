@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { openEditor } from './helpers';
+import { openEditor, useTempProject } from './helpers';
 
 // 保存往復テスト（区間速度設定→保存→再読込）は smoke.spec.ts に移動済み。
 // smoke.spec.ts は全テストが同一ワーカーで直列実行されるため、
 // 並列ワーカー間の git clean -fdx 競合が起きない。
 // このファイルはファイル保存を伴わないテストのみ保持する。
+
+// 共有 sample-project は smoke / heavy-job-confirm の afterEach が git checkout/clean で
+// 巻き戻すため、その窓に重なると読み込みが壊れる（helpers.ts の useTempProject 参照）。
+// このファイルは保存を伴わない読み取り専用の検証なので、専用コピーへ隔離するだけで足りる。
+const projectId = useTempProject('per-seg-speed-tmp');
 
 test('「全体に従うへ戻す」で個別速度が解除される', async ({ page }) => {
   const pageErrors: string[] = [];
@@ -14,7 +19,7 @@ test('「全体に従うへ戻す」で個別速度が解除される', async ({
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // 区間をクリック → 速度を設定
   const kept = page.locator('.tl-kept-segment').first();

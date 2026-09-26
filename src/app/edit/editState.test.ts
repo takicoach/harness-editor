@@ -7,6 +7,8 @@ import {
   normalizeMultiSelection,
   toggleMultiTelopSelection,
   clearMultiSelection,
+  titleToTelop,
+  TITLE_CONVERT_TEMPLATE_BASE,
   type EditState,
 } from './editState';
 import { removeTelop } from './telopSettingsOps';
@@ -14,6 +16,7 @@ import { splitTelopAt, mergeTelopWithNext, insertTelop } from './cutOps';
 import type { EditorProject } from '../../core/types';
 import { DEFAULT_DUCKING } from './duckingSettings';
 import { DEFAULT_MAIN_LAYOUT } from '../../core/mainLayout';
+import { DEFAULT_MAIN_AUDIO } from '../../core/mainAudio';
 
 function sampleProject(): EditorProject {
   return {
@@ -48,6 +51,30 @@ function sampleProject(): EditorProject {
 }
 
 describe('createEditState', () => {
+  it('retains main audio across load/edit/save conversion without sharing the source object', () => {
+    const project = sampleProject();
+    project.mainAudio = { gainDb: 6, muted: false, fadeInFrames: 30, fadeOutFrames: 45 };
+    const state = createEditState(project);
+    expect(state.mainAudio).toEqual(project.mainAudio);
+    expect(state.mainAudio).not.toBe(project.mainAudio);
+    expect(toEditorProject(state, project).mainAudio).toEqual(project.mainAudio);
+    const changed = { ...state, mainAudio: { ...state.mainAudio!, muted: true } };
+    expect(samePersistedContent(state, changed)).toBe(false);
+    expect(samePersistedContent(state, { ...state, mainAudio: { ...state.mainAudio! } })).toBe(true);
+  });
+
+  it('treats omitted legacy main audio and explicit defaults as the same saved content', () => {
+    const state = createEditState(sampleProject());
+    expect(state.mainAudio).toEqual(DEFAULT_MAIN_AUDIO);
+    expect(samePersistedContent(state, { ...state, mainAudio: undefined })).toBe(true);
+    for (const mainAudio of [
+      { ...DEFAULT_MAIN_AUDIO, gainDb: 12 },
+      { ...DEFAULT_MAIN_AUDIO, fadeInFrames: 1 },
+      { ...DEFAULT_MAIN_AUDIO, fadeOutFrames: 1 },
+      { ...DEFAULT_MAIN_AUDIO, muted: true },
+    ]) expect(samePersistedContent(state, { ...state, mainAudio })).toBe(false);
+  });
+
   it('EditorProject から編集状態を作る（telops / cutRegions を複製）', () => {
     const project = sampleProject();
     const state = createEditState(project);
@@ -94,17 +121,26 @@ describe('createEditState — タイトル一本化（自動変換）', () => {
     expect(state.telops).toHaveLength(4);
     const converted = state.telops.filter((t) => t.manual === true);
     expect(converted).toHaveLength(2);
-    // 文字・区間が保たれ、上左配置・紫シャドウ(template 5)になっている。
+    // 文字・区間が保たれ、上部中央・金系(id7=テロップパック未導入の既定)になっている。
     const first = converted[0]!;
     expect(first.text).toBe('ゆる素振り');
     expect(first.originalStart).toBe(60);
     expect(first.originalEnd).toBe(210);
-    expect(first.position).toEqual({ x: -1, y: -1 });
-    expect(first.template).toBe(5);
+    expect(first.position).toEqual({ x: 0, y: -1 });
+    expect(first.template).toBe(TITLE_CONVERT_TEMPLATE_BASE);
     // id は既存テロップ(最大2)の続きで衝突しない。
     const ids = state.telops.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(state.nextTelopId).toBe(Math.max(...ids) + 1);
+  });
+
+  it('テロップパック導入済みなら id32（金グラデ背景）へ変換する', () => {
+    const project = sampleProject();
+    project.titles = [{ id: 1, originalStart: 60, originalEnd: 210, text: 'ゆる素振り' }];
+    const state = createEditState(project, undefined, true);
+    const converted = state.telops.filter((t) => t.manual === true);
+    expect(converted).toHaveLength(1);
+    expect(converted[0]!.template).toBe(32);
   });
 
   it('タイトルが無ければ telops はそのまま', () => {
@@ -808,5 +844,45 @@ describe('テロップ配列を変える各 op の後に不整合 ID が残ら�
     const next = insertTelop(s, null, 800, 860);
     expect(next.selection).toEqual({ kind: 'telop', id: 5 });
     expect(next.multiTelopIds).toEqual([]);
+  });
+});
+
+/**
+ * タイトル一本化（読み込み時マイグレーション）の変換先が、実際のタイトル帯と
+ * 食い違わないことの回帰検査（2026-09-04 の不具合）。
+ * プロジェクト側 Title.tsx は金グラデ帯（#E8CE9A→#B8954C）だが、変換先が
+ * id5「白文字紫シャドウ」だったため紫で書き出されていた。
+ */
+describe('titleToTelop（タイトル→装飾テロップ変換）', () => {
+  const title = { id: 1, originalStart: 0, originalEnd: 30, text: '章タイトル' };
+
+  it('紫テンプレ（id5 白文字紫シャドウ）へは変換しない', () => {
+    expect(titleToTelop(title, 10).template).not.toBe(5);
+  });
+
+  it('既定（テロップパック未指定）は案件テンプレート側の金スタイルへ変換する', () => {
+    expect(titleToTelop(title, 10).template).toBe(TITLE_CONVERT_TEMPLATE_BASE);
+  });
+
+  it('テロップパック導入済み（telopPackInstalled:true）なら id32「金グラデ背景」へ変換する', () => {
+    expect(titleToTelop(title, 10, { titleFontSize: 42, telopFontSize: 80, telopPackInstalled: true }).template).toBe(32);
+  });
+
+  it('テロップパック未導入（telopPackInstalled:false）なら id32 ではなく base を使う（未導入プロジェクトで金以外に落ちないための回帰）', () => {
+    expect(titleToTelop(title, 10, { titleFontSize: 42, telopFontSize: 80, telopPackInstalled: false }).template).toBe(TITLE_CONVERT_TEMPLATE_BASE);
+  });
+
+  it('装飾テロップとして画面上部に置く（x は画面内保証のため 0）', () => {
+    const t = titleToTelop(title, 10);
+    expect(t.manual).toBe(true);
+    expect(t.position).toEqual({ x: 0, y: -1 });
+  });
+
+  it('文字と表示区間は保持する', () => {
+    const t = titleToTelop(title, 10);
+    expect(t.text).toBe('章タイトル');
+    expect(t.originalStart).toBe(0);
+    expect(t.originalEnd).toBe(30);
+    expect(t.id).toBe(10);
   });
 });

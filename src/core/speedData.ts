@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertFiniteNumbers } from './dataModule';
 import { clampMainSpeed, DEFAULT_MAIN_SPEED, hasPerSegmentSpeed } from './speedEngine';
 
 export interface SpeedData {
@@ -31,6 +31,11 @@ export function parseSpeedData(source: string | null): SpeedData {
   } catch {
     return { mainSpeed: DEFAULT_MAIN_SPEED, segmentSpeeds: {} };
   }
+  // NaN/±Infinity は「型が違う」フォールバック（既定 1.0）と区別できないまま
+  // ユーザーの指定値を黙って捨てる — 見た目は普通に開き、次の保存で 1.0 が確定してしまう。
+  // 型違い（文字列など）は従来どおり既定へ倒すが、壊れた数値はここで止める。
+  assertFiniteNumbers('speedData.ts', 'MAIN_SPEED', m.MAIN_SPEED);
+  assertFiniteNumbers('speedData.ts', 'SEGMENT_SPEEDS', m.SEGMENT_SPEEDS);
   const v = m.MAIN_SPEED;
   const mainSpeed =
     typeof v === 'number' && Number.isFinite(v) ? clampMainSpeed(v) : DEFAULT_MAIN_SPEED;

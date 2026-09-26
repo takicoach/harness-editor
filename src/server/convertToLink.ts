@@ -21,7 +21,7 @@ import { emptyTrash, moveToTrash, restoreFromTrash } from './trashStore';
  *   ② コピーを `.trash/` へ tombstone として退避（既存 trashStore を再利用）
  *   ③ symlink 作成 ＋ `.sme/videoLink.json` 記録
  *   ④ ③で失敗したら symlink を撤去してコピーを復元する
- *   ⑤ ③まで通ったら退避を**破棄**する
+ *   ⑤ ③まで通ったら退避を**破棄**する（レビュー I-1）
  * ②で消さずに退避するのは、④の復元先を必ず用意しておくため。
  * ⑤で破棄するのは、この機能が「容量を回収する」ものだから — 退避したままだと
  * 実バイトは 1 バイトも減らないのに「N GB を回収しました」と表示することになる。
@@ -87,7 +87,7 @@ export function findConvertCandidate(root: string, dir: string, deps: ConvertDep
 
 /**
  * 検証済みのメイン動画情報から候補を探す。
- * 変換本体は `resolveCopiedMainVideo` を 1 回だけ呼ぶ— 2 回呼ぶと、その間に
+ * 変換本体は `resolveCopiedMainVideo` を 1 回だけ呼ぶ（M-4）— 2 回呼ぶと、その間に
  * 実体が差し替わった場合に「検証した対象」と「置き換える対象」が別物になり得る。
  */
 function matchForMainVideo(root: string, main: MainVideo, deps: ConvertDeps): MatchOutcome {
@@ -113,7 +113,7 @@ export function describeLinkMissReason(reason: Extract<MatchOutcome, { matched: 
     case 'unreadable':
       return '動画を読み取れなかったため、リンク化できませんでした';
     case 'search-truncated':
-      // 「見つからなかった」と言い切らない（実際には在るのに諦めさせない）。
+      // 「見つからなかった」と言い切らない（実際には在るのに諦めさせない・I-4）。
       return 'フォルダが大きすぎて探索を途中で打ち切りました（登録フォルダを絞ると見つかることがあります）';
     case 'no-candidate':
     default:
@@ -184,7 +184,7 @@ export function convertProjectToLink(
       }
       if (linkRemains) {
         // 復元すると main-2.mp4 が生まれて videoConfig と食い違う。戻さずに
-        // 「今どういう状態か」を必ず伝える。黙って復元する方が危ない。
+        // 「今どういう状態か」を必ず伝える（M-6）。黙って復元する方が危ない。
         throw new HttpError(
           500,
           `リンク化に失敗し、public/${main.videoFile} が中途半端なリンクのまま残りました。` +
@@ -205,7 +205,7 @@ export function convertProjectToLink(
     throw new HttpError(500, `リンク化に失敗しました（${(err as Error).message}）`);
   }
   // ここから先は巻き戻さない（リンクは成立済み・復元先はもう塞がっている）。
-  // 退避を破棄して初めて容量が戻る。失敗しても操作は成功として返し、
+  // 退避を破棄して初めて容量が戻る（I-1）。失敗しても操作は成功として返し、
   // 「回収できていない」ことと残骸の場所を呼び出し側へ持ち帰る。
   const discard = deps.discard ?? ((d: string, id: string) => { emptyTrash(d, id); });
   try {

@@ -40,6 +40,8 @@ describe('kindLabel mapping', () => {
     line: '直線',
     rect: '四角',
     ellipse: '丸',
+    triangle: '三角',
+    angle: '分度器',
   };
 
   for (const [kind, label] of Object.entries(expected) as [ShapeKind, string][]) {

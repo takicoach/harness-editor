@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type TitleSegment } from './types';
 
@@ -18,6 +18,7 @@ export function parseTitleData(
   if (!Array.isArray(m.titleData)) {
     throw new ProjectFileError('titleData.ts', 'titleData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('titleData.ts', 'titleData', m.titleData);
   return m.titleData as TitleSegment[];
 }
 

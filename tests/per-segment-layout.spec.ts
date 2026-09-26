@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { openEditor } from './helpers';
+import { openEditor, useTempProject } from './helpers';
 
 // 全体レイアウト・区間レイアウトの「回転・反転」e2e スモーク。
 // 保存→ディスク往復の検証は smoke.spec.ts に集約されている規約（全テスト同一ワーカー直列実行
 // のため並列ワーカー間の git checkout/clean 競合が起きない）に合わせ、本ファイルは
 // ファイル保存を伴わない UI 操作（回転・反転・リセット）のみを検証する。
+
+// 共有 sample-project は smoke / heavy-job-confirm の afterEach が git checkout/clean で
+// 巻き戻すため、その窓に重なると読み込みが壊れる（helpers.ts の useTempProject 参照）。
+// このファイルは保存を伴わない読み取り専用の検証なので、専用コピーへ隔離するだけで足りる。
+const projectId = useTempProject('per-seg-layout-tmp');
 
 test('全体レイアウト: 回転を90度にしてから全画面に戻すと0度に戻る', async ({ page }) => {
   const pageErrors: string[] = [];
@@ -14,7 +19,7 @@ test('全体レイアウト: 回転を90度にしてから全画面に戻すと0
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // メイン動画トラック見出し（ラベル「動画」）を選択
   const mainTrack = page
@@ -48,7 +53,7 @@ test('全体レイアウト: 左右反転をONにしてから全画面に戻す�
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   const mainTrack = page
     .locator('.tl-track-label-clickable')
@@ -79,7 +84,7 @@ test('区間レイアウト: 大きさを変えると「全体に従うへ戻す
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // 区間をクリック → 区間パネルが出る
   const kept = page.locator('.tl-kept-segment').first();
@@ -109,7 +114,7 @@ test('区間レイアウト: 数値ボックスに手入力して大きさを設
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
   const kept = page.locator('.tl-kept-segment').first();
   await expect(kept).toBeVisible();
   await kept.click();

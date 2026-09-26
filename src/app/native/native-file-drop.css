@@ -1,0 +1,39 @@
+.native-library { position:relative; }
+.native-asset-link { display:inline-flex; align-items:center; gap:4px; color:var(--fg-3); font-size:var(--native-font-sub); }
+.native-asset-link[data-unavailable="true"] { color:var(--fg-1); font-weight:650; }
+.native-reference-notice { align-items:flex-start; flex-wrap:wrap; }
+.native-reference-notice p { margin:4px 0 0; font-size:var(--native-font-sub); line-height:1.6; }
+.native-reference-actions { display:flex; flex-wrap:wrap; gap:4px; max-height:80px; overflow:auto; }
+.native-reference-actions button { max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.native-file-drop {
+  position:absolute; inset:6px; z-index:20; pointer-events:none; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:10px; padding:18px 10px; text-align:center;
+  border:1.5px dashed var(--accent); border-radius:9px; color:var(--fg-1);
+  background:color-mix(in srgb,var(--bg-1) 96%,var(--accent));
+  box-shadow:inset 0 0 32px color-mix(in srgb,var(--accent) 7%,transparent);
+  animation:native-drop-arrive 220ms cubic-bezier(.2,.7,.2,1) both;
+}
+.native-file-drop strong { font-size:14px; line-height:1.6; font-weight:650; text-wrap:balance; }
+.native-file-drop-hint { color:var(--fg-2); font-size:var(--native-font-sub); line-height:1.7; text-wrap:balance; }
+.native-file-drop-stack { position:relative; width:86px; height:82px; margin-bottom:6px; }
+.native-file-drop-card { position:absolute; width:54px; height:62px; left:16px; top:10px; border:1px solid color-mix(in srgb,var(--accent) 55%,var(--border)); border-radius:11px; background:var(--bg-1); color:var(--accent); transform-origin:50% 90%; transition:transform var(--dur-panel) var(--ease-spring),background var(--dur-state),border-color var(--dur-state); }
+.native-file-drop-card.is-back { transform:translate(-10px,2px) rotate(-13deg); background:color-mix(in srgb,var(--bg-1) 88%,var(--accent)); }
+.native-file-drop-card.is-middle { transform:translate(10px,2px) rotate(13deg); background:color-mix(in srgb,var(--bg-1) 92%,var(--accent)); }
+.native-file-drop-card.is-front { display:grid; place-items:center; box-shadow:0 6px 14px color-mix(in srgb,var(--accent) 12%,transparent); animation:native-drop-card-arrive 380ms cubic-bezier(.16,.8,.22,1.25) both; }
+.native-file-drop-count { position:absolute; right:0; top:0; min-width:24px; height:24px; padding:0 5px; display:grid; place-items:center; border:2px solid var(--bg-1); border-radius:14px; background:var(--accent); color:var(--bg-1); font-size:12px; font-weight:750; font-variant-numeric:tabular-nums; animation:native-drop-card-arrive 320ms 70ms cubic-bezier(.16,.8,.22,1.25) both; }
+[data-drop-state="importing"] .native-file-drop { border-style:solid; }
+[data-drop-state="importing"] .native-file-drop-card.is-back { transform:translateY(4px) rotate(-3deg); }
+[data-drop-state="importing"] .native-file-drop-card.is-middle { transform:translateY(2px) rotate(3deg); }
+[data-drop-state="importing"] .native-file-drop-card.is-front svg { animation:native-drop-breathe 1200ms ease-in-out infinite; }
+[data-drop-state="complete"] .native-file-drop { border-style:solid; }
+[data-drop-state="complete"] .native-file-drop-card.is-back,[data-drop-state="complete"] .native-file-drop-card.is-middle { transform:translateY(2px); }
+[data-drop-state="complete"] .native-file-drop-card.is-front { background:var(--accent); color:var(--bg-1); transform:translateY(-3px); }
+[data-drop-state="complete"] .native-file-drop-card svg { stroke-dasharray:30; stroke-dashoffset:0; animation:native-drop-check 320ms ease-out both; }
+[data-drop-state="blocked"] .native-file-drop,[data-drop-state="incomplete"] .native-file-drop { border-color:var(--fg-3); }
+@keyframes native-drop-arrive { from { opacity:0; } to { opacity:1; } }
+@keyframes native-drop-card-arrive { from { opacity:0; translate:0 10px; scale:.88; } to { opacity:1; translate:0 0; scale:1; } }
+@keyframes native-drop-breathe { 50% { opacity:.35; transform:scale(.86); } }
+@keyframes native-drop-check { from { stroke-dashoffset:30; } to { stroke-dashoffset:0; } }
+@media (prefers-reduced-motion:reduce) {
+  .native-file-drop,.native-file-drop * { animation:none!important; transition:none!important; }
+}

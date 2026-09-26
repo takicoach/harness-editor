@@ -97,8 +97,9 @@ export function bakeDuckEnvelope(
  * 各 region [s,e) について: [s,e) 内=gain / [s-attack,s)=lerp(1→gain) /
  * [e,e+release)=lerp(gain→1) / それ以外=1。重なりは min（強い方）を採用。
  *
- * ★契約★ この式は導入パック src/server/bgmPayload/BgmSequence.tsx の duckFactor と一致させる
- *   （bgmFadeVolume↔fadeVolume と同じ「独立コピーで式を埋め込む」契約）。
+ * ★契約★ この式は固定旧原文 tests/fixtures/legacy-media-payloads/src/server/bgmPayload/BgmSequence.tsx.txt の duckFactor、および
+ *   src/server/duckGainExpr.ts の regionExpr（ffmpeg volume 式への区分線形転写）と一致させる
+ *   （bgmFadeVolume↔fadeVolume と同じ式の契約。旧配布runtimeは退役して原文を保全）。
  */
 export function duckFactorAt(frameInClip: number, env: DuckEnvelope | undefined): number {
   if (!env || env.regions.length === 0) return 1;

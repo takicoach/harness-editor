@@ -27,7 +27,11 @@ export function setSceneTransition(
     id: existing?.id ?? id,
     at,
     kind,
-    durationFrames: Math.max(2, Math.round(opts?.durationFrames ?? existing?.durationFrames ?? 15)),
+    // 非有限な durationFrames は無視して既存値（無ければ既定 15）を保つ。
+    durationFrames: Math.max(2, Math.round(
+      Number.isFinite(opts?.durationFrames) ? (opts?.durationFrames as number)
+        : (existing?.durationFrames ?? 15),
+    )),
     ...(kind === 'fadeColor' ? { color: opts?.color ?? existing?.color } : {}),
     ...((kind === 'slide' || kind === 'wipe')
       ? { direction: opts?.direction ?? existing?.direction ?? 'left' }

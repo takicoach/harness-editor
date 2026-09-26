@@ -1,2 +1,6 @@
 # Windows のバッチファイルは CRLF でないと cmd.exe が誤動作するため固定する
 *.bat text eol=crlf
+
+# 旧テンプレートの起動ファイルの原文はバイト単位で保持する
+tests/fixtures/legacy-template-launcher/**/*.txt -text
+tests/fixtures/legacy-template-launcher/provenance.json text eol=lf

@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
-import { HttpError, sendJson, sendText } from './http';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { HttpError, sendApiError, sendJson, sendText } from './http';
 import { getProjectRoot, resolveProjectDir, resolvePublicAsset } from './projectRoot';
-import { isHarnessProject, scanProjects } from './scanProjects';
+import { isSuperMovieProject, scanProjects } from './scanProjects';
+import { sweepCaptureTmpDirs } from './captureTmpSweep';
 import { parseVideoConfigStatic } from '../core';
 import { loadProjectFromDir } from './loadProjectFiles';
 import { isUploadKind, materialRelPath, sanitizeUploadName, saveMaterialFile } from './uploadMaterial';
@@ -13,39 +15,52 @@ import { findBusyJobs } from './projectBusy';
 import { PROJECT_JOB_MANAGERS, killAllProjectJobs } from './jobRegistries';
 import { emptyTrash, listTrash, moveToTrash, restoreFromTrash } from './trashStore';
 import { makeAssetKey, type AssetKind } from '../shared/assetKey';
-import { createProject, createProjectLinked, precheckCreateProject } from './createProject';
-import { assertBrowsablePath, browseRoots, canCreateSymlink, listDirectory } from './browsePaths';
+import { precheckCreateImages, precheckCreateProject, precheckProjectName } from './projectCreationChecks';
+import { createSequenceImageProject, createSequenceProject } from './sequence/create';
+import { receiveImageUploads } from './sequence/imageUpload';
+import { IMAGE_UPLOAD_MANIFEST_MAX_BYTES } from '../shared/imageUploadFrame';
+import { MAX_CREATE_IMAGE_BYTES, MAX_CREATE_IMAGES } from '../shared/createMedia';
+import { assertBrowsablePath, browseRoots, listDirectory,BROWSE_MEDIA_EXTENSIONS } from './browsePaths';
 import {
   assertSourceAvailable,
   assertVideoProcessingAllowed,
   projectVideoFile,
 } from './videoLink';
 import { relinkVideo } from './relinkVideo';
-import { describeCopyReason, planImport, type CopyReason } from './autoLinkImport';
 import { convertProjectToLink, describeLinkMissReason, findConvertCandidate } from './convertToLink';
-import type { ImportOutcome } from '../shared/types';
-import { probeSymlinkSupport } from './symlinkProbe';
 import { streamBodyToTempFile, assertContentLengthWithin, resolveMaxUploadBytes } from './streamUpload';
-import { readJsonBody } from './readBody';
-import { triggerBackgroundInstall } from './backgroundInstall';
+import { readJsonBody, readBodyText } from './readBody';
+import {expectedReferenceFingerprint} from './sequence/references';
+import { handlePreferenceApi } from './preferenceApi';
+import { EditorAgentContext } from './editorAgentContext';
+import { EditorOperationStore } from './editorOperationStore';
+import { EditorAgentService } from './editorAgentService';
+import { handleEditorAgentApi, sendEditorAgentError } from './editorAgentApi';
+import { assertEditorDeliveryMaySave } from './editorSaveGuard';
 import { saveProjectToDir, validateSaveRequest } from './saveProject';
 import { serveVideo } from './serveVideo';
 import { resolveTrashVideoPath } from './trashVideo';
 import { previewProxyName, resolveVideoPathForVersion } from './previewProxy';
 import { serveAsset } from './serveAsset';
-import { bundleTelopComponent } from './bundleTelop';
+import { bundleNativeTelopComponent } from './bundleTelop';
+import { compileSequenceComponent } from './sequence/components';
 import { isAllowedLocalRequest } from './localGuard';
-import { bundleInsertImageComponent } from './bundleInsertImage';
-import { bundleInsertVideoComponent } from './bundleInsertVideo';
 import { convertBurnedInProject } from './convertProject';
 import { installTelopPack } from './installTelopPack';
+import { inspectTelopFolder, telopAdd } from './telopAdd';
+import { applyTelopTemplateUpdate, assertTelopTemplatePlanId, planTelopTemplateUpdate, readTelopTemplateUpdateStatus, revertTelopTemplateUpdate } from './telopTemplateUpdate';
+import { applyTelopPackUpdate, planTelopPackUpdate } from './telopPackUpdate';
+import { sequenceService } from './sequence/service';
 import { installVideoInsert } from './installVideoInsert';
 import { installBgm } from './installBgm';
 import { installShape } from './installShape';
 import { installTransition } from './installTransition';
 import { installSpeed } from './installSpeed';
 import { installMainLayout } from './installMainLayout';
-import { checkStalePacks, upgradePacks } from './packUpgrade';
+import { installImageRendering } from './installImageRendering';
+import { checkStalePacks, findDescriptor, latestPackBackupVersion, packUpgradeNotices, restorePackComponents, upgradePacks } from './packUpgrade';
+import { collectScriptAlignmentArtifact, collectScriptEditInput, type ScriptAlignmentMode } from './scriptAlignmentApi';
+import { assertScriptEditArtifactCurrent, parseScriptEditArtifact } from './scriptEditArtifacts';
 import { watchProject } from './watchProject';
 import { watchAllProjectsStatus } from './projectsWatch';
 import {
@@ -59,11 +74,14 @@ import {
   handleDenoiseDelete,
   handleDenoiseRestore,
 } from './denoiseApi';
+import { handleAudioFixPost, handleAudioFixStatus } from './audioFixApi';
 import {
   handleRenderPost,
   handleRenderSse,
   handleRenderDelete,
   handleRenderReveal,
+  restoreRenderJobs,
+  reconcileRenderJobs,
 } from './renderApi';
 import { handleOpenMaterialFolder, openFolder } from './openMaterialFolder';
 import {
@@ -80,16 +98,33 @@ import {
   handlePreviewProxyDelete,
 } from './previewProxyApi';
 import {
+  approveLearning,
   handleLearningDiff,
-  handleLearningApprove,
   handleLearningStatus,
   validateApproveRequest,
 } from './learningApi';
+import { computeNativeLearningDiff, hasNativeDocument } from './learning/nativeLearningDiff';
+import { runLearningApprove } from './learning/approveQueue';
 import { instructionInbox, isAgentConnected, validateInstructionInput } from './instructionInbox';
+import { wireInboxPersistence } from './inboxServerLifecycle';
 import { validateStatusRequest, writeStatusStage } from './projectStatus';
 import { handleMcpRequest } from './mcp/server';
-import { markSelfWrite, isSelfWriting, clearSelfWrite } from './selfWrite';
-import { handleEventsSse, handleEventsSync } from './eventsApi';
+import { markSelfWrite, isSelfWriting, isSelfWriteContent, recordSelfWriteContent, selfWriteRemainingMs, clearSelfWrite } from './selfWrite';
+import { projectContentSignature } from './projectWatchPaths';
+import { handleEventsSse, handleEventsSync,restoreRenderObservations } from './eventsApi';
+import { handleCaptureEngineStatus } from './captureEngineApi';
+import { bundleCaptureEntry, bundleCaptureRuntime } from './bundleCapture';
+import { buildCapturePageHtml } from '../capturePage/html';
+import { setServerOrigin, wireServerOrigin } from './serverOrigin';
+import { applyKeepAliveTimeouts } from './keepAlive';
+import { installProcessSafetyNet } from './processSafetyNet';
+import { handleSequenceApi } from './sequence/api';
+import { handleLegacyPreviewApi } from './sequence/legacyPreviewApi';
+import { assertLegacySequenceAuthority } from './sequence/authority';
+import { hasSequenceDocument } from './sequence/summary';
+import { SequenceStore } from './sequence/store';
+import { sequenceEditorTargets } from '../core/sequence/editorCommands';
+import {createNativeEditorAgentAdapter} from './nativeEditorAgentAdapter';
 
 /** URL から必須クエリパラメータを取り出す。無ければ HttpError。 */
 export function requireParam(url: URL, name: string): string {
@@ -98,6 +133,12 @@ export function requireParam(url: URL, name: string): string {
     throw new HttpError(400, `クエリパラメータ "${name}" が必要です`);
   }
   return value;
+}
+
+/** 案件の編集データに既に入っているテロップスタイル番号（下見と本番で同じ基準を使う）。 */
+function existingTelopStyleIds(projectDir: string): number[] {
+  const session = new SequenceStore(projectDir).load();
+  return (session?.document.assets ?? []).flatMap(asset => asset.textStyleCatalog?.entries.map(entry => entry.id) ?? []);
 }
 
 /** realpath 化（解決できなければ与えられたパスをそのまま使う）。 */
@@ -133,14 +174,29 @@ function uploadTmpDir(root: string): string {
   return join(root, '.sme-upload-tmp');
 }
 
+/**
+ * 保存リクエストの `X-Harness-Writer` ヘッダ（画面ごとの識別子）を読む。
+ * 未送信・空・配列（重複ヘッダ）は undefined＝従来どおり projectId 単位の扱いにする。
+ */
+export function readWriterId(req: IncomingMessage): string | undefined {
+  const raw = req.headers['x-harness-writer'];
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
 /** /api/* のリクエストを処理する（ルート単位のテストのため export）。 */
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   root: string,
+  editor?: EditorAgentService,
 ): Promise<void> {
   const method = (req.method ?? 'GET').toUpperCase();
+
+  if (await handleLegacyPreviewApi(req, res, url, root)) return;
+  if (await handleSequenceApi(req, res, url, root, undefined, editor)) return;
 
   if (url.pathname === '/api/ping') {
     sendJson(res, 200, { ok: true });
@@ -150,15 +206,73 @@ export async function handleApi(
     sendJson(res, 200, { root: root, projects: scanProjects(root) });
     return;
   }
+  if (url.pathname === '/api/script-alignment' || url.pathname === '/api/script-edit-input' || url.pathname === '/api/script-edit-review') {
+    const review = url.pathname === '/api/script-edit-review';
+    if (method !== (review ? 'POST' : 'GET')) throw new HttpError(405, review ? 'このエンドポイントは POST のみ対応します' : 'このエンドポイントは GET のみ対応します');
+    const id = requireParam(url, 'id');
+    const mode = url.searchParams.get('mode');
+    if (mode !== 'caption' && mode !== 'structure') {
+      throw new HttpError(400, 'mode は caption または structure を指定してください');
+    }
+    const expectedPreviewVersion = url.searchParams.get('expectedPreviewVersion') ?? undefined;
+    if (expectedPreviewVersion !== undefined && !/^\d+-\d+$/.test(expectedPreviewVersion)) {
+      throw new HttpError(400, 'expectedPreviewVersion が不正です');
+    }
+    const dir = resolveProjectDir(root, id);
+    if (!existsSync(dir) || !isSuperMovieProject(dir)) {
+      throw new HttpError(404, `プロジェクトが見つかりません: ${id}`);
+    }
+    if(hasSequenceDocument(dir)) throw new HttpError(409,'NATIVE_SCRIPT_REVIEW_REQUIRED: 台本案の新形式への接続は準備中です');
+    const controller = new AbortController();
+    const abort = (): void => { controller.abort(); };
+    const abortIfResponseClosed = (): void => { if (!res.writableEnded) controller.abort(); };
+    req.once('aborted', abort);
+    res.once('close', abortIfResponseClosed);
+    try {
+      // A review request validates an uploaded draft; it never persists or enqueues an edit.
+      let draft;
+      if (review) {
+        const body = await readJsonBody(req);
+        try { draft = parseScriptEditArtifact(body); }
+        catch { throw new HttpError(400, '変更案の内容を確認できません。スキルで作成した変更案を選んでください。'); }
+        if (draft.input.alignment.packet.projectId !== id || draft.proposal.kind !== mode) {
+          throw new HttpError(409, 'この案件・目的に対応する変更案を選んでください。');
+        }
+      }
+      const collect = url.pathname !== '/api/script-alignment' ? collectScriptEditInput : collectScriptAlignmentArtifact;
+      const artifact = await collect(id, dir, {
+        mode: mode as ScriptAlignmentMode,
+        ...(expectedPreviewVersion === undefined ? {} : { expectedPreviewVersion }),
+        signal: controller.signal,
+      });
+      if (draft) {
+        try { assertScriptEditArtifactCurrent(draft, artifact); }
+        catch { throw new HttpError(409, '台本・発話・編集内容が変更案の作成時から変わっています。現在の内容から案を作り直してください。'); }
+      }
+      sendJson(res, 200, draft ?? artifact);
+    } finally {
+      req.off('aborted', abort);
+      res.off('close', abortIfResponseClosed);
+    }
+    return;
+  }
   if (url.pathname === '/api/project') {
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
     if (method === 'PUT') {
+      assertLegacySequenceAuthority(dir);
       const body = await readJsonBody(req);
       const saveReq = validateSaveRequest(body);
-      // writeFileSync が走る前にウィンドウをマークし、chokidar の change を suppress する。
-      markSelfWrite(id);
-      sendJson(res, 200, saveProjectToDir(dir, saveReq));
+      assertEditorDeliveryMaySave(req.headers, id, editor);
+      // 書き込みが走る前にウィンドウをマークし、chokidar の change を suppress する。
+      // X-Harness-Writer があれば「どの画面が書いたか」まで記録し、別画面には
+      // 外部変更として通知されるようにする（data-safety-5）。ヘッダ無しは従来動作。
+      markSelfWrite(id, readWriterId(req));
+      const saved = saveProjectToDir(dir, saveReq);
+      // 書き終えた姿を記録する。watch の再評価がこれと突き合わせて「自分の保存の残響」を
+      // 外部変更として通知しないようにする（サイクル 2 レビュー Important）。
+      recordSelfWriteContent(id, projectContentSignature(dir));
+      sendJson(res, 200, saved);
       return;
     }
     if (method === 'DELETE') {
@@ -172,8 +286,8 @@ export async function handleApi(
       }
       // ルート直下にある無関係なディレクトリ（作業フォルダ・バックアップ等）を
       // 削除 API で消せないようにする。消せるのは一覧に出るプロジェクトだけ。
-      if (!isHarnessProject(dir)) {
-        throw new HttpError(400, `ハーネス形式のプロジェクトではありません: ${id}`);
+      if (!isSuperMovieProject(dir)) {
+        throw new HttpError(400, `対応する動画プロジェクトではありません: ${id}`);
       }
       // 書き出し・文字起こし等が走っている最中にディレクトリごと rename すると、
       // 実行中プロセスが消えたパスへ書き続ける。終わるまで削除させない。
@@ -190,7 +304,7 @@ export async function handleApi(
           get: (projectId) =>
             instructionInbox.hasProcessing(projectId) ? { phase: 'processing' } : undefined,
         },
-      });
+      }, dir);
       if (busy.length > 0) {
         sendJson(res, 409, { error: 'busy', jobs: busy });
         return;
@@ -244,8 +358,8 @@ export async function handleApi(
     ) {
       throw new HttpError(400, `プロジェクトのフォルダではありません: ${id}`);
     }
-    if (!statSync(dir).isDirectory() || !isHarnessProject(dir)) {
-      throw new HttpError(400, `ハーネス形式のプロジェクトではありません: ${id}`);
+    if (!statSync(dir).isDirectory() || !isSuperMovieProject(dir)) {
+      throw new HttpError(400, `対応する動画プロジェクトではありません: ${id}`);
     }
     openFolder(dir, process.platform);
     sendJson(res, 200, { ok: true });
@@ -260,7 +374,7 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    if (!existsSync(dir) || !isHarnessProject(dir)) {
+    if (!existsSync(dir) || !isSuperMovieProject(dir)) {
       throw new HttpError(404, `プロジェクトが見つかりません: ${id}`);
     }
     if (url.pathname === '/api/project/link-candidate') {
@@ -276,7 +390,7 @@ export async function handleApi(
     }
     // 書き出し・文字起こし等が走っている最中にメイン動画を差し替えない
     // （削除と同じ busy 判定を使う。実行中プロセスは消えた実体へ書き続ける）。
-    const busy = findBusyJobs(id, PROJECT_JOB_MANAGERS);
+    const busy = findBusyJobs(id, PROJECT_JOB_MANAGERS, dir);
     if (busy.length > 0) {
       sendJson(res, 409, { error: 'busy', jobs: busy });
       return;
@@ -334,21 +448,29 @@ export async function handleApi(
       return;
     }
     const real = assertBrowsablePath(path, roots);
-    sendJson(res, 200, listDirectory(real, roots));
+    sendJson(res, 200, listDirectory(real, roots,url.searchParams.get('media')==='all'?{extensions:BROWSE_MEDIA_EXTENSIONS}:{}));
     return;
   }
   if (url.pathname === '/api/create-project-link') {
     if (method !== 'POST') {
       throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
     }
+    if (url.searchParams.get('native') !== '1') {
+      throw new HttpError(410, '旧形式での新規作成は終了しました。独自編集画面から作成してください。');
+    }
     const name = requireParam(url, 'name');
     const target = assertBrowsablePath(requireParam(url, 'path'), browseRoots());
+    const text=await readBodyText(req,4096);let expectedFingerprint:string|undefined;
+    if(text){let value:unknown;try{value=JSON.parse(text);}catch{throw new HttpError(400,'素材参照のJSONが不正です');}
+      if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>key!=='expectedFingerprint'))throw new HttpError(400,'素材参照の指定が不正です');
+      expectedFingerprint=expectedReferenceFingerprint((value as {expectedFingerprint?:unknown}).expectedFingerprint);
+    }
     precheckCreateProject(root, name, target);
-    const probe = canCreateSymlink(() => probeSymlinkSupport(uploadTmpDir(root)));
-    if (!probe.ok) throw new HttpError(400, probe.message);
-    const { id } = createProjectLinked(root, { name, targetPath: target });
-    triggerBackgroundInstall(resolveProjectDir(root, id));
-    sendJson(res, 200, { id });
+    const controller=new AbortController(),abort=()=>controller.abort(),closed=()=>{if(!res.writableEnded)abort();};req.once('aborted',abort);res.once('close',closed);
+    if(req.aborted||res.destroyed)controller.abort();
+    let result:{id:string};try{result=await createSequenceProject(root, { name, videoName: target, sourcePath: target, reference:true,expectedFingerprint },controller.signal);}
+    finally{req.off('aborted',abort);res.off('close',closed);}
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/relink') {
@@ -378,59 +500,63 @@ export async function handleApi(
     if (method !== 'POST') {
       throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
     }
+    if (url.searchParams.get('native') !== '1') {
+      throw new HttpError(410, '旧形式での新規作成は終了しました。独自編集画面から作成してください。');
+    }
     const name = requireParam(url, 'name');
     const videoName = requireParam(url, 'video');
-    // ユーザーが作成モーダルで「コピーして取り込む」を明示した場合は自動リンク化しない。
-    const preferCopy = url.searchParams.get('copy') === '1';
     // 数GBを受け切ってから弾く無駄を避けるため、名前・拡張子・重複は受信前にチェックする。
     precheckCreateProject(root, name, videoName);
     // ボディはメモリに載せず一時ファイルへ直接書く。上限は HARNESS_MAX_UPLOAD_BYTES（既定32GiB）で
     // ディスク枯渇 DoS を防ぐ。Content-Length があれば受信前に弾く。
     const maxUpload = resolveMaxUploadBytes();
     assertContentLengthWithin(req, maxUpload);
-    // createProject 成功時は rename で移動済みなので finally の削除は no-op。
+    // Native import owns its managed copy; always remove the upload temporary file.
     const tmpPath = await streamBodyToTempFile(req, uploadTmpDir(root), maxUpload);
-    let id: string;
-    let imported: ImportOutcome;
     try {
-      // 受信後にマッチングを試みる（受信前に探索すると、見つからない時の待ち時間が
-      // まるごと作成の遅延になる）。同一実体が起点配下に在れば実体コピーをやめて
-      // 既存のリンク取り込みへ切り替える。曖昧なら必ずコピーへ落ちる。
-      const plan = planImport({ root, tmpPath, videoName, preferCopy });
-      let linked: { id: string; imported: ImportOutcome } | null = null;
-      if (plan.link) {
-        try {
-          // 探索結果のパスでも、取り込みの入口の封じ込め（起点配下のみ・realpath 解決）を
-          // 必ず通す。ここを通さないと「探索の実装が正しい」ことに安全性が依存する。
-          const target = assertBrowsablePath(plan.target, browseRoots());
-          const created = createProjectLinked(root, { name, targetPath: target });
-          linked = {
-            id: created.id,
-            imported: { linked: true, target, message: `外付けの実体にリンクしました（コピーなし）: ${target}` },
-          };
-        } catch (err) {
-          // 判断（planImport）だけでなく**実行段**の失敗もコピーへ落とす（レビュー I-3）。
-          // 数GBを受け切った後の最後の 1 手で 500 を返すと、取り込みが丸ごと無駄になる。
-          // 一時ファイルはこの時点でまだ消していない（削除は下の finally）ので、
-          // そのままコピーで作成できる。createProjectLinked は自身の失敗で作りかけの
-          // フォルダごと巻き戻すため、同じ名前でコピー作成し直せる。
-          console.warn(`[sme] リンク取り込みに失敗したためコピーへ切り替えます: ${(err as Error).message}`);
-        }
-      }
-      if (linked !== null) {
-        ({ id, imported } = linked);
-      } else {
-        const reason: CopyReason = plan.link ? 'link-failed' : plan.reason;
-        ({ id } = createProject(root, { name, videoName, videoTmpPath: tmpPath }));
-        imported = { linked: false, reason, message: describeCopyReason(reason) };
-      }
+      const result = await createSequenceProject(root, { name, videoName, sourcePath: tmpPath });
+      sendJson(res, 200, { ...result, projects: scanProjects(root) });
     } finally {
       rmSync(tmpPath, { force: true });
     }
-    // プロジェクト内で直接 `npm run dev` 等を実行する時に node_modules 不在で詰まらないよう、
-    // レスポンスをブロックせずバックグラウンドで npm install を開始する（Editor でのプレビュー自体には不要）。
-    triggerBackgroundInstall(resolveProjectDir(root, id));
-    sendJson(res, 200, { id, imported, projects: scanProjects(root) });
+    return;
+  }
+  if (url.pathname === '/api/create-project-images' || url.pathname === '/api/create-project-image-paths') {
+    // 複数の画像から1つの作品を作る（設計 M3b）。画像はいつもコピーで取り込み、全件を検査してから1回で確定する。
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    if (url.searchParams.get('native') !== '1') {
+      throw new HttpError(410, '旧形式での新規作成は終了しました。独自編集画面から作成してください。');
+    }
+    const name = requireParam(url, 'name');
+    precheckProjectName(root, name);
+    const controller=new AbortController(),abort=()=>controller.abort(),closed=()=>{if(!res.writableEnded)abort();};req.once('aborted',abort);res.once('close',closed);
+    if(req.aborted||res.destroyed)controller.abort();
+    const staging = join(uploadTmpDir(root), `images-${randomUUID()}`);
+    try {
+      let images: Array<{ name: string; sourcePath: string }>;
+      if (url.pathname === '/api/create-project-images') {
+        assertContentLengthWithin(req, MAX_CREATE_IMAGE_BYTES + IMAGE_UPLOAD_MANIFEST_MAX_BYTES + 4);
+        mkdirSync(staging, { recursive: true });
+        images = (await receiveImageUploads(req, staging)).map(image => ({ name: image.name, sourcePath: image.path }));
+      } else {
+        let value: unknown;
+        try { value = JSON.parse(await readBodyText(req, 256 * 1024)); } catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, '画像の一覧のJSONが不正です'); }
+        const paths = (value as { paths?: unknown })?.paths;
+        if (!Array.isArray(paths) || paths.length < 1 || paths.length > MAX_CREATE_IMAGES || paths.some(path => typeof path !== 'string')
+          || Object.keys(value as object).some(key => key !== 'paths')) throw new HttpError(400, `画像を1〜${MAX_CREATE_IMAGES}枚選んでください`);
+        const roots = browseRoots();
+        images = (paths as string[]).map(path => { const target = assertBrowsablePath(path, roots); return { name: basename(target), sourcePath: target }; });
+      }
+      precheckCreateImages(root, name, images.map(image => image.name));
+      const result = await createSequenceImageProject(root, { name, images }, controller.signal);
+      sendJson(res, 200, { ...result, projects: scanProjects(root) });
+    } finally {
+      req.off('aborted',abort);res.off('close',closed);
+      // この要求が作った一時フォルダだけを消す（成功・失敗・中止・切断のどれでも）。
+      rmSync(staging, { recursive: true, force: true });
+    }
     return;
   }
   if (url.pathname === '/api/upload-material') {
@@ -624,35 +750,28 @@ export async function handleApi(
     serveAsset(res, assetPath, req.headers.range);
     return;
   }
-  if (url.pathname === '/api/telop-component') {
+  if (url.pathname === '/api/capture-component') {
+    if (method !== 'GET') throw new HttpError(405, '撮影用部品は GET のみ対応します');
+    const kind = requireParam(url, 'kind');
+    if (kind !== 'telop' && kind !== 'image') throw new HttpError(400, '撮影用部品の種類が不正です');
+    const dir = resolveProjectDir(root, requireParam(url, 'id'));
+    // No swatch staticFile base: the capture page supplies its project resolver.
+    const bytes = await compileSequenceComponent(dir,
+      kind === 'telop' ? 'src/テロップテンプレート/Telop.tsx' : 'src/InsertImage/InsertImage.tsx',
+      kind === 'telop' ? 'Telop' : 'InsertImage').catch((error: unknown) => {
+      const detail = (error instanceof Error ? error.message : String(error))
+        .replaceAll('旧部品を変更せず移行を中止しました', '元の部品を変更せず撮影の準備を中止しました')
+        .replaceAll('移行できません', '撮影では利用できません');
+      throw new Error(`撮影用の${kind === 'telop' ? '字幕' : '画像'}部品を準備できませんでした。\n${detail}`);
+    });
+    sendText(res, 200, new TextDecoder().decode(bytes), 'text/javascript; charset=utf-8');
+    return;
+  }
+  if (url.pathname === '/api/native-telop-component') {
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    const js = await bundleTelopComponent(dir);
+    const js = await bundleNativeTelopComponent(dir, id);
     sendText(res, 200, js, 'text/javascript; charset=utf-8');
-    return;
-  }
-  if (url.pathname === '/api/insert-image-component') {
-    const id = requireParam(url, 'id');
-    const dir = resolveProjectDir(root, id);
-    try {
-      const js = await bundleInsertImageComponent(dir);
-      sendText(res, 200, js, 'text/javascript; charset=utf-8');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      sendJson(res, 500, { error: message });
-    }
-    return;
-  }
-  if (url.pathname === '/api/insert-video-component') {
-    const id = requireParam(url, 'id');
-    const dir = resolveProjectDir(root, id);
-    try {
-      const js = await bundleInsertVideoComponent(dir);
-      sendText(res, 200, js, 'text/javascript; charset=utf-8');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      sendJson(res, 500, { error: message });
-    }
     return;
   }
   if (url.pathname === '/api/convert-burned-in') {
@@ -662,7 +781,11 @@ export async function handleApi(
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
     markSelfWrite(id);
-    sendJson(res, 200, convertBurnedInProject(dir));
+    const result = convertBurnedInProject(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-telop-pack') {
@@ -671,7 +794,124 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installTelopPack(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installTelopPack(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
+    return;
+  }
+  // 設計 D の第 1 段（下見）。inspectTelopFolder しか呼ばないので案件には一切書き込まない。
+  // UI はこの結果で確認画面を出し、「一覧に加える」を押したときだけ下の本番ルートを叩く。
+  // （I-1: 以前は本番ルートが取り込みまで済ませてから確認を出しており、「やめる」で残骸が残った。）
+  if (url.pathname === '/api/telop-add/inspect') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    const body = (await readJsonBody(req, 1024 * 64)) as { dir?: unknown };
+    if (typeof body.dir !== 'string' || !body.dir) {
+      throw new HttpError(400, '取り込むフォルダを指定してください');
+    }
+    const source = assertBrowsablePath(body.dir, browseRoots());
+    const report = inspectTelopFolder(source);
+    const existing = existingTelopStyleIds(dir);
+    sendJson(res, 200, { packId: report.packId, version: report.version, kind: report.kind,
+      ids: report.ids, names: report.names, conflicts: report.ids.filter(styleId => existing.includes(styleId)) });
+    return;
+  }
+  if (url.pathname === '/api/telop-add') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    const body = (await readJsonBody(req, 1024 * 64)) as { dir?: unknown };
+    if (typeof body.dir !== 'string' || !body.dir) {
+      throw new HttpError(400, '取り込むフォルダを指定してください');
+    }
+    // 走査できるのはサーバが許可した起点の配下だけ（/api/browse と同じ封じ込め）。
+    const source = assertBrowsablePath(body.dir, browseRoots());
+    const existing = existingTelopStyleIds(dir);
+    markSelfWrite(id);
+    const result = await telopAdd(dir, source, existing);
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, { packId: result.packId, version: result.version, kind: result.kind, added: result.added, conflicts: result.conflicts, asset: result.asset });
+    return;
+  }
+  if (url.pathname === '/api/telop-template-update/status') {
+    if (method !== 'GET') throw new HttpError(405, 'このエンドポイントは GET のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    // 読み取り専用。字幕設定のアンマウントで画面側の `applied` state が消えたときの復元用（Codex P2）。
+    sendJson(res, 200, { applied: readTelopTemplateUpdateStatus(dir) });
+    return;
+  }
+  // 同梱テロップパックの 3 段導線（native 案件の凍結部品向け。案件テンプレートを書き換える
+  // /api/telop-template-update とは別経路で、409 reason:'telop-pack' はそのまま残す）。
+  if (url.pathname === '/api/telop-pack-update/plan') {
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    // 読み取り専用。plan は案件に 1 バイトも書かない（事前検査 B の F9-2）。
+    const session = sequenceService.open(dir);
+    // `{plan, reason?}` をそのまま返す。reason は計画が出せない**理由**（画面の文言分岐。Codex 2 巡目 #4）。
+    sendJson(res, 200, planTelopPackUpdate(dir, session.document));
+    return;
+  }
+  if (url.pathname === '/api/telop-pack-update/apply') {
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    // .harness/components/ へ新しい部品を凍結するだけ。文書への登録と参照切替は画面側の 2 コマンド。
+    markSelfWrite(id);
+    const asset = await applyTelopPackUpdate(dir);
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, { asset });
+    return;
+  }
+  if (url.pathname === '/api/telop-template-update/plan') {
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    // 文書はセッションの現物を使う（保存済みファイルではなく、画面が見ている revision）。
+    const session = sequenceService.open(dir);
+    const plan = await planTelopTemplateUpdate(dir, session.document);
+    sendJson(res, 200, plan);
+    return;
+  }
+  if (url.pathname === '/api/telop-template-update/apply') {
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    const body = (await readJsonBody(req, 1024 * 64)) as { planId?: unknown; expectedRevision?: unknown };
+    if (typeof body.planId !== 'string' || !body.planId) throw new HttpError(400, '確認の結果を指定してください');
+    assertTelopTemplatePlanId(body.planId);
+    if (!Number.isSafeInteger(body.expectedRevision)) throw new HttpError(400, '編集の版が不正です');
+    const session = sequenceService.open(dir);
+    markSelfWrite(id);
+    const result = await applyTelopTemplateUpdate(dir, session.document,
+      { planId: body.planId, expectedRevision: body.expectedRevision as number });
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
+    return;
+  }
+  if (url.pathname === '/api/telop-template-update/revert') {
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    const body = (await readJsonBody(req, 1024 * 64)) as { planId?: unknown };
+    if (typeof body.planId !== 'string' || !body.planId) throw new HttpError(400, '確認の結果を指定してください');
+    assertTelopTemplatePlanId(body.planId);
+    const session = sequenceService.open(dir);
+    markSelfWrite(id);
+    const result = await revertTelopTemplateUpdate(dir, body.planId, session.document);
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-video-insert') {
@@ -680,7 +920,14 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installVideoInsert(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installVideoInsert(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-bgm') {
@@ -689,7 +936,14 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installBgm(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installBgm(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-shape') {
@@ -698,7 +952,14 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installShape(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installShape(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-transition') {
@@ -707,7 +968,14 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installTransition(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installTransition(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-speed') {
@@ -716,7 +984,14 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installSpeed(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installSpeed(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
   if (url.pathname === '/api/install-main-layout') {
@@ -725,13 +1000,69 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, installMainLayout(dir));
+    // 導入はデータファイル（shapeData.ts 等）を配置する＝監視対象の書き換え。
+    // マークしないと自分の導入で外部変更バナーが誤発火する（data-safety-9）。
+    markSelfWrite(id);
+    const result = installMainLayout(dir);
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
+    return;
+  }
+  if (url.pathname === '/api/install-image-rendering') {
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    if (findBusyJobs(id, PROJECT_JOB_MANAGERS, dir).length || instructionInbox.hasProcessing(id)) {
+      throw new HttpError(409, 'この案件の処理が終わってから画像表示を更新してください。');
+    }
+    markSelfWrite(id);
+    const result = installImageRendering(dir);
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
+    return;
+  }
+  if (url.pathname === '/api/capture-engine/status') {
+    if (method !== 'GET') {
+      throw new HttpError(405, 'このエンドポイントは GET のみ対応します');
+    }
+    sendJson(res, 200, handleCaptureEngineStatus());
     return;
   }
   if (url.pathname === '/api/pack-status') {
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
-    sendJson(res, 200, { stale: checkStalePacks(dir) });
+    const stale = checkStalePacks(dir);
+    // 更新の前に「何が変わるか」を出すための材料。字幕数は**保存済みの文書から数えられるときだけ**返し、
+    // 数えられなければ null（推定しない）。
+    // `revertable` は**控えの有無**。これが無いと画面は「戻す」を stale ブロックの中にしか置けず、
+    // 更新が成功した瞬間に stale が空になってボタンごと消える（事前検査 B の B10-2）。
+    sendJson(res, 200, {
+      stale,
+      notices: packUpgradeNotices(dir, stale),
+      revertable: latestPackBackupVersion(findDescriptor('telopPack'), dir) !== null,
+    });
+    return;
+  }
+  if (url.pathname === '/api/pack-revert') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    markSelfWrite(id);
+    try {
+      const result = restorePackComponents(findDescriptor('telopPack'), dir);
+      // 書き終えた姿を記録する（/api/pack-upgrade と同じ 3 手順）。
+      recordSelfWriteContent(id, projectContentSignature(dir));
+      sendJson(res, 200, result);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'backup-missing') {
+        throw new HttpError(404, '更新前の控えがありません。', { reason: 'backup-missing' });
+      }
+      throw error;
+    }
     return;
   }
   if (url.pathname === '/api/pack-upgrade') {
@@ -741,7 +1072,11 @@ export async function handleApi(
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
     markSelfWrite(id);
-    sendJson(res, 200, upgradePacks(dir, checkStalePacks(dir)));
+    const result = upgradePacks(dir, checkStalePacks(dir));
+    // 書き終えた姿を記録する。これが無いと窓明けの再評価で自分の導入を
+    // 外部変更と誤判定してバナーが出る（PUT と同じ 3 手順に揃える）。
+    recordSelfWriteContent(id, projectContentSignature(dir));
+    sendJson(res, 200, result);
     return;
   }
 
@@ -752,7 +1087,16 @@ export async function handleApi(
       throw new HttpError(405, 'このエンドポイントは GET のみ対応します');
     }
     const id = url.searchParams.get('id');
-    handleEventsSse(req, res, root, id !== null && id !== '' ? id : null);
+    // ?w=<writerId>: この画面の識別子。自分の保存だけを suppress するために使う（data-safety-5）。
+    const writer = url.searchParams.get('w');
+    handleEventsSse(
+      req,
+      res,
+      root,
+      id !== null && id !== '' ? id : null,
+      writer !== null && writer !== '' ? writer : undefined,
+      id?()=>restoreRenderObservations(root,id):undefined,
+    );
     return;
   }
   if (url.pathname === '/api/events/sync') {
@@ -763,7 +1107,7 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const ch = requireParam(url, 'ch');
-    sendJson(res, 200, handleEventsSync(id, ch));
+    sendJson(res, 200, ch==='render'?{messages:await restoreRenderObservations(root,id)}:handleEventsSync(id, ch));
     return;
   }
 
@@ -787,6 +1131,25 @@ export async function handleApi(
       return;
     }
     throw new HttpError(405, `${method} は対応していません`);
+  }
+  // 新形式（native）の音声補正。原本を書き換えず、別の不変 asset を登録して返す。
+  // 旧形式の /api/denoise*・/api/normalize*（public/main.mp4 を差し替える）とは別系統。
+  if (url.pathname === '/api/audio-fix') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const id = requireParam(url, 'id');
+    const dir = resolveProjectDir(root, id);
+    markSelfWrite(id);
+    await handleAudioFixPost(req, res, id, dir);
+    return;
+  }
+  if (url.pathname === '/api/audio-fix/status') {
+    if (method !== 'GET') {
+      throw new HttpError(405, 'このエンドポイントは GET のみ対応します');
+    }
+    handleAudioFixStatus(req, res, requireParam(url, 'id'));
+    return;
   }
   if (url.pathname === '/api/denoise/restore') {
     if (method !== 'POST') {
@@ -831,6 +1194,7 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
+    await restoreRenderJobs(id,dir);
     handleRenderReveal(req, res, id, dir);
     return;
   }
@@ -838,20 +1202,34 @@ export async function handleApi(
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
     if (method === 'POST') {
+      assertLegacySequenceAuthority(dir);
       // 外付け未接続のまま数時間かけて失敗するのを防ぐ（開始前に弾く）。
       assertSourceAvailable(dir);
-      await handleRenderPost(req, res, id, dir, url.searchParams.get('force') === '1');
+      await handleRenderPost(
+        req,
+        res,
+        id,
+        dir,
+        url.searchParams.get('force') === '1',
+        url.searchParams.get('mockWarning') === '1',
+      );
       return;
     }
     if (method === 'GET') {
+      await restoreRenderJobs(id,dir);
       handleRenderSse(req, res, id);
       return;
     }
     if (method === 'DELETE') {
+      reconcileRenderJobs(id,dir);
       handleRenderDelete(req, res, id);
       return;
     }
     throw new HttpError(405, `${method} は対応していません`);
+  }
+  if (url.pathname === '/api/preferences' || url.pathname.startsWith('/api/preferences/')) {
+    await handlePreferenceApi(req, res, url, root);
+    return;
   }
   if (url.pathname === '/api/learning/diff') {
     if (method !== 'GET') {
@@ -859,6 +1237,12 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const dir = resolveProjectDir(root, id);
+    // 新形式の案件は「完了した書き出しジョブ」と結び付けて差分を出す（job 必須）。旧形式は従来どおり。
+    if (hasNativeDocument(dir)) {
+      const job = requireParam(url, 'job');
+      sendJson(res, 200, (await computeNativeLearningDiff(dir, job)).response);
+      return;
+    }
     sendJson(res, 200, handleLearningDiff(dir));
     return;
   }
@@ -866,10 +1250,11 @@ export async function handleApi(
     if (method !== 'POST') {
       throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
     }
-    const body = await readJsonBody(req);
-    const approveReq = validateApproveRequest(body);
-    const dir = resolveProjectDir(root, approveReq.projectId);
-    sendJson(res, 200, handleLearningApprove(dir, approveReq));
+    // 旧来の差分承認（jsonl 追記＋*_rules.json の自動昇格）。「編集の好み」とは別の仕組みとして並ぶ（設計書 D1）。
+    // 承認は処理待ちの列で1件ずつ実行する（D12）。
+    const body = validateApproveRequest(await readJsonBody(req));
+    const dir = resolveProjectDir(root, body.projectId);
+    sendJson(res, 200, await runLearningApprove(() => approveLearning(dir, body)));
     return;
   }
   if (url.pathname === '/api/learning/status') {
@@ -983,6 +1368,8 @@ export async function handleApi(
     let record;
     try {
       record = instructionInbox.enqueue({
+        requestId: input.requestId,
+        requestCreatedAt: input.requestCreatedAt,
         projectId: input.projectId,
         projectDir: dir,
         text: input.text,
@@ -990,6 +1377,7 @@ export async function handleApi(
       });
     } catch (err) {
       // 永続化書き込み失敗（ディスク容量不足等）。「受付成功」と偽らず 500 を返す。
+      if (err instanceof HttpError) throw err;
       console.error('[sme] 受け箱への保存に失敗しました:', err);
       sendJson(res, 500, { error: 'inbox-save-failed' });
       return;
@@ -1077,7 +1465,11 @@ export async function handleApi(
         () => {
           safeWrite(`data: ${JSON.stringify({ type: 'change' })}\n\n`);
         },
-        { isSelfWrite: () => isSelfWriting(id) },
+        {
+          isSelfWrite: () => isSelfWriting(id),
+          selfWriteRemainingMs: () => selfWriteRemainingMs(id),
+          isSelfContent: () => isSelfWriteContent(id, undefined, projectContentSignature(dir)),
+        },
       );
     } catch (err) {
       // writeHead 後なので上流 catch では JSON エラーを返せない。ログだけ残して接続を閉じる。
@@ -1141,17 +1533,76 @@ export async function handleApi(
   throw new HttpError(404, `API が見つかりません: ${url.pathname}`);
 }
 
+// ---------------------------------------------------------------------------
+// 撮影ページ（M2b・オーバーレイのフレーム撮影用の面）
+// ---------------------------------------------------------------------------
+
+/** 撮影ページが使う route（プレビュー本体 index.html とは別の面）。 */
+const CAPTURE_ROUTES = new Set(['/capture', '/capture/runtime.js', '/capture/entry.js']);
+
+/** このパスを撮影ページ route が引き受けるか。 */
+export function isCaptureRoute(pathname: string): boolean {
+  return CAPTURE_ROUTES.has(pathname);
+}
+
+/**
+ * 撮影ページ route のハンドラ（M2b T2）。HTML と2本のブラウザバンドルを返すだけの
+ * 読み取り専用 route で、プレビュー本体・製品の書き出し経路には一切触れない。
+ */
+export async function handleCaptureRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+    throw new HttpError(405, '撮影ページは GET のみ対応します');
+  }
+  if (url.pathname === '/capture') {
+    sendText(res, 200, buildCapturePageHtml(), 'text/html; charset=utf-8');
+    return;
+  }
+  if (url.pathname === '/capture/runtime.js') {
+    sendText(res, 200, await bundleCaptureRuntime(), 'text/javascript; charset=utf-8');
+    return;
+  }
+  if (url.pathname === '/capture/entry.js') {
+    sendText(res, 200, await bundleCaptureEntry(), 'text/javascript; charset=utf-8');
+    return;
+  }
+  throw new HttpError(404, `撮影 route が見つかりません: ${url.pathname}`);
+}
+
 /** Harness Editor のローカルサーバを Vite 開発サーバへ組み込む Vite プラグイン。 */
 export function smeServer(): Plugin {
   return {
     name: 'sme-server',
     // configureServer 内で直接 use するとミドルウェアは Vite 内部処理より先に走る。
     configureServer(server) {
+      // X-1 最後の砦: この dev サーバー自体が製品のプロセス。個別の握り潰し
+      // （ptySession.ts の resize/write 保護など）で塞ぎきれない未知の経路が
+      // 残っていても、uncaughtException/unhandledRejection でプロセスごと
+      // 落として白画面・未保存編集消失を起こさない。詳細は processSafetyNet.ts。
+      installProcessSafetyNet();
       const root = getProjectRoot();
+      let editorReady = false;
+      const editorOperations = new EditorOperationStore(join(root, '.sme-editor-operations.json'), randomUUID());
+      const editor = new EditorAgentService(editorOperations, (id) => {
+        const directory = resolveProjectDir(root, id);
+        if (!existsSync(directory) || !isSuperMovieProject(directory)) throw new HttpError(404, 'PROJECT_NOT_FOUND: 案件が見つかりません');
+      }, Date.now, 15000, (id) => {
+        const directory=resolveProjectDir(root,id);
+        if(hasSequenceDocument(directory)) {
+          const saved=new SequenceStore(directory).load();
+          if(!saved) throw new Error('SAVED_STATE_MISSING: 保存内容がありません');
+          return {elements:sequenceEditorTargets(saved.document),fingerprint:`${saved.savedRevision}:${saved.contentHash}`};
+        }
+        const loaded = loadProjectFromDir(directory);
+        return { elements: loaded.project.telops.map((telop) => ({ id: String(telop.id), text: telop.text,
+          sourceFrameRange: { start: telop.originalStart, end: telop.originalEnd } })), fingerprint: JSON.stringify(loaded.save.fingerprint) };
+      }, new EditorAgentContext(root),createNativeEditorAgentAdapter(root));
       console.log(`[sme] プロジェクトルート: ${root}`);
-      // 受け箱の永続化をアタッチ（.sme-inbox.json）。同じフォルダで別のエディタが既に
-      // 永続化を握っている場合（pidfile ロック取得失敗）はメモリのみで動作し続ける。
-      const attach = instructionInbox.attachPersistence(join(root, '.sme-inbox.json'), {
+      // Viteは旧サーバのcloseより先に新configureを呼ぶ。listen時に永続化を取得する。
+      wireInboxPersistence(server.httpServer ?? null, instructionInbox, join(root, '.sme-inbox.json'), {
         resolveProjectDir: (projectId) => {
           try {
             return resolveProjectDir(root, projectId);
@@ -1159,34 +1610,62 @@ export function smeServer(): Plugin {
             return null;
           }
         },
+      }, (persisted) => {
+        if (persisted) {
+          try { editorOperations.recoverInterrupted(); editorReady = true; }
+          catch (error) { console.error('[sme] AI編集の実行記録を復元できません:', error); }
+        }
+        if (!persisted) console.warn('[sme] 受け箱の永続化を無効化しました（同じフォルダで別のエディタが起動中です）');
+        // 旧サーバの終了と所有権取得後にだけ残骸を掃除する。別サーバの処理中素材を消さない。
+        if (persisted) rmSync(uploadTmpDir(root), { recursive: true, force: true });
+        sweepCaptureTmpDirs(root, { guard: persisted });
       });
-      if (!attach.persisted) {
-        console.warn('[sme] 受け箱の永続化を無効化しました（同じフォルダで別のエディタが起動中です）');
-      }
-      // 前回クラッシュ等で残ったアップロード一時ファイル（数GBになりうる）を起動時に掃除する。
-      rmSync(uploadTmpDir(root), { recursive: true, force: true });
+      // 実 origin の記録（設計判断7）: Host ヘッダ推測はせず、実際に listen したアドレスから
+      // 組み立てる。撮影ドライバ（captureDriver）へ渡す serverUrl の正本になる（実配線は T5）。
+      // 配線本体は serverOrigin.ts の wireServerOrigin() に切り出してある（フック注入で
+      // pin できるようにするため・serverOrigin.test.ts 参照）。
+      wireServerOrigin(server.httpServer ?? null);
+      // アイドル接続をサーバ側から 5 秒で切らない（Node 既定のままだと、接続を使い回した
+      // クライアントが ECONNRESET を食う。保存 POST は再送されないので実害がある）。
+      applyKeepAliveTimeouts(server.httpServer);
       // Vite サーバ停止時に進行中の subprocess を全 kill する。
       server.httpServer?.on('close', () => {
+        editorReady = false;
+        try { for (const session of editor.sessions.list()) editorOperations.disconnect(session.sessionId); }
+        catch (error) { console.error('[sme] AI編集の終了記録を確認できません:', error); }
         killAllProjectJobs();
-        instructionInbox.releasePersistence();
+        setServerOrigin(null);
       });
       server.middlewares.use((req, res, next) => {
         const rawUrl = req.url ?? '/';
         const url = new URL(rawUrl, 'http://localhost');
         // このミドルウェアは Vite 内部の Host チェックより先に走るため、
         // DNS リバインディング/CSRF 対策として /api・/mcp は自前でローカル起源を検証する。
-        if (url.pathname === '/mcp' || rawUrl.startsWith('/api/')) {
+        if (url.pathname === '/mcp' || rawUrl.startsWith('/api/') || isCaptureRoute(url.pathname)) {
           if (!isAllowedLocalRequest(req.headers)) {
-            sendJson(res, 403, { error: 'ローカル以外からのアクセスは許可されていません' });
+            if (url.pathname === '/mcp' || url.pathname.startsWith('/api/editor/')) {
+              sendEditorAgentError(res, new HttpError(403, 'ローカル以外からのアクセスは許可されていません'),
+                {}, 'LOCAL_REQUEST_REQUIRED');
+            } else sendJson(res, 403, { error: 'ローカル以外からのアクセスは許可されていません' });
             return;
           }
+        }
+        // 撮影ページ（M2b）。プレビュー本体とは別の面を配信するだけの読み取り専用 route。
+        if (isCaptureRoute(url.pathname)) {
+          handleCaptureRoute(req, res, url).catch((err: unknown) => {
+            const status = err instanceof HttpError ? err.status : 500;
+            const message = err instanceof Error ? err.message : String(err);
+            if (status >= 500) console.error('[sme] 撮影 route エラー:', err);
+            sendJson(res, status, { error: message });
+          });
+          return;
         }
         if (url.pathname === '/mcp') {
           // POST のみ本文を読む。GET(SSE)/DELETE は本文なし。
           const method = (req.method ?? 'GET').toUpperCase();
           const run = async (): Promise<void> => {
             const body = method === 'POST' ? await readJsonBody(req) : undefined;
-            await handleMcpRequest(req, res, instructionInbox, body);
+            await handleMcpRequest(req, res, instructionInbox, body, editorReady ? editor : undefined);
           };
           run().catch((err: unknown) => {
             const status = err instanceof HttpError ? err.status : 500;
@@ -1201,11 +1680,18 @@ export function smeServer(): Plugin {
           next();
           return;
         }
-        handleApi(req, res, url, root).catch((err: unknown) => {
-          const status = err instanceof HttpError ? err.status : 500;
-          const message = err instanceof Error ? err.message : String(err);
-          if (status >= 500) console.error('[sme] APIエラー:', err);
-          sendJson(res, status, { error: message });
+        const editorRoute = url.pathname.startsWith('/api/editor/');
+        if (editorRoute && !editorReady) {
+          sendEditorAgentError(res, new HttpError(503, 'EDITOR_SERVICE_UNAVAILABLE: AI編集の実行記録を確認できません'));
+          return;
+        }
+        const api = editorRoute
+          ? handleEditorAgentApi(req, res, url, editor)
+          : handleApi(req, res, url, root, editorReady ? editor : undefined);
+        api.catch((err: unknown) => {
+          if (editorRoute) { sendEditorAgentError(res, err); return; }
+          if (!(err instanceof HttpError) || err.status >= 500) console.error('[sme] APIエラー:', err);
+          sendApiError(res, err);
         });
       });
     },

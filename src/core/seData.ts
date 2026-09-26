@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type SoundEffect } from './types';
 
@@ -13,6 +13,7 @@ export function parseSeData(source: string | null): SoundEffect[] {
   if (!Array.isArray(m.seData)) {
     throw new ProjectFileError('seData.ts', 'seData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('seData.ts', 'seData', m.seData);
   return m.seData as SoundEffect[];
 }
 
@@ -41,9 +42,9 @@ export function formatSeArray(se: SoundEffect[]): string {
 
 /**
  * SE 未配置プロジェクト用に seData.ts を新規生成するときのテンプレート。
- * SoundEffect 型は ハーネス標準の `./SEPlayer` から import する形にすることで、
+ * SoundEffect 型はハーネス形式標準の `./SEPlayer` から import する形にすることで、
  * プロジェクト内に型を二重定義しない（フィクスチャ・上流の seData.ts と同じ形）。
- * 注: `./SEPlayer.ts` が無いプロジェクトでは ハーネス側の build が落ちるが、
+ * 注: `./SEPlayer.ts` が無いプロジェクトではハーネス形式側の build が落ちるが、
  * SE を使うプロジェクトには SEPlayer.ts が同梱されている前提のため、ここでは作らない。
  */
 function newSeDataSource(): string {

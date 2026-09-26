@@ -12,6 +12,7 @@ import {
   widthMapped,
   xToFrameMapped,
   MIN_MAJOR_GAP_PX,
+  fitPxPerFrame,
 } from './timelineGeometry';
 import { buildDisplayMap } from '../../core/timelineDisplayMap';
 
@@ -225,5 +226,29 @@ describe('rulerTicks（表示マップ検算・監査 interaction-5）', () => {
     for (const ppf of [0.2, 1, 2.2, 8]) {
       expect(rulerTicks(total, ppf, fps, idMap)).toEqual(rulerTicks(total, ppf, fps));
     }
+  });
+});
+
+describe('fitPxPerFrame（全体を表示）', () => {
+  it('見出しガターを除いた可視幅にちょうど収まる倍率を返す', () => {
+    // 1200px の可視幅から 88px のガターを除いた 1112px に 26000 フレームを収める。
+    const ppf = fitPxPerFrame(26000, 1200);
+    expect(ppf).not.toBeNull();
+    expect(frameToX(26000, ppf as number)).toBeCloseTo(1200, 6);
+  });
+
+  it('14 分（26000 フレーム）でも下限に張り付かない', () => {
+    expect(fitPxPerFrame(26000, 1200)).toBeGreaterThan(MIN_PX_PER_FRAME);
+  });
+
+  it('短い案件で上限を超えないようクランプする', () => {
+    expect(fitPxPerFrame(10, 1200)).toBe(MAX_PX_PER_FRAME);
+  });
+
+  it('幅 0・フレーム 0・ガター未満の幅は null（今の倍率を維持する）', () => {
+    expect(fitPxPerFrame(26000, 0)).toBeNull();
+    expect(fitPxPerFrame(0, 1200)).toBeNull();
+    expect(fitPxPerFrame(26000, TRACK_LABEL_GUTTER_PX)).toBeNull();
+    expect(fitPxPerFrame(Number.NaN, 1200)).toBeNull();
   });
 });

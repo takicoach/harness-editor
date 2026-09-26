@@ -19,8 +19,8 @@ const entry = (
 });
 
 describe('seStore', () => {
-  beforeEach(() => { process.env.HARNESS_LEARNING_HOME = mkdtempSync(join(tmpdir(), 'sme-learn-')); });
-  afterEach(() => { delete process.env.HARNESS_LEARNING_HOME; });
+  beforeEach(() => { process.env.SUPERMOVIE_LEARNING_HOME = mkdtempSync(join(tmpdir(), 'sme-learn-')); });
+  afterEach(() => { delete process.env.SUPERMOVIE_LEARNING_HOME; });
 
   it('recordApprovedSeFeedback は jsonl 追記と se_rules.json 更新を行う（異なる動画で2回観測）', () => {
     recordApprovedSeFeedback([entry('whoosh.mp3', 'ここで素振り', { videoId: 'v1' })]);

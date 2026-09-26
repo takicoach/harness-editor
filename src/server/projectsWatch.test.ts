@@ -2,7 +2,12 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { projectIdFromWatchedPath, watchAllProjectsStatus } from './projectsWatch';
+import {
+  projectIdFromWatchedPath,
+  serializeStatusForCompare,
+  startupMissedEvents,
+  watchAllProjectsStatus,
+} from './projectsWatch';
 
 describe('projectIdFromWatchedPath', () => {
   const root = '/root/projects';
@@ -47,7 +52,7 @@ describe('watchAllProjectsStatus', () => {
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  /** projectIdFromWatchedPath 用の最小のハーネス形式プロジェクト体裁を作る（isHarnessProject 判定に必要）。 */
+  /** projectIdFromWatchedPath 用の最小ハーネス形式の案件体裁を作る（isSuperMovieProject 判定に必要）。 */
   function makeMinimalProject(dir: string): void {
     mkdirSync(join(dir, 'src', 'テロップテンプレート'), { recursive: true });
     writeFileSync(join(dir, 'src', 'videoConfig.ts'), 'export const videoFile = "main.mp4";\n', 'utf8');
@@ -201,5 +206,74 @@ describe('watchAllProjectsStatus', () => {
     } finally {
       stop();
     }
+  });
+
+  it('監視開始直後（初回スキャン中）に書かれた変更も取りこぼさない', async () => {
+    // chokidar は ignoreInitial のため「初回スキャン中に起きた変更」をイベントとして出さない。
+    // 監視対象が多い・ディスクが混んでいるほどスキャンは長引き、その窓に書かれた
+    // status.json は永久に届かなくなる（実測: フルスイート実行中に AI 作業中表示が
+    // 15 秒待っても出ないケースが再現）。ready 時に開始時スナップショットとの差分を
+    // 送ることで、この窓の変更も必ず届く。
+    root = mkdtempSync(join(tmpdir(), 'sme-projects-watch-'));
+    // 窓を実測できる程度に広げるため、複数プロジェクトを置いてスキャンを重くする。
+    const dirs = ['ready-a', 'ready-b', 'ready-c', 'ready-d', 'ready-e'].map((n) => join(root, n));
+    for (const d of dirs) {
+      makeMinimalProject(d);
+      mkdirSync(join(d, '.sme'), { recursive: true });
+      writeFileSync(join(d, '.sme', 'status.json'), '{}\n', 'utf8');
+    }
+
+    const events: Array<{ id: string; status: string }> = [];
+    const stop = watchAllProjectsStatus(
+      root,
+      (e) => {
+        events.push(e as { id: string; status: string });
+      },
+      { debounceMs: 20 },
+    );
+    try {
+      // 監視開始の直後（＝初回スキャンの最中）に書き込む。待たないことが本題。
+      writeFileSync(
+        join(root, 'ready-a', '.sme', 'status.json'),
+        JSON.stringify({ stage: 'telop' }) + '\n',
+        'utf8',
+      );
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(events.some((e) => e.id === 'ready-a' && e.status === 'telop')).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+});
+
+describe('startupMissedEvents', () => {
+  it('初回スキャン中に変わったプロジェクトだけを返し、baseline を更新する', () => {
+    const baseline = new Map<string, string>([
+      ['a', JSON.stringify({ id: 'a', status: 'idle' })],
+      ['b', JSON.stringify({ id: 'b', status: 'telop' })],
+    ]);
+    const current: Record<string, { id: string; status: string }> = {
+      a: { id: 'a', status: 'telop' }, // スキャン窓で変わった
+      b: { id: 'b', status: 'telop' }, // 変わっていない
+    };
+    const out = startupMissedEvents(['a', 'b'], baseline, (id) => current[id] as never);
+    expect(out.map((e) => e.id)).toEqual(['a']);
+    // 二度目は何も返さない（同じ取りこぼしを繰り返し流さない）。
+    expect(startupMissedEvents(['a', 'b'], baseline, (id) => current[id] as never)).toEqual([]);
+  });
+
+  it('statusSeq だけが違うのはイベントにしない（観測のたびに変わる番号で誤配信しない）', () => {
+    // statusSeq は「何回目の観測か」であってプロジェクトの状態ではない。比較に含めると
+    // baseline と必ず食い違い、接続のたびに全プロジェクト分の無駄なイベントが流れる。
+    const baseline = new Map<string, string>([
+      ['a', serializeStatusForCompare({ id: 'a', status: 'idle', statusSeq: 1 } as never)],
+    ]);
+    const out = startupMissedEvents(['a'], baseline, () => ({ id: 'a', status: 'idle', statusSeq: 999 }) as never);
+    expect(out).toEqual([]);
+  });
+
+  it('解決できないプロジェクト（削除された等）は飛ばす', () => {
+    const baseline = new Map<string, string>([['gone', JSON.stringify({ id: 'gone', status: 'idle' })]]);
+    expect(startupMissedEvents(['gone'], baseline, () => null)).toEqual([]);
   });
 });

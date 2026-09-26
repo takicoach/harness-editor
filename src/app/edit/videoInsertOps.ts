@@ -1,6 +1,4 @@
-import type { CutRegion, EditorVideoInsert, ElementAnim, TelopPosition } from '../../core/types';
-import { originalToPlayback, playbackToOriginal } from '../../core/cutEngine';
-import { videoInsertPlaybackSpan } from '../../core/videoInsertEngine';
+import type { EditorVideoInsert, ElementAnim, TelopPosition } from '../../core/types';
 import type { EditState } from './editState';
 
 /** 新規サブ動画インサートの既定再生長（フレーム）。60fps で約 2 秒。 */
@@ -67,81 +65,16 @@ export function moveVideoInsert(state: EditState, id: number, originalStart: num
   });
 }
 
-/**
- * クリップが素材内に収まる originalEnd の上限を返す（純関数）。
- *
- * ソース消費量は「**再生尺** × 速度」なので、許容再生尺は残量（実尺 − イン点）を速度で割った値。
- * 端数は切り捨て、素材の外へ 1 フレームもはみ出さない。クリップ内側にカット区間があると
- * 原本尺 > 再生尺 になるため、再生座標で上限を出してから原本座標へ戻す。
- *
- * @param clip        対象クリップ（イン点・速度をここから読む）
- * @param sourceFrames 素材の実フレーム長。プローブ未完了・不明・非正なら undefined を返す
- *                     （＝上限なし＝従来挙動。推定できないものを勝手に縮めない）
- * @param originalStart クランプ後に確定する開始フレーム。左端ドラッグで start が動く経路が
- *                     あるため、呼び出し側は「これから確定する start」を渡すこと
- * @param cutRegions  カット区間。**任意にしない**（省略を許すと原本座標へ静かに退化する）
- */
-export function videoInsertMaxEnd(
-  clip: EditorVideoInsert,
-  sourceFrames: number | undefined,
-  originalStart: number,
-  cutRegions: CutRegion[],
-): number | undefined {
-  if (sourceFrames === undefined || !Number.isFinite(sourceFrames) || sourceFrames <= 0) return undefined;
-  if (!Number.isFinite(originalStart)) return undefined;
-  const rate = clip.playbackRate ?? 1;
-  if (!Number.isFinite(rate) || rate <= 0) return undefined;
-  const remaining = sourceFrames - clip.sourceInFrame;
-  // イン点が素材尻を越えている等の退化ケースでも 1 フレームは残す（end >= start+1 の契約）。
-  const maxPlaybackDuration = Math.max(1, Math.floor(remaining / rate));
-  if (cutRegions.length === 0) return originalStart + maxPlaybackDuration;
-  const playbackStart =
-    originalToPlayback(originalStart, cutRegions) ?? originalToPlayback(originalStart - 1, cutRegions);
-  // start がカット区間内＝そもそも編集不可の経路。ここでは縮めない。
-  if (playbackStart === null) return undefined;
-  return playbackToOriginal(playbackStart + maxPlaybackDuration, cutRegions);
-}
-
-/**
- * クリップが素材の終端をどれだけはみ出しているか（ソース座標のフレーム数）。
- * 収まっていれば 0、実尺不明なら null（＝判定しない）。
- *
- * 消費量は**再生尺**×速度で測る（クリップ内側にカット区間があると原本尺より短くなる）。
- * 原本尺で測ると誤警告になる。はみ出した区間はソース最終フレームで静止する。
- * イン点（sourceInFrame）はユーザーが波形で合わせる同期点なので勝手にクランプせず、
- * ここで警告に使う。
- */
-export function videoInsertOverflowFrames(
-  clip: EditorVideoInsert,
-  sourceFrames: number | undefined,
-  cutRegions: CutRegion[],
-): number | null {
-  if (sourceFrames === undefined || !Number.isFinite(sourceFrames) || sourceFrames <= 0) return null;
-  const rate = clip.playbackRate ?? 1;
-  if (!Number.isFinite(rate) || rate <= 0) return null;
-  const consumed = videoInsertPlaybackSpan(clip.originalStart, clip.originalEnd, cutRegions) * rate;
-  return Math.max(0, Math.round(clip.sourceInFrame + consumed - sourceFrames));
-}
-
-/**
- * 両端を独立設定（つまみ・数値入力用）。0クランプ・丸め・end>=start+1 保証。
- * maxEnd を渡すとそこで頭打ちにする（素材の実尺クランプ・`videoInsertMaxEnd` で算出）。
- * maxEnd 未指定・非有限のときはクランプしない＝従来挙動（実尺不明の素材を勝手に縮めない）。
- */
+/** 両端を独立設定（つまみ・数値入力用）。0クランプ・丸め・end>=start+1 保証。 */
 export function retimeVideoInsert(
   state: EditState,
   id: number,
   originalStart: number,
   originalEnd: number,
-  maxEnd?: number,
 ): EditState {
   if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd)) return state;
   const start = Math.max(0, Math.round(originalStart));
-  let end = Math.max(start + 1, Math.round(originalEnd));
-  if (maxEnd !== undefined && Number.isFinite(maxEnd)) {
-    // 上限が start+1 を下回る退化ケースでも end>=start+1 の契約を壊さない。
-    end = Math.min(end, Math.max(start + 1, Math.floor(maxEnd)));
-  }
+  const end = Math.max(start + 1, Math.round(originalEnd));
   return patch(state, id, (v) => ({ ...v, originalStart: start, originalEnd: end }));
 }
 

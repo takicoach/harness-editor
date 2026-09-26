@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -11,12 +11,14 @@ import { resolve } from 'node:path';
  * 「Whisper が見つかりません」になる。
  *
  * 解決順:
- *   1. 環境変数 HARNESS_PYTHON（旧 SUPERMOVIE_PYTHON も有効。検証せず尊重・配布先/CI の明示指定用）
+ *   1. 環境変数 SUPERMOVIE_PYTHON（検証せず尊重・配布先/CI の明示指定用）
  *   2. リポジトリ直下の machine-local 設定ファイル `.supermovie-python`（gitignore 済み・
  *      1 行目に Python 実行ファイルの絶対パス。例: 既存プロジェクト venv を指す）
  *   3. PATH 候補（python3 + サポート各マイナー + python）を **実 import** で probe し、
  *      whisper backend を import できる最初のもの
- *   4. どれも無ければ `python3`（従来どおりエラーを surface させ案内メッセージを出す）
+ *   4. backend が無ければ、スクリプトを実行できる最初の Python 3.10+。
+ *      backend の利用可否は transcribe.py が別途判定し、無ければ通常の失敗を返す。
+ *   5. 適合する Python 自体が無ければ、起動前に明示エラーを返す。
  */
 
 /**
@@ -50,6 +52,7 @@ const CONFIG_FILE = '.supermovie-python';
  * スクリプトは `str | None` 等の PEP 604 注記を使うため 3.10+ が必須。
  */
 const MIN_PYTHON = '(3, 10)';
+const VERSION_PROBE_SRC = `import sys\nsys.exit(0 if sys.version_info >= ${MIN_PYTHON} else 1)`;
 
 /**
  * 候補が「3.10 以上」かつ「whisper backend を実際に import できる」かを確認する Python ソース。
@@ -84,6 +87,35 @@ export function pythonHasWhisper(bin: string): boolean {
   }
 }
 
+/** Script compatibility only; this does not certify an installed Whisper backend. */
+function pythonCanRunScript(bin:string):boolean {
+  try { execFileSync(bin,['-c',VERSION_PROBE_SRC],{stdio:'ignore',timeout:5000});return true; }
+  catch { return false; }
+}
+
+/** Discard import warnings like the sync probe; cancellation/timeout still reap the child. */
+async function probePythonAsync(bin:string,source:string,timeout:number,signal?:AbortSignal):Promise<boolean> {
+  signal?.throwIfAborted();
+  const ok=await new Promise<boolean>(resolve=>{
+    let failed=false,timedOut=false;
+    // No pipes or buffer limit: noisy successful imports must remain candidates.
+    // Own cancellation rather than Node's AbortSignal early error notification.
+    const child=spawn(bin,['-c',source],{stdio:'ignore'});
+    child.once('error',()=>{failed=true;});
+    const timer=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},timeout);
+    const abort=()=>{child.kill('SIGKILL');};
+    signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+    child.once('close',code=>{
+      clearTimeout(timer);signal?.removeEventListener('abort',abort);
+      resolve(code===0&&!failed&&!timedOut);
+    });
+  });
+  signal?.throwIfAborted();return ok;
+}
+function missingCompatiblePython():Error {
+  return new Error('Python 3.10 以上の実行環境が見つかりません。対応する Python を導入するか、SUPERMOVIE_PYTHON / .supermovie-python で指定してください。');
+}
+
 /** 既定の設定ファイルパス（src/server/ から見て 2 階層上のリポジトリ直下）。 */
 function defaultConfigPath(): string {
   return resolve(import.meta.dirname, '..', '..', CONFIG_FILE);
@@ -105,6 +137,8 @@ export interface ResolvePythonDeps {
   env: NodeJS.ProcessEnv;
   /** bin が whisper backend を import できるか（既定 pythonHasWhisper、テストで差し替え可能）。 */
   hasWhisper: (bin: string) => boolean;
+  /** Python 3.10+ script compatibility, without requiring an optional backend. */
+  canRunScript: (bin:string)=>boolean;
   /** 設定ファイルの内容を返す（既定 readPythonConfig、テストで差し替え可能）。 */
   readConfig: () => string | null;
   /** 実行プラットフォーム（既定 process.platform）。probe 候補の選択に使う。 */
@@ -118,7 +152,7 @@ export function resolvePythonBin(deps: Partial<ResolvePythonDeps> = {}): string 
   const readConfig = deps.readConfig ?? (() => readPythonConfig());
   const platform = deps.platform ?? process.platform;
 
-  const override = env.HARNESS_PYTHON?.trim() || env.SUPERMOVIE_PYTHON?.trim();
+  const override = env.SUPERMOVIE_PYTHON?.trim();
   if (override) return override;
 
   const configured = readConfig();
@@ -127,5 +161,24 @@ export function resolvePythonBin(deps: Partial<ResolvePythonDeps> = {}): string 
   for (const bin of pathCandidates(platform)) {
     if (hasWhisper(bin)) return bin;
   }
-  return 'python3';
+  const canRunScript=deps.canRunScript??pythonCanRunScript;
+  for(const bin of pathCandidates(platform))if(canRunScript(bin))return bin;
+  throw missingCompatiblePython();
+}
+
+export interface ResolvePythonAsyncDeps extends Omit<ResolvePythonDeps,'hasWhisper'|'canRunScript'> {
+  hasWhisper:(bin:string,signal?:AbortSignal)=>Promise<boolean>;
+  canRunScript:(bin:string,signal?:AbortSignal)=>Promise<boolean>;
+}
+/** New background jobs must not block the HTTP server while importing a backend. */
+export async function resolvePythonBinAsync(signal?:AbortSignal,deps:Partial<ResolvePythonAsyncDeps>={}):Promise<string> {
+  signal?.throwIfAborted();
+  const configured=(deps.env??process.env).SUPERMOVIE_PYTHON?.trim() || (deps.readConfig??readPythonConfig)();
+  if(configured)return configured;
+  const hasWhisper=deps.hasWhisper??((bin:string,signal?:AbortSignal)=>probePythonAsync(bin,PROBE_SRC,60000,signal));
+  const canRunScript=deps.canRunScript??((bin:string,signal?:AbortSignal)=>probePythonAsync(bin,VERSION_PROBE_SRC,5000,signal));
+  for(const probe of [hasWhisper,canRunScript])for(const bin of pathCandidates(deps.platform??process.platform)) {
+    signal?.throwIfAborted();const ok=await probe(bin,signal);signal?.throwIfAborted();if(ok)return bin;
+  }
+  throw missingCompatiblePython();
 }

@@ -11,12 +11,12 @@
 # 使い方:
 #   scripts/make-preview-proxy.sh <プロジェクトのパス> [元動画ファイル名]
 # 例:
-#   scripts/make-preview-proxy.sh ~/Marketing/VideoEditing/2026-04-30-golf-drills
+#   scripts/make-preview-proxy.sh ~/Movies/harness-projects/my-video
 #   scripts/make-preview-proxy.sh ./my-project clip.mp4
 #
 set -euo pipefail
 
-PROJECT_DIR="${1:?プロジェクトのパスを指定してください（例: ~/Marketing/VideoEditing/2026-04-30-golf-drills）}"
+PROJECT_DIR="${1:?プロジェクトのパスを指定してください（例: ~/Movies/harness-projects/my-video）}"
 SRC_NAME="${2:-main.mp4}"
 
 PUBLIC_DIR="$PROJECT_DIR/public"

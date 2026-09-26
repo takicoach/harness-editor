@@ -22,6 +22,7 @@
  * 取り逃す）。
  */
 import { test, expect, type Page } from '@playwright/test';
+import { useTempProject } from './helpers';
 
 // pty セッションは server 側シングルトン（エディタ全体で1本）のため、このファイルの
 // テストが Codex へ実際に切り替えたまま終わると、後続テスト（このファイル内・他ファイル
@@ -56,8 +57,14 @@ async function stubTwoToolsInstalled(page: Page): Promise<void> {
   });
 }
 
+// 共有 sample-project は smoke.spec.ts の afterEach（git checkout / git clean）が
+// 実行中ずっと書き換え続けるため、その窓に重なって開くと壊れた状態を読む
+// （実測: 「[telopData.ts] telopData 配列が見つかりません」で editor が止まる）。
+// 専用コピーへ隔離する（helpers.ts の useTempProject）。
+const projectId = useTempProject('ai-tool-tmp');
+
 test.describe('AI タブのツール切替', () => {
-  test('使えるツールが1つなら切替行が出ない（利用者の画面が変わっていない）', async ({ page }) => {
+  test('使えるツールが1つなら切替行が出ない（受講生の画面が変わっていない）', async ({ page }) => {
     await page.route('**/api/ai/tools', async (route) => {
       const res = await route.fetch();
       const body = await res.json();
@@ -69,21 +76,21 @@ test.describe('AI タブのツール切替', () => {
       });
     });
     await page.goto('/');
-    await page.locator('.home-card', { hasText: 'sample-project' }).click();
+    await page.locator('.home-card', { hasText: projectId() }).click();
     await expect(page.locator('.pv-stage')).toBeVisible();
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     const term = page.getByTestId('claude-terminal');
     await expect(term).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.clt-tools')).toHaveCount(0);
     // Minor 4: 切替行が無いことに加え、端末が実際に claude（フィクスチャ）で起動できている
-    // ことまで確認する。「利用者の画面が変わっていない」＝端末は従来どおり動く、を押さえる。
+    // ことまで確認する。「受講生の画面が変わっていない」＝端末は従来どおり動く、を押さえる。
     await expect(term).toContainText('FAKE-CLAUDE', { timeout: 15_000 });
   });
 
   test('2つ使えるとき切替行が出て、押すと確認が出る', async ({ page }) => {
     await stubTwoToolsInstalled(page);
     await page.goto('/');
-    await page.locator('.home-card', { hasText: 'sample-project' }).click();
+    await page.locator('.home-card', { hasText: projectId() }).click();
     await expect(page.locator('.pv-stage')).toBeVisible();
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     const tools = page.locator('.clt-tools');
@@ -101,7 +108,7 @@ test.describe('AI タブのツール切替', () => {
   test('切替後に旧ツールの出力が端末に残らない', async ({ page }) => {
     await stubTwoToolsInstalled(page);
     await page.goto('/');
-    await page.locator('.home-card', { hasText: 'sample-project' }).click();
+    await page.locator('.home-card', { hasText: projectId() }).click();
     await expect(page.locator('.pv-stage')).toBeVisible();
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     const term = page.getByTestId('claude-terminal');
@@ -115,7 +122,7 @@ test.describe('AI タブのツール切替', () => {
   test('確認を断ると切り替わらない', async ({ page }) => {
     await stubTwoToolsInstalled(page);
     await page.goto('/');
-    await page.locator('.home-card', { hasText: 'sample-project' }).click();
+    await page.locator('.home-card', { hasText: projectId() }).click();
     await expect(page.locator('.pv-stage')).toBeVisible();
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     await expect(page.locator('.clt-tools')).toBeVisible({ timeout: 15_000 });
@@ -127,7 +134,7 @@ test.describe('AI タブのツール切替', () => {
 
   test('別セッションでツール切替が起きると、この接続へ stale 通知が届く（sessionId 束縛の検証）', async ({ page, request }) => {
     await page.goto('/');
-    await page.locator('.home-card', { hasText: 'sample-project' }).click();
+    await page.locator('.home-card', { hasText: projectId() }).click();
     await expect(page.locator('.pv-stage')).toBeVisible();
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     await expect(page.getByTestId('claude-terminal')).toBeVisible({ timeout: 15_000 });
@@ -158,7 +165,7 @@ test.describe('AI タブのツール切替', () => {
   test('Codex を選ぶと日本語の案内が出る', async ({ page }) => {
     await stubTwoToolsInstalled(page);
     await page.goto('/');
-    await page.locator('.home-card', { hasText: 'sample-project' }).click();
+    await page.locator('.home-card', { hasText: projectId() }).click();
     await expect(page.locator('.pv-stage')).toBeVisible();
     await page.locator('.rightdock-tab[data-tab="ai"]').click();
     await expect(page.locator('.clt-tools')).toBeVisible({ timeout: 15_000 });

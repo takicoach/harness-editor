@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { openEditor } from './helpers';
+import { openEditor, useTempProject } from './helpers';
+
+// 共有 sample-project は smoke / heavy-job-confirm の afterEach が git checkout/clean で
+// 巻き戻すため、その窓に重なると読み込みが壊れる（helpers.ts の useTempProject 参照）。
+// このファイルは保存を伴わない読み取り専用の検証なので、専用コピーへ隔離するだけで足りる。
+const projectId = useTempProject('main-layout-tmp');
 
 test('メイン動画レイアウト: 大きさ設定→表示更新→全画面に戻す', async ({ page }) => {
   const pageErrors: string[] = [];
@@ -9,7 +14,7 @@ test('メイン動画レイアウト: 大きさ設定→表示更新→全画面
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // メイン動画トラック見出し（ラベル「動画」）を選択
   const mainTrack = page
@@ -36,7 +41,7 @@ test('メイン動画レイアウト: 大きさ設定→表示更新→全画面
 });
 
 test('メイン動画設定パネルは右ドックの左右枠内に収まる（横はみ出しなし）', async ({ page }) => {
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   await page
     .locator('.tl-track-label-clickable')
@@ -62,7 +67,7 @@ test('メイン動画レイアウト: 数値ボックスに手入力して大き
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
   await page
     .locator('.tl-track-label-clickable')
     .filter({ has: page.locator('.tl-track-name', { hasText: /^動画$/ }) })

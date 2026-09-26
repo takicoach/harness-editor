@@ -169,6 +169,25 @@ describe('pointerToPosition', () => {
   it('下方向（y>0）は 0 でクランプ（テロップは下端より下げない）', () => {
     expect(pointerToPosition(content, { x: 0, y: 0 }, 0, 200, 1080, 1920)).toEqual({ x: 0, y: 0 });
   });
+
+  describe('elemWidthPx（実測幅を渡したときの追加クランプ・2026-09-05 の不具合対策）', () => {
+    it('省略時は従来どおり x=1 まで動く（後方互換）', () => {
+      expect(pointerToPosition(content, { x: 0, y: 0 }, 50, 0, 1080, 1920)).toEqual({ x: 1, y: 0 });
+    });
+
+    it('広い帯（content 幅の 80%）を渡すと x=1 まで動かず安全域で止まる', () => {
+      const wide = content.w * 0.8;
+      const result = pointerToPosition(content, { x: 0, y: 0 }, 50, 0, 1080, 1920, wide);
+      expect(result.x).toBeLessThan(1);
+      expect(result.x).toBeCloseTo((content.w - wide) / content.w, 6);
+    });
+
+    it('狭い帯（content 幅の 5%）ならほぼ x=1 まで動ける', () => {
+      const narrow = content.w * 0.05;
+      const result = pointerToPosition(content, { x: 0, y: 0 }, 50, 0, 1080, 1920, narrow);
+      expect(result.x).toBeCloseTo((content.w - narrow) / content.w, 6);
+    });
+  });
 });
 
 describe('pointerToScale', () => {

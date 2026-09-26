@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { formatMotion } from './motion';
 import { ProjectFileError, type TelopSegment } from './types';
@@ -19,6 +19,7 @@ export function parseTelopData(
   if (!Array.isArray(m.telopData)) {
     throw new ProjectFileError('telopData.ts', 'telopData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('telopData.ts', 'telopData', m.telopData);
   return m.telopData as TelopSegment[];
 }
 

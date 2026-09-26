@@ -77,7 +77,7 @@ describe('moveToTrash の .trash 封じ込め', () => {
   /**
    * P1: `.trash` 自体が外部フォルダへの symlink だと、tombstone の作成
    * （mkdirSync）と renameSync が**プロジェクト外へデータを持ち出す**。
-   * 削除・復元と同じ入口ガードを移動経路にも通す（ガードの 3 経路目）。
+   * 削除・掃除と同じ入口ガードを移動経路にも通す（ガードの 3 経路目）。
    */
   it('.trash が外部への symlink なら移動を拒否し、実体はプロジェクト内に残る', () => {
     const outside = mkdtempSync(join(tmpdir(), 'sme-outside-move-'));
@@ -499,7 +499,9 @@ describe('manifest 書き込み失敗時の巻き戻し', () => {
     );
     expect(leftovers).toEqual([]);
   });
+});
 
+describe('復元中の manifest 保存失敗', () => {
   /**
    * P2: 復元は「rename（実体を戻す）→ manifest 更新」の 2 段。manifest 更新が最後だと、
    * そこで失敗したときに **実体は復元済みなのに manifest には古い entry が残る**。

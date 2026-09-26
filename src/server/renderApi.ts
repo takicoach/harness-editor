@@ -1,15 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, dirname, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import { sendJson, HttpError } from './http';
 import { readBodyText } from './readBody';
-import { RenderJobManager, createMockRenderDeps } from './renderJob';
-import { parseRenderOptions, postScaleArgs, renderExtraArgs, renderOutputName } from '../shared/renderPreset';
+import { MockRenderJobManager } from './mockRenderJob';
+import { parseRenderOptions, renderOutputName } from '../shared/renderPreset';
 import { heavyJobGate, heavyJobCounts } from './systemLoad';
-import { planFastCut } from './fastCutPlan';
-import { resolveFfmpegBin } from './resolveFfmpeg';
-import { projectResolution } from './projectResolution';
+import { assertLegacySequenceAuthority } from './sequence/authority';
+import {LegacyNativeRenderJobs} from './legacyNativeRenderJobs';
 
 /** レンダーのプリセットオプション body の上限（数 KB で足りる。巨大 body を弾く）。 */
 const RENDER_BODY_MAX_BYTES = 1024 * 1024;
@@ -21,10 +20,19 @@ export function tmpOutputName(projectId: string, now: number): string {
 
 /** プロジェクト共通の Manager。plugin.ts で 1 個だけ生成して使う。 */
 export const renderJobs = process.env.SME_RENDER_MOCK === '1'
-  ? new RenderJobManager(createMockRenderDeps(
+  ? new MockRenderJobManager(
       Number(process.env.SME_RENDER_MOCK_DELAY_MS ?? '3000'),
-    ))
-  : new RenderJobManager();
+      process.env.SME_RENDER_MOCK_FAIL === '1',
+    )
+  : new LegacyNativeRenderJobs();
+
+/** Restore persisted observations for reconnect, sync and reveal. */
+export async function restoreRenderJobs(projectId:string,projectDir:string):Promise<void> {
+  if(renderJobs instanceof LegacyNativeRenderJobs)await renderJobs.restore(projectId,projectDir);
+}
+export function reconcileRenderJobs(projectId:string,projectDir:string):void {
+  if(renderJobs instanceof LegacyNativeRenderJobs)renderJobs.reconcile(projectId,projectDir);
+}
 
 /**
  * OS ごとの「フォルダを開いてファイルを選択」コマンドを組み立てて起動する。
@@ -57,7 +65,7 @@ export function revealInFinder(
 /**
  * POST /api/render?id=<projectId>
  *
- * - Remotion render ジョブを開始する。
+ * - 旧編集形式の固定snapshotから独自書き出しを開始する。
  * - 同時実行は 1 本のみ（409 で弾く）。
  * - 一時出力は最終出力と同一ディレクトリ（out/）・ドット始まりで置く。
  */
@@ -67,7 +75,15 @@ export async function handleRenderPost(
   projectId: string,
   projectDir: string,
   force = false,
+  /**
+   * mock 書き出し（SME_RENDER_MOCK=1）でだけ効くテスト用スイッチ（?mockWarning=1）。
+   * 旧通知を含め、通知が2つ同時に出た時の表示を実ブラウザで検査する。
+   * 通常の独自書き出しでは使わない。
+   */
+  mockWarning = false,
 ): Promise<void> {
+  assertLegacySequenceAuthority(projectDir);
+  reconcileRenderJobs(projectId,projectDir);
   if (renderJobs.exists(projectId)) {
     sendJson(res, 409, { error: 'already-running' });
     return;
@@ -114,45 +130,23 @@ export async function handleRenderPost(
   }
 
   const outDir = join(projectDir, 'out');
-  mkdirSync(outDir, { recursive: true });
-
-  const isMock = process.env.SME_RENDER_MOCK === '1';
-  // mock 時は install を走らせない。実行時は node_modules の有無で判定する。
-  const needsInstall = isMock ? false : !existsSync(join(projectDir, 'node_modules'));
-
-  const tmpOutput = join(outDir, tmpOutputName(projectId, Date.now()));
   const finalOutput = join(outDir, renderOutputName(options));
-  // 仕上げ工程（スーパーサンプリング縮小）。mock 時は ffmpeg を起動しない。
-  const postOutput = `${tmpOutput}.final.mp4`;
-
-  // 「カットしただけ」なら Remotion で描き直さず ffmpeg で切って繋ぐ（4K で 10 時間超 → 数分）。
-  // 判定・フィルタ生成に失敗した場合は黙って通常経路へ落ちる（書き出せないより遅い方がまし）。
-  // 出力先は通常経路と同じ tmpOutput にして、成功後の rename もそのまま共用する。
-  const ffmpeg = resolveFfmpegBin();
-  const fast = isMock || !ffmpeg.ok ? null : planFastCut(projectDir, options, tmpOutput);
-
-  const job = renderJobs.start(projectId, {
-    projectDir,
-    // 高速経路は Remotion を使わないので node_modules も要らない。
-    needsInstall: fast === null ? needsInstall : false,
-    tmpOutput,
-    finalOutput,
-    extraArgs: renderExtraArgs(options),
-    ...(fast === null
-      ? (isMock
-        ? {}
-        : { post: { command: 'ffmpeg', args: postScaleArgs(options, tmpOutput, postOutput, projectResolution(projectDir)), output: postOutput } })
-      : {
-        fastCut: {
-          command: ffmpeg.ok ? ffmpeg.bin : 'ffmpeg',
-          args: fast.args,
-          totalFrames: fast.totalFrames,
-          verify: fast.verify,
-        },
-      }),
-  });
-
-  sendJson(res, 200, { ok: true, startedAt: job.startedAt, fastCut: fast !== null });
+  if (lstatSync(finalOutput, { throwIfNoEntry: false }) !== undefined) {
+    sendJson(res, 409, { error: 'output-exists', message: '同名のファイルがあります。書き出し画面で別のファイル名を指定してください。' });
+    return;
+  }
+  if(renderJobs instanceof LegacyNativeRenderJobs){
+    const port=req.socket.localPort;if(!port)throw new HttpError(500,'ローカルサーバーのポートを確認できません');
+    const job=renderJobs.start(projectId,{projectDir,origin:`http://127.0.0.1:${port}`,options});
+    sendJson(res,200,{ok:true,startedAt:job.startedAt,outputFile:job.outputFile,fastCut:false,native:true});return;
+  }
+  // The only remaining manager variant is the explicitly selected UI test mock.
+  mkdirSync(outDir, { recursive: true });
+  const job = renderJobs.start(projectId, { finalOutput });
+  if (mockWarning) {
+    renderJobs.warn(projectId, '高速書き出しに失敗したため互換(Remotion)経路でやり直しています（時間がかかります）');
+  }
+  sendJson(res, 200, { ok: true, startedAt: job.startedAt, outputFile: job.outputFile, fastCut: false });
 }
 
 /**
@@ -177,7 +171,7 @@ export function handleRenderSse(
     if (!res.writableEnded) res.end();
   };
 
-  const job = renderJobs.get(projectId);
+  const job = renderJobs.getSnapshot(projectId);
   if (!job) {
     safeWrite({ type: 'idle' });
     safeEnd();
@@ -207,8 +201,8 @@ export function handleRenderSse(
     if (ev.phase === 'done' || ev.phase === 'failed' || ev.phase === 'cancelled') {
       safeWrite({ type: 'done', phase: ev.phase, error: ev.error, warning: ev.warning });
       unsub();
-      // failed はジョブが保持されたままなので、観測済みとしてここで破棄する
-      // （done/cancelled は既に cleanup 済みで no-op）。
+      // Both managers release terminal runs themselves. This observation hook
+      // must not discard a later run belonging to the same project.
       renderJobs.discard(projectId);
       finish();
     }
@@ -234,91 +228,34 @@ export function handleRenderDelete(
   sendJson(res, 200, { ok: true });
 }
 
-/** path が root 配下（または root 自身）か。resolvePublicAsset と同じ判定。 */
-function isContained(path: string, root: string): boolean {
-  return path === root || path.startsWith(root + sep);
-}
-
-/**
- * out/ 直下の書き出し済み動画（中間ファイルを除く）。新しい順ではなく列挙順。
- *
- * reveal は OS のファイラへパスを渡す＝プロジェクト外を指せてはいけない。
- * out/ 配下に外部を指す symlink が置かれていても実体で弾く
- * （`resolvePublicAsset` と同じ「解決 → realpath の 2 段封じ込め」）。
- */
-export function listOutputVideos(outDir: string): Array<{ name: string; path: string; mtimeMs: number }> {
-  let entries: string[];
-  let realOut: string;
-  try {
-    realOut = realpathSync(outDir);
-    entries = readdirSync(outDir);
-  } catch {
-    // out/ が無いプロジェクト（未書き出し）は候補ゼロ。
-    return [];
-  }
-  const out: Array<{ name: string; path: string; mtimeMs: number }> = [];
-  for (const name of entries) {
-    // 中間ファイルは全て '.' 始まり（tmpOutputName ＋ その .final.mp4）。
-    if (name.startsWith('.') || !name.toLowerCase().endsWith('.mp4')) continue;
-    try {
-      const real = realpathSync(join(outDir, name));
-      // 実体が out/ の外を指す symlink は候補にしない。
-      if (!isContained(real, realOut)) continue;
-      out.push({ name, path: real, mtimeMs: statSync(real).mtimeMs });
-    } catch {
-      // 列挙と解決の間に消えたファイル・壊れた symlink は無視する。
-    }
-  }
-  return out;
-}
-
-/**
- * 「フォルダで表示」で開くファイルを決める。
- *
- * ①ジョブが記録した実出力（解像度で名前が変わるため固定名で決め打ちしない）
- * ②記録が無い／消えている場合は out/ の最新 mp4
- *   （**サーバ再起動でジョブ記録が消えた場合や、前回セッションで書き出した成果物**を開くため。
- *    ジョブ record 自体は完了時に cleanup で消えるが、パスは lastOutput が保持するので
- *    「同一プロセス内で書き出した直後」は必ず①で当たる）
- * ③候補なしなら null（呼び出し側が 404）
- *
- * 戻り値の `fallback` は②で決まったことを示す（クライアントが「最新ファイルを開いた」と断れる）。
- */
-export function resolveRevealTarget(
-  outDir: string,
-  recordedPath: string | undefined,
-): { path: string; fallback: boolean } | null {
-  if (recordedPath !== undefined && recordedPath !== '' && existsSync(recordedPath)) {
-    return { path: recordedPath, fallback: false };
-  }
-  const files = listOutputVideos(outDir);
-  if (files.length === 0) return null;
-  const newest = files.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a));
-  return { path: newest.path, fallback: true };
-}
-
 /**
  * POST /api/render/reveal?id=<projectId>
  *
- * 書き出し済み動画を OS のファイラで表示する。無ければ 404。
- *
- * 出力名は `renderOutputName(options)` が解像度で変える（video.mp4 /
- * video-1080p.mp4 / video-720p.mp4）。ここで固定名 out/video.mp4 を見ていたため
- * 720p・1080p で書き出すと常に 404 になっていた（2026-08-08 修正）。
+ * 直近に完成した出力を OS のファイラで表示する。無ければ 404。
  */
 export function handleRenderReveal(
   _req: IncomingMessage,
   res: ServerResponse,
   projectId: string,
   projectDir: string,
+  reveal: typeof revealInFinder = revealInFinder,
 ): void {
-  const target = resolveRevealTarget(join(projectDir, 'out'), renderJobs.lastOutput(projectId));
-  if (target === null) {
+  const job = renderJobs.getSnapshot(projectId);
+  if (job && job.phase !== 'done') {
+    sendJson(res, 409, { error: 'output-not-complete' });
+    return;
+  }
+  const outputFile = job?.outputFile ?? 'video.mp4';
+  if (basename(outputFile) !== outputFile) {
+    sendJson(res, 404, { error: 'no-output' });
+    return;
+  }
+  const outputPath = join(projectDir, 'out', outputFile);
+  if (!existsSync(outputPath)) {
     sendJson(res, 404, { error: 'no-output' });
     return;
   }
   // fire-and-forget: spawn の成否を待たずに 200 を返す。
-  revealInFinder(target.path, process.platform);
-  // fallback=true は「今回の書き出しそのもの」ではなく out/ の最新を開いたことを示す。
-  sendJson(res, 200, { ok: true, fallback: target.fallback });
+  reveal(outputPath, process.platform);
+  sendJson(res, 200, { ok: true });
 }

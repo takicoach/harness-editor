@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { setMainSpeed } from './mainVideoOps';
+import { setMainSpeed, currentColorGrade, setColorGradeField, resetColorGrade } from './mainVideoOps';
 import type { EditState } from './editState';
 import {
   setMainVideoPosition,
@@ -121,5 +121,41 @@ describe('resetMainLayout 回転・反転', () => {
     expect(r.mainLayout?.rotation).toBe(0);
     expect(r.mainLayout?.flipH).toBe(false);
     expect(r.mainLayout?.flipV).toBe(false);
+  });
+});
+
+describe('カラー補正（F-2・全体一律）', () => {
+  const base = st();
+
+  it('未設定なら無補正を返す', () => {
+    expect(currentColorGrade(base)).toEqual({ brightness: 0, contrast: 0, saturation: 0, temperature: 0 });
+  });
+
+  it('各項目を設定できる（区間・選択に依存しない）', () => {
+    let s = base;
+    s = setColorGradeField(s, 'brightness', 20);
+    s = setColorGradeField(s, 'contrast', -30);
+    s = setColorGradeField(s, 'saturation', 45);
+    s = setColorGradeField(s, 'temperature', -12);
+    expect(currentColorGrade(s)).toEqual({ brightness: 20, contrast: -30, saturation: 45, temperature: -12 });
+  });
+
+  it('範囲外はクランプ・非有限と同値は参照不変（no-op）', () => {
+    expect(currentColorGrade(setColorGradeField(base, 'brightness', 500)).brightness).toBe(100);
+    expect(currentColorGrade(setColorGradeField(base, 'contrast', -500)).contrast).toBe(-100);
+    expect(setColorGradeField(base, 'brightness', Number.NaN)).toBe(base);
+    expect(setColorGradeField(base, 'brightness', 0)).toBe(base);
+  });
+
+  it('元の state を破壊しない（非破壊・undo 往復のため）', () => {
+    const next = setColorGradeField(base, 'saturation', 40);
+    expect(currentColorGrade(base).saturation).toBe(0);
+    expect(currentColorGrade(next).saturation).toBe(40);
+  });
+
+  it('リセットで無補正へ戻る／既に無補正なら参照不変', () => {
+    const graded = setColorGradeField(base, 'temperature', 60);
+    expect(currentColorGrade(resetColorGrade(graded))).toEqual({ brightness: 0, contrast: 0, saturation: 0, temperature: 0 });
+    expect(resetColorGrade(base)).toBe(base);
   });
 });

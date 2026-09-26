@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type VideoInsert } from './types';
 
@@ -16,6 +16,7 @@ export function parseInsertVideoData(source: string | null, fps: number): VideoI
   if (!Array.isArray(m.insertVideoData)) {
     throw new ProjectFileError('insertVideoData.ts', 'insertVideoData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('insertVideoData.ts', 'insertVideoData', m.insertVideoData);
   return m.insertVideoData as VideoInsert[];
 }
 

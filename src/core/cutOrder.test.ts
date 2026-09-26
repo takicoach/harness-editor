@@ -7,12 +7,11 @@ import {
   reorderStartEnd,
   unreorderSe,
   unreorderStartEnd,
+  reorderSpanCovering,
+  unreorderSpanCovering,
 } from './cutOrder';
 import { parseCutData } from './cutData';
-import {
-  CUT_DATA_REORDERED_SOURCE,
-  EXPECTED_PLAYBACK_ORDER,
-} from './__fixtures__/cutDataReordered.fixture';
+import { CUT_DATA_REORDERED_SOURCE } from './__fixtures__/cutDataReordered.fixture';
 import type { CutSegment } from './types';
 
 const TOTAL = 11228;
@@ -63,6 +62,11 @@ describe('buildCutOrdering', () => {
 
   it('並び替えプロジェクトを再生順へ並べ、playbackStart/End を並び順で再計算する', () => {
     const ordering = reorderedOrdering();
+    const expected = parseCutData(CUT_DATA_REORDERED_SOURCE)
+      .sort((a, b) => a.playbackStart - b.playbackStart)
+      .map(({ originalStart, originalEnd, playbackStart, playbackEnd }) => ({
+        originalStart, originalEnd, playbackStart, playbackEnd,
+      }));
     expect(ordering.identity).toBe(false);
     expect(
       ordering.segments.map((s) => ({
@@ -71,9 +75,54 @@ describe('buildCutOrdering', () => {
         playbackStart: s.playbackStart,
         playbackEnd: s.playbackEnd,
       })),
-    ).toEqual(EXPECTED_PLAYBACK_ORDER);
+    ).toEqual(expected);
     // id は再生順に振り直す（cutData.ts の慣習＝配列順に 1..n）。
-    expect(ordering.segments.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(ordering.segments.map((s) => s.id)).toEqual(expected.map((_, index) => index + 1));
+  });
+
+  it('隣接する保存済みアンカーの逆順を、カットなしでも別区間として保つ', () => {
+    const ordering = buildCutOrdering(60, [], [
+      { originalStart: 30, originalEnd: 60 },
+      { originalStart: 0, originalEnd: 30 },
+    ]);
+    expect(ordering.identity).toBe(false);
+    expect(ordering.segments).toEqual([
+      { id: 1, originalStart: 30, originalEnd: 60, playbackStart: 0, playbackEnd: 30 },
+      { id: 2, originalStart: 0, originalEnd: 30, playbackStart: 30, playbackEnd: 60 },
+    ]);
+    expect(ordering.monotone).toEqual([
+      { start: 30, end: 60 },
+      { start: 0, end: 30 },
+    ]);
+  });
+
+  it('原素材と再生順が同じ明示的な隣接アンカーも別区間として保つ', () => {
+    const ordering = buildCutOrdering(60, [], [
+      { originalStart: 0, originalEnd: 30 },
+      { originalStart: 30, originalEnd: 60 },
+    ]);
+    expect(ordering.identity).toBe(true);
+    expect(ordering.segments.map(({ originalStart, originalEnd }) => ({ originalStart, originalEnd }))).toEqual([
+      { originalStart: 0, originalEnd: 30 },
+      { originalStart: 30, originalEnd: 60 },
+    ]);
+  });
+
+  it('隣接アンカーの片側を部分カットしても、残った境界と再生順を保つ', () => {
+    const ordering = buildCutOrdering(60, [{ start: 35, end: 45 }], [
+      { originalStart: 30, originalEnd: 60 },
+      { originalStart: 0, originalEnd: 30 },
+    ]);
+    expect(ordering.segments.map(({ originalStart, originalEnd }) => ({ originalStart, originalEnd }))).toEqual([
+      { originalStart: 30, originalEnd: 35 },
+      { originalStart: 45, originalEnd: 60 },
+      { originalStart: 0, originalEnd: 30 },
+    ]);
+    expect(ordering.monotone).toEqual([
+      { start: 30, end: 35 },
+      { start: 35, end: 50 },
+      { start: 0, end: 30 },
+    ]);
   });
 
   it('隣接アンカー間のカットを解除して融合しても、融合区間は先頭側の rank に留まる', () => {
@@ -187,5 +236,53 @@ describe('要素の再生座標の並び替え（stage 変換）', () => {
     // 再生 1600（5 番目 [602,1383) の中）→ 再生 1700（6 番目 [4517,5275) の中）。
     const moved = unreorderStartEnd([{ id: 1, startFrame: 1600, endFrame: 1700 }], o);
     expect(moved[0]).toMatchObject({ startFrame: 936, endFrame: 992 });
+  });
+});
+
+describe('BGM の区間写像（カバー型・打ち切りなし）', () => {
+  it('先頭と末尾が同じ境界へ移る逆順でも、全尺BGMは0frameに潰れない', () => {
+    const o = buildCutOrdering(60, [], [
+      { originalStart: 30, originalEnd: 60 }, { originalStart: 0, originalEnd: 30 },
+    ]);
+    const items = [{ id: 1, startFrame: 0, endFrame: 60 }];
+    expect(reorderSpanCovering(items, o)).toEqual(items);
+    expect(unreorderSpanCovering(items, o)).toEqual(items);
+  });
+
+  it('3区間の全順列で、途中の区間を含む全尺を覆う', () => {
+    const spans = [{ originalStart: 0, originalEnd: 20 }, { originalStart: 20, originalEnd: 40 }, { originalStart: 40, originalEnd: 60 }];
+    for (const order of [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]) {
+      const o = buildCutOrdering(60, [], order.map(index => spans[index]!));
+      const items = [{ id: 1, startFrame: 0, endFrame: 60 }];
+      expect(reorderSpanCovering(items, o), order.join(',')).toEqual(items);
+      expect(unreorderSpanCovering(items, o), order.join(',')).toEqual(items);
+    }
+  });
+
+  it('全尺クリップは往復（unreorder→reorder）で不変（2026-08-17 実FB: 211fに潰れた）', () => {
+    const o = reorderedOrdering();
+    const items = [{ id: 1, startFrame: 0, endFrame: 3272 }];
+    const monotone = unreorderSpanCovering(items, o);
+    expect(monotone[0]).toMatchObject({ startFrame: 0, endFrame: 3272 });
+    expect(reorderSpanCovering(monotone, o)).toEqual(items);
+  });
+
+  it('先頭途中から末尾までのクリップも往復で不変', () => {
+    const o = reorderedOrdering();
+    const items = [{ id: 1, startFrame: 12, endFrame: 3272 }];
+    expect(reorderSpanCovering(unreorderSpanCovering(items, o), o)).toEqual(items);
+  });
+
+  it('単一区間内のクリップは reorderStartEnd と同じ平行移動', () => {
+    const o = reorderedOrdering();
+    const items = [{ id: 1, startFrame: 211, endFrame: 992 }];
+    expect(reorderSpanCovering(items, o)).toEqual(reorderStartEnd(items, o));
+  });
+
+  it('恒等順列では同一参照を返す', () => {
+    const o = buildCutOrdering(1000, [{ start: 100, end: 200 }], undefined);
+    const items = [{ id: 1, startFrame: 10, endFrame: 20 }];
+    expect(reorderSpanCovering(items, o)).toBe(items);
+    expect(unreorderSpanCovering(items, o)).toBe(items);
   });
 });

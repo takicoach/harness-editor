@@ -24,8 +24,9 @@ export async function getNextInstruction(
   inbox: InstructionInbox,
   waitMs: number,
   projectId?: string,
+  signal?: AbortSignal,
 ): Promise<NextInstructionResult> {
-  const rec = await inbox.takeOrWait(waitMs, projectId);
+  const rec = await inbox.takeOrWait(waitMs, projectId, signal);
   if (rec === null) return { empty: true };
   return {
     empty: false,

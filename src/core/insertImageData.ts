@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { formatMotion } from './motion';
 import { ProjectFileError, type ImageSegment } from './types';
@@ -18,6 +18,7 @@ export function parseInsertImageData(source: string | null, fps: number): ImageS
   if (!Array.isArray(m.insertImageData)) {
     throw new ProjectFileError('insertImageData.ts', 'insertImageData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('insertImageData.ts', 'insertImageData', m.insertImageData);
   return m.insertImageData as ImageSegment[];
 }
 
@@ -73,7 +74,7 @@ export const insertImageData: ImageSegment[] = [];
  * originalSource が null かつ画像が空なら null を返す（空の insertImageData.ts を作らない）。
  * originalSource が null かつ画像があれば新規雛形を生成する。
  * 既存ソースを差し替えるときは、`toFrame()` ヘルパや `FPS` import は残るが、配列の値は
- * 生整数になるため未使用になる（ハーネス側の build には影響しない）。
+ * 生整数になるため未使用になる（ハーネス形式側の build には影響しない）。
  */
 export function serializeInsertImageData(
   originalSource: string | null,

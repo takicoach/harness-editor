@@ -39,6 +39,7 @@ export function NumberField({
   decimals,
   suffix,
   className,
+  selectAllOnFocus = false,
   onCommit,
 }: {
   id?: string;
@@ -49,6 +50,8 @@ export function NumberField({
   decimals: number;
   suffix?: string;
   className?: string;
+  /** Signed numeric values can be replaced without leaving a minus sign behind. */
+  selectAllOnFocus?: boolean;
   onCommit: (n: number) => void;
 }) {
   const fmt = (v: number): string => v.toFixed(decimals);
@@ -74,7 +77,8 @@ export function NumberField({
         max={max}
         step={step}
         value={text}
-        onFocus={() => setFocused(true)}
+        onFocus={(event) => { setFocused(true); if (selectAllOnFocus) event.currentTarget.select(); }}
+        onDoubleClick={(event) => { if (selectAllOnFocus) event.currentTarget.select(); }}
         onChange={(e) => setText(e.target.value)}
         onBlur={() => {
           setFocused(false);
@@ -82,12 +86,15 @@ export function NumberField({
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
-            commit();
+            // blur owns the commit; committing here too creates two undo entries.
+            e.preventDefault();
             e.currentTarget.blur();
           }
         }}
       />
       {suffix !== undefined ? <span className="ins-num-suffix">{suffix}</span> : null}
+      {selectAllOnFocus && focused && (text.trim() === '' || Number(text) !== value) &&
+        <small className="ins-num-pending" role="status">Enterで確定</small>}
     </span>
   );
 }

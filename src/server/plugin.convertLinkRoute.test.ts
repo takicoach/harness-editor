@@ -73,11 +73,6 @@ function placeExternalCopy(): string {
   return target;
 }
 
-/** 回収されるはずのバイト数＝置換前のコピー実体のサイズ（フィクスチャ文言に依存させない）。 */
-function copyBytes(): number {
-  return statSync(join(root, 'proj', 'public', 'main.mp4')).size;
-}
-
 describe('リンク化ルート', () => {
   it('POST 以外は 405', async () => {
     expect((await call('GET', '/api/project/link-candidate?id=proj')).status).toBe(405);
@@ -104,16 +99,17 @@ describe('リンク化ルート', () => {
   });
 
   it('候補があれば candidate が接続先を返し、convert がリンクへ置き換える', async () => {
+    // fixture の main.mp4 サイズはハードコードせず実測する
+    // （G-3 で波形デコード用の実データへ差し替えた際にバイト数が変わったため）。
+    const originalSize = statSync(join(root, 'proj', 'public', 'main.mp4')).size;
     const target = placeExternalCopy();
-    const expectedFreed = copyBytes();
     const candidate = await call('POST', '/api/project/link-candidate?id=proj');
     expect(candidate.body).toMatchObject({ matched: true, target });
 
     const convert = await call('POST', '/api/project/convert-to-link?id=proj');
     expect(convert.status).toBe(200);
     expect(convert.body['target']).toBe(target);
-    expect(convert.body['freedBytes']).toBe(expectedFreed);
-    expect(expectedFreed).toBeGreaterThan(0);
+    expect(convert.body['freedBytes']).toBe(originalSize);
     // 一覧も返す（クライアントがカードを取り直さずに済む）。
     expect(Array.isArray(convert.body['projects'])).toBe(true);
     expect(lstatSync(join(root, 'proj', 'public', 'main.mp4')).isSymbolicLink()).toBe(true);

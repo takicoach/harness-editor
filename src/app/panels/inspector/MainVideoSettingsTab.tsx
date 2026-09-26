@@ -1,10 +1,14 @@
 import type { EditState } from '../../edit/editState';
 import { DEFAULT_MAIN_LAYOUT } from '../../../core/mainLayout';
-import { setMainSpeed, setMainVideoScale, setMainVideoPosition, setMainVideoBackground, setMainVideoRotation, setMainVideoFlipH, setMainVideoFlipV, resetMainLayout } from '../../edit/mainVideoOps';
+import { setMainSpeed, setMainVideoScale, setMainVideoPosition, setMainVideoBackground, setMainVideoRotation, setMainVideoFlipH, setMainVideoFlipV, resetMainLayout, currentColorGrade, setColorGradeField, resetColorGrade } from '../../edit/mainVideoOps';
+import { COLOR_GRADE_MAX, COLOR_GRADE_MIN, type ColorGradeField } from '../../../core/colorGrade';
+import { COLOR_GRADE_UNSUPPORTED } from '../../../shared/colorGradeSupport';
 import { punchKeyframe, removeKeyframe, setKeyframeField, clearKeyframes } from '../../edit/layoutKeyframeOps';
 import type { LayoutKeyframe } from '../../../core/layoutKeyframes';
 import type { InstallKind, InstallErrors } from '../../install';
 import { NumberField, InstallCtaButton, sliderToRate, rateToSlider } from './shared';
+import { ColorWheelControls } from './ColorWheelControls';
+import { MainAudioControls } from './MainAudioControls';
 
 type Kept = { id: number; originalStart: number; playbackStart: number; playbackEnd: number };
 
@@ -12,6 +16,7 @@ type Kept = { id: number; originalStart: number; playbackStart: number; playback
 export function MainVideoSettingsTab({
   state,
   onEdit,
+  onLive,
   installing,
   installErrors,
   dirty,
@@ -19,9 +24,13 @@ export function MainVideoSettingsTab({
   getPlaybackFrame = () => 0,
   keptSegments = [],
   fps = 30,
+  colorGradeSupported = true,
+  colorWheelsSupported = false,
+  mainAudioSupported = false,
 }: {
   state: EditState;
   onEdit: (next: EditState) => void;
+  onLive?: (next: EditState) => void;
   installing: InstallKind | null;
   installErrors: InstallErrors;
   dirty: boolean;
@@ -33,13 +42,25 @@ export function MainVideoSettingsTab({
   keptSegments?: Kept[];
   /** プロジェクトの fps（プリセットの既定長・秒表示に使用）。 */
   fps?: number;
+  /** カラー補正が書き出しへ反映されるか（false なら注意書きを出す・F-2）。 */
+  colorGradeSupported?: boolean;
+  colorWheelsSupported?: boolean;
+  mainAudioSupported?: boolean;
 }) {
   const rate = state.mainSpeed;
   const rateLabel = Number.isInteger(rate) ? `${rate}x` : `${rate.toFixed(2)}x`;
   const layout = state.mainLayout ?? DEFAULT_MAIN_LAYOUT;
+  const grade = currentColorGrade(state);
+  const gradeFields: { key: ColorGradeField; label: string; hint: string }[] = [
+    { key: 'brightness', label: '明るさ', hint: '暗い ← → 明るい' },
+    { key: 'contrast', label: 'コントラスト', hint: '眠い ← → くっきり' },
+    { key: 'saturation', label: '彩度', hint: '白黒 ← → 鮮やか' },
+    { key: 'temperature', label: '色温度', hint: '寒色（青） ← → 暖色（赤）' },
+  ];
   return (
     <div className="ins-pane" data-mainvideo>
       <h3 className="ins-title">メイン動画（全体）</h3>
+      <MainAudioControls state={state} fps={fps} supported={mainAudioSupported} onEdit={onEdit} onLive={onLive} />
       <div className="ins-section">
         <div className="ins-label">
           <span>再生速度 </span>
@@ -181,7 +202,7 @@ export function MainVideoSettingsTab({
         </div>
         <p className="ins-hint">プレビュー上で動画を直接ドラッグ／角ハンドルで拡大縮小もできます。</p>
         <div className="ins-pack-cta" style={{ marginTop: 8 }}>
-          <p>最終書き出し（remotion render）にレイアウトを反映するには「導入」が必要です。</p>
+          <p>レイアウトの編集データを準備するには「導入」を押してください。</p>
           <InstallCtaButton
             kind="mainLayout"
             label="レイアウトを書き出しに導入"
@@ -194,6 +215,59 @@ export function MainVideoSettingsTab({
           />
           <p className="ins-pack-hint">導入後はレイアウトを変えても再導入は不要です（保存で反映）</p>
         </div>
+      </div>
+      <div className="ins-section" data-colorgrade>
+        <h3 className="ins-title">カラー補正（メイン動画・サブ動画）</h3>
+        <ColorWheelControls state={state} onEdit={onEdit} onLive={onLive} supported={colorWheelsSupported} />
+        {/*
+          注意書きは「スライダーを動かす前」から出す。動かしてから知らせると、
+          利用者は既に食い違った絵を見た後になる（前ラウンドの指摘）。
+        */}
+        {!colorGradeSupported && (
+          <div className="export-note export-note-warn" role="note" id="ins-color-unsupported">
+            {COLOR_GRADE_UNSUPPORTED}
+          </div>
+        )}
+        {gradeFields.map((f) => (
+          <div key={f.key}>
+            <div className="ins-label">
+              <span>{f.label} </span>
+              <NumberField
+                id={`ins-color-${f.key}-num`}
+                className={`ins-color-${f.key}-value`}
+                value={grade[f.key]}
+                min={COLOR_GRADE_MIN}
+                max={COLOR_GRADE_MAX}
+                step={1}
+                decimals={0}
+                onCommit={(n) => onEdit(setColorGradeField(state, f.key, n))}
+              />
+            </div>
+            <input
+              id={`ins-color-${f.key}`}
+              type="range"
+              min={COLOR_GRADE_MIN}
+              max={COLOR_GRADE_MAX}
+              step={1}
+              value={grade[f.key]}
+              onChange={(e) => onEdit(setColorGradeField(state, f.key, Number(e.target.value)))}
+            />
+            <p className="ins-hint">{f.hint}</p>
+          </div>
+        ))}
+        <button
+          type="button"
+          id="ins-color-reset"
+          className="tx-mini-btn"
+          onClick={() => onEdit(resetColorGrade(state))}
+        >
+          補正なしに戻す
+        </button>
+        <p className="ins-hint">
+          カラー補正はメイン動画とサブ動画（インサート）の映像に一律で掛かります
+          （区間ごと・要素ごとには変えられません。テロップ・挿入画像・図形には掛かりません）。
+          元動画は書き換えません。補正を掛けた案件は高速書き出しではなく通常の書き出しになります。
+        </p>
       </div>
       <div className="ins-section" data-mainkeyframes>
         <h3 className="ins-title">アニメーション（キーフレーム）</h3>
@@ -250,7 +324,7 @@ export function MainVideoSettingsTab({
       <div className="ins-section">
         <div className="ins-label"><span>書き出しへの導入</span></div>
         <div className="ins-pack-cta">
-          <p>最終書き出し（remotion render）に速度を反映するには「導入」が必要です。</p>
+          <p>速度の編集データを準備するには「導入」を押してください。</p>
           <InstallCtaButton
             kind="speed"
             label="メイン動画速度を書き出しに導入"

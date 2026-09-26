@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpError } from './http';
+import { nextObservationSeq } from './observationSeq';
 import type { ProjectSteps } from '../shared/types';
 import { STALE_AFTER_MS } from '../shared/staleThreshold';
 import {
@@ -165,13 +166,23 @@ function mtimeOrNull(path: string): number | null {
  * summarize から呼ばれ、返り値を ProjectSummary へ spread する。
  * 自動判定の材料は呼び出し側が解決済みの steps（工程ステッパーと同一の値）を渡す
  * — 同じ事実をここで再判定しない。ここが見る IO は mtime（lastEditedAt）だけ。
+ *
+ * 返り値には観測シーケンス `statusSeq` を必ず載せる。一覧（`/api/projects`）と
+ * SSE 差分（projectsWatch）はどちらもこの関数を通るため、**どちらの観測が新しいか**を
+ * クライアントが到着順ではなく番号で判定できる（out-of-order 対策の正本）。
+ * 採番は `readStatusFile` と同じ同期ブロック内で行う — Node のシングルスレッド性により、
+ * 番号の大小がそのまま読み取りの前後関係になる（observationSeq.ts の説明を参照）。
  */
 export function resolveProjectStatus(
   dir: string,
   steps: ProjectSteps,
   now: number = Date.now(),
-): ResolvedStatus & { lastEditedAt?: number } {
+): ResolvedStatus & { lastEditedAt?: number; statusSeq: number } {
   const { stage, activity } = readStatusFile(dir);
+  const statusSeq = nextObservationSeq();
+
+  const nativeMtime = mtimeOrNull(join(dir, '.harness', 'project.v2.json'));
+  if (nativeMtime !== null) return { ...resolveStatus({ steps, stage, activity, now }), statusSeq, lastEditedAt: nativeMtime };
 
   let lastEditedAt: number | undefined;
   // telopData は lastEditedAt に算入するが「編集された」判定には使わない
@@ -186,7 +197,7 @@ export function resolveProjectStatus(
     if (lastEditedAt === undefined || mt > lastEditedAt) lastEditedAt = mt;
   }
 
-  const resolved = resolveStatus({ steps, stage, activity, now });
+  const resolved = { ...resolveStatus({ steps, stage, activity, now }), statusSeq };
   return lastEditedAt === undefined ? resolved : { ...resolved, lastEditedAt };
 }
 
@@ -199,7 +210,26 @@ export function writeStatusStage(dir: string, stage: ProjectStage): StatusFileDa
   const next: StatusFileData = { stage, activity: existing.activity };
   const smeDir = join(dir, '.sme');
   mkdirSync(smeDir, { recursive: true });
-  writeFileSync(join(smeDir, 'status.json'), JSON.stringify(next, null, 2) + '\n', 'utf8');
+  // **一時ファイル → rename** で置き換える（同一ディレクトリなので rename は原子的）。
+  // 直接 writeFileSync すると、書き終える前に読んだ側が**切れた JSON** を掴む。
+  // 実測（フルスイート e2e・2026-09-06）: 書き込み直後をポーリングしていたテストが
+  // `SyntaxError: Unexpected end of JSON input` で落ちた。読み手は e2e だけではない——
+  // `readStatusFile` は解析に失敗すると「stage なし（自動判定）」へフォールバックするため、
+  // 一覧の走査や watcher がこの瞬間を踏むと**バッジが一瞬まちがった状態を表示する**。
+  const target = join(smeDir, 'status.json');
+  const tmp = `${target}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    renameSync(tmp, target);
+  } catch (err) {
+    // 失敗しても一時ファイルを残さない（残骸は一覧の走査に混ざる）。
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* 既に無いなら何もしない */
+    }
+    throw err;
+  }
   return next;
 }
 

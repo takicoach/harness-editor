@@ -5,7 +5,6 @@ import { cutOrderingOf } from '../../core/cutOrder';
 import { createEditState, toEditorProject } from './editState';
 import {
   CUT_DATA_REORDERED_SOURCE,
-  EXPECTED_PLAYBACK_ORDER,
   VIDEO_CONFIG_REORDERED_SOURCE,
 } from '../../core/__fixtures__/cutDataReordered.fixture';
 
@@ -33,9 +32,14 @@ describe('EditState への並び替え情報の持ち回り', () => {
     expect(state.originalTotalFrames).toBe(11228);
     const ordering = cutOrderingOf(state);
     expect(ordering.identity).toBe(false);
-    expect(ordering.segments.map((s) => s.playbackStart)).toEqual(
-      EXPECTED_PLAYBACK_ORDER.map((s) => s.playbackStart),
-    );
+    expect(ordering.segments.map(({ originalStart, originalEnd }) => ({ originalStart, originalEnd })))
+      .toEqual(state.cutOrder);
+    let cursor = 0;
+    for (const segment of ordering.segments) {
+      expect(segment.playbackStart).toBe(cursor);
+      cursor += segment.originalEnd - segment.originalStart;
+      expect(segment.playbackEnd).toBe(cursor);
+    }
   });
 
   it('toEditorProject が再生順アンカーを保存側へ渡す（保存で並び順が落ちない）', () => {

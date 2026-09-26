@@ -4,17 +4,17 @@ import { telopAtFrame } from '../../core/segmentOps';
 import { buildWordChips } from '../../core/wordChips';
 import { isTranscriptAlignedWithVideo } from '../../core/transcript';
 import { moveTelop, setTelopTiming, removeTelops } from '../edit/telopSettingsOps';
-import { clearMultiSelection, toggleMultiTelopSelection } from '../edit/editState';
-import type { EditState } from '../edit/editState';
-import { restoreDragTarget, type DragCancelTarget } from './dragCancel';
-import { addSe, moveSe, resizeSe, selectSe, setSeFadeIn, setSeFadeOut, finalizeAddedSe } from '../edit/seOps';
-import { addImage, moveImage, retimeImage, selectImage } from '../edit/imageOps';
-import { addVideoInsert, moveVideoInsert, retimeVideoInsert, selectVideoInsert, videoInsertMaxEnd } from '../edit/videoInsertOps';
-import { addBgm, moveBgm, resizeBgm, selectBgm, setBgmFadeIn, setBgmFadeOut, normalizeBgmVolume } from '../edit/bgmOps';
+import { clearMultiSelection, toggleMultiTelopSelection, type EditState, type Selection } from '../edit/editState';
+import { addSe, moveSe, removeSe, resizeSe, selectSe, setSeFadeIn, setSeFadeOut, finalizeAddedSe } from '../edit/seOps';
+import { addImage, moveImage, removeImage, retimeImage, selectImage } from '../edit/imageOps';
+import { addVideoInsert, moveVideoInsert, removeVideoInsert, retimeVideoInsert, selectVideoInsert } from '../edit/videoInsertOps';
+import { addBgm, moveBgm, removeBgm, resizeBgm, selectBgm, setBgmFadeIn, setBgmFadeOut, normalizeBgmVolume } from '../edit/bgmOps';
 import { clampImages } from '../../core/imageEngine';
 import { clampVideoInserts } from '../../core/videoInsertEngine';
 import { clampBgm } from '../../core/bgmEngine';
 import { useTimelineDrag } from '../timeline/useTimelineDrag';
+import { placeAsset, splitPlacedText } from '../edit/assetPlacementOps';
+import { playbackToFinal } from '../../core/transitionEngine';
 import { commitInPointDrag } from './inPointDrag';
 import type { CutHandleId } from '../timeline/CutTrack';
 import type { TelopHandleId, TelopOverride } from '../timeline/TelopTrack';
@@ -24,8 +24,9 @@ import { VideoInsertTrack, type VideoInsertHandleId, type VideoInsertOverride } 
 import { BgmTrack, type BgmHandleId, type BgmOverride } from '../timeline/BgmTrack';
 import { ShapeTrack, type ShapeHandleId, type ShapeOverride } from '../timeline/ShapeTrack';
 import { clampShapes } from '../../core/shapeEngine';
-import { moveShapeTime, retimeShape, selectShape } from '../edit/shapeOps';
-import type { PlayerRef } from '@remotion/player';
+import { moveShapeTime, removeShape, retimeShape, selectShape } from '../edit/shapeOps';
+import { removeTitle } from '../edit/titleOps';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { Ref, RefObject } from 'react';
 import { applyInsertMaterial } from '../edit/insertMaterial';
 import { useDropdown } from '../useDropdown';
@@ -37,21 +38,25 @@ import type { PlaybackOverlap } from '../../core/transitionEngine';
 import { speedScale, speedTotalFrames, type SpeedSegment } from '../../core/speedEngine';
 import { playbackToPlayer, playerToPlayback } from '../../preview/speedBridge';
 import { timelineOverlaps } from './timelineCoords';
-import type { EditorProject, CutRegion, EditorTelop, EditorVideoInsert, WordChip } from '../../core/types';
+import type { EditorProject, CutRegion, EditorTelop, WordChip } from '../../core/types';
+import { restoreDragTarget, type DragCancelTarget } from './dragCancel';
 import type { EditSession } from '../useEditSession';
 import { formatClock } from '../../shared/format';
-import { clampZoom, frameToXMapped, widthMapped, xToFrameMapped, TRACK_LABEL_GUTTER_PX } from '../timeline/timelineGeometry';
+import { clampZoom, fitPxPerFrame, frameToXMapped, widthMapped, xToFrameMapped, TRACK_LABEL_GUTTER_PX } from '../timeline/timelineGeometry';
 import { buildDisplayMap, type DisplayMap } from '../../core/timelineDisplayMap';
 import { edgeScrollFrameScale, edgeScrollSpeed, edgeScrollVelocity, followScrollLeft, wheelAction, zoomAnchoredScrollLeft } from '../timeline/timelineScroll';
 import { nextPlaybackRate, playbackRateLabel, type TransportKey } from '../preview/transport';
-import { collectSnapTargets, snapFrameMapped, type SnapTarget } from '../timeline/snapping';
+import { buildSnapIndex, snapFrameIndexed, type SnapTarget } from '../timeline/snapping';
 import { pulseKeysForChange } from '../timeline/cutPulse';
 import { resolveCutHandle } from '../timeline/timelineBodyHelpers';
 import { useTimelineEdgeDrag } from '../timeline/useTimelineEdgeDrag';
 import { clampSe } from '../../core/seAnchor';
-import { useWaveformSamples } from '../audio/useWaveformSamples';
 import { TimelineRuler } from '../timeline/TimelineRuler';
 import { CutTrack } from '../timeline/CutTrack';
+import { CutSequenceTrack, sequenceSourceFrameAt } from '../timeline/CutSequenceTrack';
+import { SequenceAssetTracks } from '../timeline/SequenceAssetTracks';
+import { splitMainClip, deleteMainClip, cutMainSourceRanges, mainClipDeleteBlockedReason, mainClipSplitBlockedReason } from '../edit/mainClipOps';
+import { moveCutSegment } from '../edit/cutOrderOps';
 import type { WaveformPref } from '../layout/waveformPref';
 import { TelopTrack } from '../timeline/TelopTrack';
 import { DragTooltip } from '../timeline/DragTooltip';
@@ -60,6 +65,21 @@ import { splitTelops } from '../timeline/splitTelops';
 import { JoinMarkers } from '../timeline/JoinMarkers';
 import { computeJoins } from '../../core/joinEngine';
 import { selectJoin } from '../edit/transitionOps';
+import { isModalOpen } from '../isModalOpen';
+import { useSnapPref, type SnapPref } from '../useSnapPref';
+import { hiddenTracksBelow, moreTracksLabel } from '../timeline/trackOverflow';
+import {
+  frameAtOverviewFraction,
+  originalFrameToOverviewFrame,
+  overviewFrameToPreviewFrame,
+  overviewFractionForFrame,
+  overviewWindowForFrames,
+  previewFrameToOverviewFrame,
+  type OverviewCoordinateMap,
+} from '../timeline/overviewGeometry';
+import type { TimelineView } from '../layout/layoutPreset';
+import type { PlaybackModel } from '../../preview/playbackModel';
+import { telopFocusPlaybackFrame } from '../timeline/telopFocus';
 
 export interface TimelineDropApi {
   /** client 座標が timeline スクロール領域内ならその位置へ素材を挿入し true。領域外なら false。 */
@@ -67,6 +87,19 @@ export interface TimelineDropApi {
 }
 
 interface TimelineProps {
+  allowRangeCut?: boolean;
+  /** 全体帯だけ／詳細トラックの表示。省略時は従来どおり詳細。 */
+  view?: TimelineView;
+  onViewChange?: (view: TimelineView) => void;
+  /** Playerが実際に再生する完成後の総フレーム数（カット・速度・場面転換を反映）。 */
+  finalDurationFrames?: number;
+  /** 書き出しと同じ完成後モデル。素材確認中も全体帯の尺と座標を維持するために使う。 */
+  finalPlaybackModel?: PlaybackModel;
+  /**
+   * 吸着の共有設定（監査 interaction-7）。App が 1 つ持ち、プレビューと共有する。
+   * 未指定ならタイムライン内のローカル設定を使う（テスト・単体利用の後方互換）。
+   */
+  snapPref?: SnapPref;
   /** 編集セッション（null ならプロジェクト未選択）。 */
   session: EditSession | null;
   /** 読込時の不変 EditorProject（原本総フレーム・transcript の取得元）。 */
@@ -79,11 +112,6 @@ interface TimelineProps {
   imageLibrary: string[];
   /** public/ にあるサブ動画ファイル相対パス（＋サブ動画ボタン用）。 */
   videoLibrary: string[];
-  /**
-   * サブ動画素材の実フレーム長（file → frames）。区間リサイズを素材内へクランプするのに使う。
-   * プローブ未完了・読めない素材はキーごと存在せず、その場合はクランプしない（従来挙動）。
-   */
-  videoDurations: Record<string, number>;
   /** public/BGM/ にある BGM ファイル相対パス（＋BGM ボタン用）。 */
   bgmLibrary: string[];
   /** 波形デコード用の動画 URL（= /api/video?…）。空なら波形なし。 */
@@ -103,16 +131,31 @@ interface TimelineProps {
   /** カット確認モード（プレビューがカット未適用＝原本恒等再生）。 */
   cutsBypassed: boolean;
   /** カット確認モードの切替。 */
-  onToggleCutsBypassed: () => void;
+  onToggleCutsBypassed: (originalFrame?: number) => void;
   /** 波形の高さ設定（standard/large）。未指定時は 'standard' 扱い。 */
   waveformPref?: WaveformPref;
   /** JKL トランスポートの再生速度（負＝逆再生）。Preview の Player へそのまま渡る。 */
   playbackRate: number;
   /** 再生速度の更新（J/K/L 押下時）。 */
   onPlaybackRateChange: (rate: number) => void;
+  /**
+   * 操作できなかった理由などの短い知らせ（App のトーストへ流す）。
+   * 例: 字幕を選んで Delete したとき「なぜ消えないか」を 1 行で伝える。
+   */
+  onNotice?: (message: string) => void;
 }
 
 interface TimelineBodyProps {
+  allowRangeCut?: boolean;
+  view: TimelineView;
+  onViewChange?: (view: TimelineView) => void;
+  finalDurationFrames: number;
+  finalPlaybackModel?: PlaybackModel;
+  /**
+   * 吸着の共有設定（監査 interaction-7）。App が 1 つ持ち、プレビューと共有する。
+   * 未指定ならタイムライン内のローカル設定を使う（テスト・単体利用の後方互換）。
+   */
+  snapPref?: SnapPref;
   session: EditSession;
   baseProject: EditorProject;
   playerRef: RefObject<PlayerRef | null>;
@@ -120,11 +163,6 @@ interface TimelineBodyProps {
   imageLibrary: string[];
   /** public/ にあるサブ動画ファイル相対パス（＋サブ動画ボタン用）。 */
   videoLibrary: string[];
-  /**
-   * サブ動画素材の実フレーム長（file → frames）。区間リサイズを素材内へクランプするのに使う。
-   * プローブ未完了・読めない素材はキーごと存在せず、その場合はクランプしない（従来挙動）。
-   */
-  videoDurations: Record<string, number>;
   /** public/BGM/ にある BGM ファイル相対パス（＋BGM ボタン用）。 */
   bgmLibrary: string[];
   /** 波形デコード用の動画 URL（= /api/video?…）。空なら波形なし。 */
@@ -142,23 +180,139 @@ interface TimelineBodyProps {
   /** 区間ごと速度の区間（null なら一律 mainSpeed）。playbackToPlayer/playerToPlayback で使う。 */
   speedSegments: SpeedSegment[] | null;
   cutsBypassed: boolean;
-  onToggleCutsBypassed: () => void;
+  onToggleCutsBypassed: (originalFrame?: number) => void;
   waveformPref?: WaveformPref;
   /** JKL トランスポートの再生速度（負＝逆再生）。Preview の Player へそのまま渡る。 */
   playbackRate: number;
   /** 再生速度の更新（J/K/L 押下時）。 */
   onPlaybackRateChange: (rate: number) => void;
+  /** 操作できなかった理由などの短い知らせ（App のトーストへ）。 */
+  onNotice?: (message: string) => void;
 }
 
 /** タイムラインの初期ズーム（1 フレームあたりピクセル数）。 */
 const DEFAULT_PX_PER_FRAME = 1;
 
 /**
- * 前面に出るモーダル・チュートリアルの目印。表示中は JKL・←→ のトランスポート操作を止め、
- * モーダル側のキー操作（←→ でページ送り等）に譲る。プレビュー上の常設オーバーレイ
- * （.pv-overlay）はモーダルではないので含めない。
+ * Space をその要素の既定動作へ譲るか（監査 interaction-12）。
+ *
+ * Space で「押す・開く・切り替える」が起きる要素にフォーカスがあるときは、
+ * 再生/一時停止に横取りさせない。ボタンとリンクだけを見ていたため、
+ * 折りたたみ（summary）やタブ・スイッチ・チェックボックスの上では
+ * 開閉やオンオフと再生が同時に起きていた。
  */
-const MODAL_SELECTOR = '.help-overlay, .export-overlay, .hjc-overlay, .diff-review-overlay, .tut';
+export function yieldsSpaceToTarget(target: EventTarget | null): boolean {
+  const el = target instanceof HTMLElement ? target : null;
+  if (el === null) return false;
+  if (
+    el instanceof HTMLButtonElement ||
+    el instanceof HTMLAnchorElement ||
+    // <summary>（折りたたみの見出し）は専用の HTMLElement 型が無いのでタグ名で見る。
+    el.tagName === 'SUMMARY' ||
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLSelectElement ||
+    el instanceof HTMLTextAreaElement
+  ) {
+    return true;
+  }
+  const role = el.getAttribute('role');
+  return role === 'button' || role === 'tab' || role === 'switch' || role === 'checkbox' || role === 'radio';
+}
+
+/** フォーカスが文字入力・プルダウンの上にあるか（キー操作をそちらへ譲る判定）。 */
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return (
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement ||
+    el instanceof HTMLSelectElement ||
+    (el?.isContentEditable ?? false)
+  );
+}
+
+/**
+ * タイムラインのキー操作として無視すべきイベントか（監査 interaction-2）。
+ *
+ * 「IME 変換中」「修飾キー付き（ブラウザ／OS のショートカット）」「入力欄・プルダウンに
+ * フォーカスがある」の 3 つをここへ集約する。同じ ← でもトランスポート側と
+ * つまみ微調整側でガードの粒度が食い違い、Cmd+←（ブラウザの「戻る」）が
+ * 1 フレーム編集として履歴に積まれていた。
+ */
+function shouldIgnoreTimelineKey(e: KeyboardEvent): boolean {
+  if (e.isComposing) return true;
+  if (e.metaKey || e.ctrlKey || e.altKey) return true;
+  return isEditableTarget(e.target);
+}
+
+/**
+ * 選択 1 件を Delete で消すときの操作を返す（監査 interaction-6）。
+ *
+ * 以前は「2 件以上選んでいるとき」しか Delete が効かず、1 個選んだ Delete は
+ * 無反応だった。既に削除操作を持っている種類（テロップ・効果音・画像・サブ動画・
+ * BGM・図形）だけを扱い、削除の意味を持たないもの（つなぎ目・カット区間・本編動画）は
+ * null を返して何もしない。テロップは飾りテロップだけが消える（字幕の「削除」は
+ * 区間カットという既存契約を変えない）。
+ */
+export function removeOpForSelection(
+  selection: Selection | null,
+  state: EditState,
+): ((prev: EditState) => EditState) | null {
+  if (selection === null) return null;
+  switch (selection.kind) {
+    case 'telop': {
+      // 消せるのは飾りテロップ（manual）だけ。字幕を選んで Delete しても removeTelops は
+      // 同一 state を返すので画面は変わらないが、ここで null を返さないと session.apply が
+      // 走り、「無変化の 1 手」が履歴へ積まれて Redo 分岐が捨てられる。
+      const telop = state.telops.find((t) => t.id === selection.id);
+      return telop?.manual === true ? (prev) => removeTelops(prev, [selection.id]) : null;
+    }
+    case 'se':
+      return (prev) => removeSe(prev, selection.id);
+    case 'image':
+      return (prev) => removeImage(prev, selection.id);
+    case 'videoInsert':
+      return (prev) => removeVideoInsert(prev, selection.id);
+    case 'bgm':
+      return (prev) => removeBgm(prev, selection.id);
+    case 'shape':
+      return (prev) => removeShape(prev, selection.id);
+    case 'title':
+      // タイトルは removeTitle を持っているので Delete で消せる（インスペクタの削除と同じ操作）。
+      return (prev) => removeTitle(prev, selection.id);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Delete が効かない選択の「なぜ効かないか」（無ければ null）。
+ *
+ * 無反応のままだと壊れているように見える。消せない理由と、代わりにどこを操作すれば
+ * いいかを 1 行で知らせる（サイクル 1 レビューの残件）。
+ */
+export function deleteBlockedReason(selection: Selection | null, state: EditState): string | null {
+  if (selection === null) return null;
+  if (selection.kind === 'telop') {
+    const telop = state.telops.find((t) => t.id === selection.id);
+    // 字幕（自動生成）の削除は「区間カット」という既存契約なので Delete では消さない。
+    if (telop !== undefined && telop.manual !== true) {
+      return '字幕は Delete では消せません。文字起こしパネルの行から操作してください';
+    }
+    return null;
+  }
+  // 種類ごとに「代わりにどこを操作するか」を言う。無関係な操作を案内しない
+  // （つなぎ目やメイン動画に「範囲を選んでカット」と言っても解決にならない・サイクル 2 Minor）。
+  if (selection.kind === 'cutSegment') {
+    return 'この区間は Delete では消せません。消したい範囲をドラッグで選んでから Delete してください';
+  }
+  if (selection.kind === 'join') {
+    return 'つなぎ目は Delete では消せません。右の設定パネルから場面転換を変更してください';
+  }
+  if (selection.kind === 'mainVideo') {
+    return 'メイン動画は Delete では消せません。右の設定パネルから操作してください';
+  }
+  return null;
+}
 
 /**
  * プロジェクトが必ず存在する前提のタイムライン本体。
@@ -175,13 +329,17 @@ type SelectedHandle =
   | { kind: 'shape'; handle: ShapeHandleId };
 
 function TimelineBody({
+  allowRangeCut = true,
+  view,
+  onViewChange,
+  finalDurationFrames,
+  finalPlaybackModel,
   session,
   baseProject,
   playerRef,
   seLibrary,
   imageLibrary,
   videoLibrary,
-  videoDurations,
   bgmLibrary,
   videoUrl,
   projectId,
@@ -195,14 +353,20 @@ function TimelineBody({
   waveformPref,
   playbackRate,
   onPlaybackRateChange,
+  onNotice,
+  snapPref,
 }: TimelineBodyProps) {
-  const [pxPerFrame, setPxPerFrame] = useState(DEFAULT_PX_PER_FRAME);
+  // キー操作の effect から呼ぶので、依存に載せずに最新を読めるよう ref に持つ。
+  const onNoticeRef = useRef(onNotice);
+  onNoticeRef.current = onNotice;
 
-  // 波形サンプル（URL ごとに 1 回デコード・失敗時 null）。
-  const waveformSamples = useWaveformSamples(videoUrl === '' ? null : videoUrl);
+  const [pxPerFrame, setPxPerFrame] = useState(DEFAULT_PX_PER_FRAME);
 
   // プレイヤーの現在の再生フレーム。frameupdate イベントで更新する。
   const [playbackFrame, setPlaybackFrame] = useState(0);
+  // Remotion Player が報告する完成後フレーム。全体帯はこの座標を正とする。
+  const [playerFrame, setPlayerFrame] = useState(0);
+  const pendingReorderFrameRef = useRef<number | null>(null);
 
   // 直近のドラッグで吸着したターゲット（ガイド線表示用）。吸着していなければ null。
   const [snapHit, setSnapHit] = useState<SnapTarget | null>(null);
@@ -212,6 +376,8 @@ function TimelineBody({
 
   // tl-body の DOM 参照。Ctrl/Cmd+ホイールズーム用に { passive: false } のネイティブリスナを張る。
   const bodyRef = useRef<HTMLDivElement>(null);
+  const overviewTrackRef = useRef<HTMLButtonElement>(null);
+  const [overviewWindow, setOverviewWindow] = useState({ start: 0, end: 1 });
 
   // ＋追加メニュー（効果音/画像/サブ動画/BGM/テロップの挿入を集約）。
   const addMenu = useDropdown();
@@ -225,20 +391,6 @@ function TimelineBody({
   }, [toolHint]);
 
   const { state } = session;
-
-  /**
-   * サブ動画クリップを素材内へ収める originalEnd の上限。
-   * 実尺が分かっていない素材（プローブ未完了・読めない）は undefined＝クランプなし。
-   * リサイズ 3 経路（端ドラッグ・矢印キー・インスペクタ数値）で同じ式を使う。
-   */
-  function videoInsertEndLimit(clip: EditorVideoInsert, start: number): number | undefined {
-    // カット区間を渡す: 消費量は再生尺×速度で決まる（原本尺で測ると過剰にクランプする）。
-    return videoInsertMaxEnd(clip, videoDurations[clip.file], start, state.cutRegions);
-  }
-  function videoInsertEndLimitById(id: number, start: number): number | undefined {
-    const clip = state.videoInserts.find((v) => v.id === id);
-    return clip === undefined ? undefined : videoInsertEndLimit(clip, start);
-  }
 
   // 新規追加されたカット区間を 500ms パルスさせる（EditState 外のローカル state で追跡）。
   // I-1: pulseKeysForChange で「本数増加のみ」を新規追加とみなし、端調整の誤発火を除外。
@@ -280,30 +432,12 @@ function TimelineBody({
     };
   }, []);
 
-  // マグネット吸着の ON/OFF。既定 ON。
-  const [snapEnabled, setSnapEnabled] = useState(true);
-  // ドラッグ中の Alt 押下を ref で追跡する（吸着を一時解除する）。
-  const altHeldRef = useRef(false);
-  useEffect(() => {
-    function down(e: KeyboardEvent): void {
-      if (e.key === 'Alt') altHeldRef.current = true;
-    }
-    function up(e: KeyboardEvent): void {
-      if (e.key === 'Alt') altHeldRef.current = false;
-    }
-    // Alt+Tab 等でフォーカスを失うと keyup が届かず固着するためリセットする。
-    function reset(): void {
-      altHeldRef.current = false;
-    }
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    window.addEventListener('blur', reset);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-      window.removeEventListener('blur', reset);
-    };
-  }, []);
+  // マグネット吸着の ON/OFF と Alt 一時解除。既定 ON。
+  // 本番（App 経由）では snapPref がプレビューと**同じ 1 つ**を指す（監査 interaction-7）。
+  // 単体でマウントされたとき（テスト等）だけローカルの設定にフォールバックする。
+  // フックは常に呼ぶ（Rules of Hooks）ので、使わない側は購読が余分に 1 本走るだけ。
+  const localSnapPref = useSnapPref();
+  const { snapEnabled, setSnapEnabled, altHeldRef } = snapPref ?? localSnapPref;
 
   const fps = baseProject.videoConfig.fps;
 
@@ -313,6 +447,7 @@ function TimelineBody({
   // scrollLeft を補正する。補正はレイアウト確定後（scrollWidth が新ズーム幅に
   // なった後）でないと計算できないため、アンカーを ref に預けて useLayoutEffect で適用する。
   const zoomStateRef = useRef({ pxPerFrame, playheadOriginal: 0, displayMap: undefined as DisplayMap | undefined });
+  const finalTimelineRef = useRef(false);
   const pendingZoomRef = useRef<{ anchorContentX: number; viewportOffset: number; prevPxPerFrame: number } | null>(null);
   const zoomAnchoredRef = useRef<(factor: number, anchorClientX?: number) => void>(() => {});
   zoomAnchoredRef.current = (factor: number, anchorClientX?: number): void => {
@@ -472,9 +607,11 @@ function TimelineBody({
   const isPlayingRef = useRef(false);
   // pause 購読（依存 [baseProject]）から最新の速度変更ハンドラを呼ぶための ref。
   const rateChangeRef = useRef(onPlaybackRateChange);
+  const applyingPlaybackRate = useRef(false);
   rateChangeRef.current = onPlaybackRateChange;
   // displayMap は初回レンダ設定時のみ undefined。onFrame 発火前に必ず本体で最新値へ更新される（frameToXMapped は undefined を恒等扱い）。
   const followRef = useRef({ pxPerFrame, cutRegions: state.cutRegions, ordering: undefined as CutOrdering | undefined, overlaps: [] as PlaybackOverlap[], mainSpeed: state.mainSpeed, speedSegments: speedSegments as SpeedSegment[] | null, displayMap: undefined as DisplayMap | undefined });
+  const previewToOverviewRef = useRef<(frame: number) => number>((frame) => frame);
 
   // プレイヤーの frameupdate を購読し、再生ヘッド位置を追従させる。
   // あわせて play/pause を購読し、再生中だけ横スクロールを再生ヘッドへ滑らかに追従させる。
@@ -489,12 +626,13 @@ function TimelineBody({
       const { pxPerFrame: ppf, cutRegions, ordering, overlaps: ovs, mainSpeed, speedSegments: segs, displayMap: dm } = followRef.current;
       const playback = playerToPlayback(frame, { speedSegments: segs, playbackOverlaps: ovs, mainSpeed });
       setPlaybackFrame(playback);
+      setPlayerFrame(previewToOverviewRef.current(frame));
       // 再生中のみ横スクロールを追従させる（一時停止・手動シーク中は触らない）。
       if (!isPlayingRef.current) return;
       const el = bodyRef.current;
       if (!el) return;
       const orig = playbackToOriginal(playback, cutRegions, ordering);
-      const playheadX = frameToXMapped(orig, ppf, dm);
+      const playheadX = finalTimelineRef.current ? TRACK_LABEL_GUTTER_PX + frame * ppf : frameToXMapped(orig, ppf, dm);
       el.scrollLeft = followScrollLeft(playheadX, el.clientWidth, el.scrollWidth);
     };
     const onPlay = (): void => { isPlayingRef.current = true; };
@@ -502,7 +640,9 @@ function TimelineBody({
     // 端まで巻き戻して自動停止した時も、次の再生が意図せず 8 倍速にならない。
     const onPause = (): void => {
       isPlayingRef.current = false;
-      rateChangeRef.current(1);
+      // Native rate replacement briefly pauses its audio clock. Preserve the
+      // rate requested by that synchronous operation; explicit stops still reset.
+      if (!applyingPlaybackRate.current && !player.isPlaybackPending?.()) rateChangeRef.current(1);
     };
     player.addEventListener('frameupdate', onFrame);
     player.addEventListener('play', onPlay);
@@ -522,16 +662,11 @@ function TimelineBody({
   useEffect(() => {
     if (selectedHandle === null) return;
     function onKey(e: KeyboardEvent): void {
+      // モーダル・チュートリアル表示中は背後のタイムラインを動かさない（interaction-1）。
+      if (isModalOpen()) return;
+      // IME 変換中・修飾キー付き（Cmd+← は「戻る」）・入力欄フォーカス中は編集しない。
+      if (shouldIgnoreTimelineKey(e)) return;
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      // 入力欄フォーカス中はテキストのキャレット移動に委ねる。
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        (target?.isContentEditable ?? false)
-      ) {
-        return;
-      }
       if (selectedHandle === null) return;
       e.preventDefault();
       const delta = e.key === 'ArrowLeft' ? -1 : 1;
@@ -589,20 +724,9 @@ function TimelineBody({
         if (edge === 'body') {
           session.apply(moveVideoInsert(state, videoInsertId, vi.originalStart + delta));
         } else if (edge === 'start') {
-          const start = vi.originalStart + delta;
-          session.apply(
-            retimeVideoInsert(state, videoInsertId, start, vi.originalEnd, videoInsertEndLimit(vi, start)),
-          );
+          session.apply(retimeVideoInsert(state, videoInsertId, vi.originalStart + delta, vi.originalEnd));
         } else {
-          session.apply(
-            retimeVideoInsert(
-              state,
-              videoInsertId,
-              vi.originalStart,
-              vi.originalEnd + delta,
-              videoInsertEndLimit(vi, vi.originalStart),
-            ),
-          );
+          session.apply(retimeVideoInsert(state, videoInsertId, vi.originalStart, vi.originalEnd + delta));
         }
       } else if (selectedHandle.kind === 'bgm') {
         const { bgmId, edge } = selectedHandle.handle;
@@ -642,20 +766,9 @@ function TimelineBody({
   //   つまみ選択中は上の effect（つまみを 1 フレーム動かす）が優先で、こちらは何もしない。
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      if (e.isComposing) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      // 入力欄フォーカス中はキャレット移動・文字入力に委ねる。
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target?.isContentEditable ?? false)
-      ) {
-        return;
-      }
       // モーダル・チュートリアル表示中はそちらのキー操作（←→ でページ送り等）に譲る。
-      if (document.querySelector(MODAL_SELECTOR) !== null) return;
+      if (isModalOpen()) return;
+      if (shouldIgnoreTimelineKey(e)) return;
       const player = playerRef.current;
       if (player === null) return;
 
@@ -666,15 +779,35 @@ function TimelineBody({
         const delta = (e.key === 'ArrowLeft' ? -1 : 1) * step;
         // プレイヤー座標のまま動かす（完成尺の 1 コマ＝ユーザーが期待する 1 コマ）。
         // 上限は Player の seekTo 側でクランプされる。
-        player.seekTo(Math.max(0, Math.round(player.getCurrentFrame()) + delta));
+        if (player.seekBy) player.seekBy(delta);
+        else player.seekTo(Math.max(0, Math.round(player.getCurrentFrame()) + delta));
+        return;
+      }
+
+      // Space = 再生/一時停止（K と同じ扱い・速度は等速へ戻す）。初心者が最初に押すキー。
+      // ただしフォーカスがボタン等の上にあるときはブラウザ既定（そのボタンを押す）を
+      // 優先し、二重発火させない（監査 interaction-12）。
+      if (e.key === ' ') {
+        if (yieldsSpaceToTarget(e.target)) return;
+        e.preventDefault();
+        const wasPlaying=player.isPlaying()||player.isPlaybackPending?.()===true;
+        const rate=nextPlaybackRate(wasPlaying ? playbackRate : 0, 'k');
+        onPlaybackRateChange(rate);
+        applyingPlaybackRate.current=true;
+        try { player.setPlaybackRate?.(rate); } finally { applyingPlaybackRate.current=false; }
+        if (wasPlaying) player.pause();
+        else player.play();
         return;
       }
 
       const key = e.key.toLowerCase();
       if (key !== 'j' && key !== 'k' && key !== 'l') return;
       e.preventDefault();
-      const rate = nextPlaybackRate(player.isPlaying() ? playbackRate : 0, key as TransportKey);
+      const active=player.isPlaying()||player.isPlaybackPending?.()===true;
+      const rate = nextPlaybackRate(active ? playbackRate : 0, key as TransportKey);
       onPlaybackRateChange(rate);
+      applyingPlaybackRate.current=true;
+      try { player.setPlaybackRate?.(rate); } finally { applyingPlaybackRate.current=false; }
       if (key === 'k') {
         player.pause();
       } else if (!player.isPlaying()) {
@@ -690,6 +823,25 @@ function TimelineBody({
 
   // カット並び替え（再生順）の対応表。恒等順列なら従来の単調モデルと完全一致。
   const ordering = useMemo(() => cutOrderingOf(state), [state]);
+
+  const overviewCoordinateMap = useMemo<OverviewCoordinateMap | null>(
+    () => finalPlaybackModel === undefined ? null : ({
+      originalTotalFrames: totalFrames,
+      cutRegions: state.cutRegions,
+      ordering,
+      finalModel: finalPlaybackModel,
+    }),
+    [finalPlaybackModel, totalFrames, state.cutRegions, ordering],
+  );
+  previewToOverviewRef.current = cutsBypassed && overviewCoordinateMap !== null
+    ? (frame) => previewFrameToOverviewFrame(frame, overviewCoordinateMap)
+    : (frame) => frame;
+
+  // モード切替そのものでは frameupdate が来ないPlayer実装もあるため、現在位置を即座に帯へ反映する。
+  useLayoutEffect(() => {
+    const frame = playerRef.current?.getCurrentFrame() ?? 0;
+    setPlayerFrame(previewToOverviewRef.current(frame));
+  }, [cutsBypassed, overviewCoordinateMap, playerRef]);
 
   // つなぎ目マーク（JoinMarkers）用: カット後タイムラインの境界一覧（再生順で隣接する境界）。
   const joins = useMemo(
@@ -707,6 +859,51 @@ function TimelineBody({
   );
 
   const trackWidth = frameToXMapped(totalFrames, pxPerFrame, displayMap);
+  // 表示座標の総フレーム（「全体を表示」の分母）。identity なら原本総フレームと同じ。
+  const sequenceVisible = (view === 'cut' || (view === 'detail' && finalPlaybackModel !== undefined)) && !cutsBypassed;
+  const sequenceEditing = sequenceVisible && allowRangeCut;
+  finalTimelineRef.current = sequenceVisible;
+  const [sequenceTool, setSequenceTool] = useState<'select' | 'sweep' | 'razor'>('select');
+  useEffect(() => { if (!sequenceEditing) setSequenceTool('select'); }, [sequenceEditing]);
+  const [sequenceRange, setSequenceRange] = useState<{ start: number; end: number; ranges: { start: number; end: number }[] } | null>(null);
+  useEffect(() => { setSequenceRange(null); }, [sequenceVisible, state.cutOrder, state.cutRegions, state.mainSpeed, state.segmentSpeeds, state.sceneTransitions]);
+  function commitSequenceRange(): void {
+    if (!sequenceRange) return;
+    const next = cutMainSourceRanges(state, sequenceRange.ranges);
+    if (next === state) setToolHint('動画をすべて削除することはできません。映像の一部を残してください。');
+    else session.apply(next);
+    setSequenceRange(null);
+  }
+  const displayTotalFrames = sequenceVisible
+    ? finalDurationFrames
+    : displayMap.identity ? totalFrames : displayMap.displayTotal;
+
+  /** タイムライン全体が可視幅に収まるズームへ合わせ、先頭へ戻す。 */
+  function zoomToFit(): void {
+    const el = bodyRef.current;
+    if (el === null) return;
+    const next = fitPxPerFrame(displayTotalFrames, el.clientWidth);
+    if (next === null) return;
+    // 全体表示ではアンカー補正が要らない（左端が原点）。pending を残さず scrollLeft を 0 へ。
+    pendingZoomRef.current = null;
+    setPxPerFrame(next);
+    el.scrollLeft = 0;
+  }
+
+  // 案件を開いた直後は「全体が見えている」状態から始める（ベースライン §初期ズーム）。
+  // 既定の 1px/frame だと 14 分の案件で全体の 11% しか映らず、どこを見ているか分からない。
+  // 一度合わせたら以降は触らない（ユーザーのズーム操作を上書きしない）。
+  const zoomFittedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (zoomFittedRef.current) return;
+    const el = bodyRef.current;
+    // レイアウト前（clientWidth 0）は次の描画に譲る。
+    if (el === null || el.clientWidth === 0) return;
+    const next = fitPxPerFrame(displayTotalFrames, el.clientWidth);
+    if (next === null) return;
+    zoomFittedRef.current = true;
+    setPxPerFrame(next);
+  }, [displayTotalFrames]);
   // 範囲選択カットの可能範囲＝素材（残す区間）の原本範囲。先頭/末尾のカット済み（素材なし）は選択不可。
   // カット確認モード中は「カットを開ける」で先頭/末尾のカットも対象にできるよう全域を許可する。
   const cutSelBounds = useMemo(
@@ -737,6 +934,45 @@ function TimelineBody({
   // followRef に最新の overlaps / mainSpeed / speedSegments / displayMap を毎レンダーで更新する（onFrame は購読を貼り直さないため ref 経由）。
   followRef.current = { pxPerFrame, cutRegions: playbackRegions, ordering: playbackOrdering, overlaps, mainSpeed: playbackMainSpeed, speedSegments, displayMap };
 
+  function originalToFinalFrame(originalFrame: number): number {
+    if (overviewCoordinateMap !== null) {
+      return originalFrameToOverviewFrame(originalFrame, overviewCoordinateMap);
+    }
+    let playback = originalToPlayback(originalFrame, playbackRegions, playbackOrdering);
+    if (playback === null) {
+      const containingCut = playbackRegions.find((region) => originalFrame >= region.start && originalFrame < region.end);
+      playback = originalToPlayback(Math.max(0, (containingCut?.start ?? originalFrame) - 1), playbackRegions, playbackOrdering);
+    }
+    return playbackToPlayer(playback ?? 0, {
+      speedSegments,
+      playbackOverlaps: overlaps,
+      mainSpeed: playbackMainSpeed,
+    });
+  }
+
+  function updateOverviewWindow(): void {
+    const el = bodyRef.current;
+    if (el === null) return;
+    const firstOriginal = xToFrameMapped(el.scrollLeft, pxPerFrame, displayMap);
+    const lastOriginal = xToFrameMapped(el.scrollLeft + el.clientWidth, pxPerFrame, displayMap);
+    setOverviewWindow(
+      overviewWindowForFrames(
+        originalToFinalFrame(firstOriginal),
+        originalToFinalFrame(lastOriginal),
+        finalDurationFrames,
+      ),
+    );
+  }
+
+  useLayoutEffect(() => {
+    updateOverviewWindow();
+    const el = bodyRef.current;
+    if (el === null || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updateOverviewWindow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [pxPerFrame, displayMap, view, finalDurationFrames, playbackRegions, playbackOrdering, overlaps, speedSegments, playbackMainSpeed]);
+
   function seekToOriginal(originalFrame: number): void {
     // 原本フレーム → 再生フレーム。カット区間内なら直近の非カットフレームへ丸める。
     let playback = originalToPlayback(originalFrame, playbackRegions, playbackOrdering);
@@ -750,16 +986,44 @@ function TimelineBody({
     playerRef.current?.seekTo(playbackToPlayer(playback ?? 0, speedView));
   }
 
+  /** 通常選択したテロップを、文字が読める可視区間中央で停止表示する。 */
+  function focusTelop(telopId: number): void {
+    const telop = state.telops.find((item) => item.id === telopId);
+    if (telop === undefined) return;
+    playerRef.current?.pause();
+    const playback = telopFocusPlaybackFrame(telop, playbackRegions, playbackOrdering);
+    if (playback === null) return;
+    playerRef.current?.seekTo(playbackToPlayer(playback, {
+      speedSegments,
+      playbackOverlaps: overlaps,
+      mainSpeed: playbackMainSpeed,
+    }));
+  }
+
   /** ズーム倍率を factor 倍する。固定点は再生ヘッド（今の秒数）。 */
   function zoomBy(factor: number): void {
     zoomAnchoredRef.current(factor);
   }
 
   // 再生フレーム → 原本フレーム。原本座標トラック上のヘッド位置に使う。
-  const playheadOriginal = playbackToOriginal(playbackFrame, playbackRegions, playbackOrdering);
+  const playheadOriginal = (sequenceVisible ? sequenceSourceFrameAt(finalPlaybackModel?.keptSegments ?? ordering.segments,
+    finalPlaybackModel?.overlaps ?? [], playerFrame)?.originalFrame : undefined) ?? playbackToOriginal(playbackFrame, playbackRegions, playbackOrdering);
+  const splitFrame = sequenceVisible ? sequenceSourceFrameAt(finalPlaybackModel?.keptSegments ?? ordering.segments,
+    finalPlaybackModel?.overlaps ?? [], playerFrame, state.selection?.kind === 'cutSegment' ? state.selection.id : undefined)?.originalFrame : playheadOriginal;
+  const splittableMain = splitFrame === undefined ? undefined : ordering.segments.find(s => splitFrame > s.originalStart && splitFrame < s.originalEnd);
+  const splitBlockedReason = view !== 'cut' || splitFrame === undefined ? null : mainClipSplitBlockedReason(state, splitFrame);
+
+  // 並び替え後も、いま確認していた原素材frameを新しい完成座標へ戻す。
+  useLayoutEffect(() => {
+    const original = pendingReorderFrameRef.current;
+    if (original === null || finalPlaybackModel === undefined) return;
+    pendingReorderFrameRef.current = null;
+    const playback = originalToPlayback(original, state.cutRegions, ordering);
+    playerRef.current?.seekTo(playbackToPlayer(playback ?? 0, finalPlaybackModel));
+  }, [finalPlaybackModel, ordering, playerRef, state.cutRegions]);
 
   // アンカー固定ズームが参照する最新値（ホイールハンドラは購読を貼り直さないため ref 経由）。
-  zoomStateRef.current = { pxPerFrame, playheadOriginal, displayMap };
+  zoomStateRef.current = { pxPerFrame, playheadOriginal: sequenceVisible ? playerFrame : playheadOriginal, displayMap: sequenceVisible ? undefined : displayMap };
 
   // ヘッド分割時のテキスト分配用の単語チップ。transcript が動画と非整合なら空（時間比分割になる）。
   // 手動（装飾）テロップは本文が transcript と無関係なので、splitTelopWithText 側が
@@ -774,12 +1038,13 @@ function TimelineBody({
   }
 
   // 再生ヘッドが乗っているテロップ。
-  const telopUnderHead = telopAtFrame(state.telops, playheadOriginal);
+  const telopUnderHead = (sequenceVisible ? state.telops.find(t => t.timelinePlacement && playerFrame >= t.timelinePlacement.startFrame && playerFrame < t.timelinePlacement.endFrame) : undefined)
+    ?? telopAtFrame(state.telops.filter(t => !t.timelinePlacement), playheadOriginal);
   // 「ヘッドで分割」の対象は、ヘッドが区間の内部（開始ぴったりでない）にある場合のみ。
   // 開始フレームちょうどは splitSegment が弾く（no-op）ため、ボタン/キーを無効化して
   // 空の Undo 履歴を積まないようにする。
   const splittableTelop =
-    telopUnderHead !== undefined && playheadOriginal > telopUnderHead.originalStart
+    telopUnderHead !== undefined && (telopUnderHead.timelinePlacement ? playerFrame > telopUnderHead.timelinePlacement.startFrame : playheadOriginal > telopUnderHead.originalStart)
       ? telopUnderHead
       : undefined;
 
@@ -800,16 +1065,31 @@ function TimelineBody({
    * ドラッグとして確定した場合（onCommit）は捨てる＝修飾キー＋ドラッグではトグルしない。
    */
   const telopMultiPendingRef = useRef<number | null>(null);
-
+  const seDragOriginRef = useRef<{ start: number; end: number; fadeInFrames: number; fadeOutFrames: number }>({
+    start: 0, end: 0, fadeInFrames: 0, fadeOutFrames: 0,
+  });
+  const bgmDragOriginRef = useRef<{ start: number; end: number; fadeInFrames: number; fadeOutFrames: number }>({
+    start: 0, end: 0, fadeInFrames: 0, fadeOutFrames: 0,
+  });
+  /**
+   * 掴んだトラックの上端（`.tl-scroll` 基準）。ドラッグツールチップの縦位置に使う（監査 interaction-9）。
+   *
+   * 各トラックの onHandleDown へ個別に配線するとハンドラが 8 本に散るので、
+   * `.tl-scroll` の pointerdown を**キャプチャ相で**1 か所だけ見て記録する。
+   * キャプチャは各つまみの onPointerDown（＝beginDrag→setDrag）より前に走るため、
+   * ツールチップが描かれる時点では必ず最新値が入っている。
+   */
+  const dragTrackTopRef = useRef<number | undefined>(undefined);
   /**
    * ドラッグ開始直前の EditState（監査 interaction-3 の「pre-drag 復元」）。
-   * `.tl-scroll` の onPointerDownCapture（各つまみの bubble ハンドラより先）で掴む。
    * ドラッグ中に setTransient で書き換わるもの（SE / BGM のフェード長など）を、
-   * 取り消し時にそのまま巻き戻すために使う。履歴には積まれていないので
+   * 取り消し時にそのまま巻き戻すために掴む。履歴には積まれていないので
    * setTransient で戻せば十分（Undo 履歴を汚さない）。
    */
   const preDragStateRef = useRef<EditState>(session.state);
-  function rememberPreDragState(): void {
+  function rememberDragTrackTop(e: React.PointerEvent): void {
+    const track = (e.target as HTMLElement | null)?.closest?.('.tl-track');
+    dragTrackTopRef.current = track instanceof HTMLElement ? track.offsetTop : undefined;
     preDragStateRef.current = session.state;
   }
 
@@ -819,20 +1099,16 @@ function TimelineBody({
    * ライブ表示（liveOverride 系）は drag が null になった時点で自然に消える。
    *
    * 選択（selection / multiTelopIds）は戻さない。preDragStateRef は
-   * 「掴んだ対象を選択する前」を掴んでいるので、EditState 全体を戻すと選択だけが
-   * 1 つ前の対象へ跳ね、矢印キーの対象（selectedHandle）と食い違う。
+   * `.tl-scroll` の onPointerDownCapture で「掴んだ対象を選択する前」を掴んでいるので、
+   * EditState 全体を戻すと選択だけが 1 つ前の対象へ跳ね、矢印キーの対象
+   * （selectedHandle）と食い違う（サイクル 4 レビュー Important）。
    * 復元範囲は dragCancel.ts の restoreDragTarget が持つ。
    */
   function cancelDragCommon(target: DragCancelTarget): void {
     session.setTransient((prev) => restoreDragTarget(prev, preDragStateRef.current, target));
     setSnapHit(null);
   }
-  const seDragOriginRef = useRef<{ start: number; end: number; fadeInFrames: number; fadeOutFrames: number }>({
-    start: 0, end: 0, fadeInFrames: 0, fadeOutFrames: 0,
-  });
-  const bgmDragOriginRef = useRef<{ start: number; end: number; fadeInFrames: number; fadeOutFrames: number }>({
-    start: 0, end: 0, fadeInFrames: 0, fadeOutFrames: 0,
-  });
+
   function trackOriginX(): number {
     const el = scrollRef.current;
     return el ? el.getBoundingClientRect().left : 0;
@@ -858,13 +1134,17 @@ function TimelineBody({
         if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
           return false;
         }
-        const frame = xToFrameMapped(clientX - trackOriginX(), pxPerFrame, displayMap);
-        const orig = playbackToOriginal(frame, state.cutRegions);
+        const x = clientX - trackOriginX();
+        const finalFrame = Math.max(0, Math.min(finalDurationFrames - 1, Math.round((x - TRACK_LABEL_GUTTER_PX) / pxPerFrame)));
+        const orig = sequenceVisible
+          ? sequenceSourceFrameAt(finalPlaybackModel?.keptSegments ?? ordering.segments, finalPlaybackModel?.overlaps ?? [], finalFrame)?.originalFrame
+          : Math.max(0, Math.min(totalFrames - 1, xToFrameMapped(x, pxPerFrame, displayMap)));
+        if (orig === undefined) return false;
         session.apply(applyInsertMaterial(kind, state, file, orig));
         return true;
       },
     }),
-    [session, state, pxPerFrame, displayMap],
+    [session, state, pxPerFrame, displayMap, sequenceVisible, finalPlaybackModel, ordering, finalDurationFrames, totalFrames],
   );
 
   // ルーラードラッグ＝スクラブ。drop で履歴は積まない（再生ヘッド移動のみ）。
@@ -888,18 +1168,27 @@ function TimelineBody({
   // 吸着しきい値（px ではなくフレーム）。ズームに依存させ、画面上 8px 相当にする。
   const snapThresholdFrames = Math.max(1, Math.round(8 / (pxPerFrame > 0 ? pxPerFrame : 1)));
 
+  // 吸着ターゲットの索引（監査 interaction-8）。以前は pointermove のたびにゼロから
+  // 組み直していた（14 分・語数の多い案件では毎フレーム 1 万件規模のオブジェクトと文字列）。
+  // 再生ヘッドは索引に入れない——ドラッグ中の吸着が自分で seek するため、入れると
+  // pointermove ごとに索引が無効化されてメモ化の意味が消える（snapFrameIndexed が単独で比べる）。
+  const snapIndex = useMemo(
+    () => buildSnapIndex(baseProject.transcript, state.telops, fps),
+    [baseProject.transcript, state.telops, fps],
+  );
+
   // 吸着＋ガイド線表示のみ（seek しない）。範囲選択ドラッグが使う。
   function snapFrameWithGuide(rawFrame: number): number {
     let frame = rawFrame;
     let target: SnapTarget | null = null;
     if (snapEnabled && !altHeldRef.current) {
-      const targets = collectSnapTargets(
-        baseProject.transcript,
-        state.telops,
+      const result = snapFrameIndexed(
+        rawFrame,
+        snapIndex,
+        snapThresholdFrames,
+        displayMap,
         playheadOriginal,
-        fps,
       );
-      const result = snapFrameMapped(rawFrame, targets, snapThresholdFrames, displayMap);
       frame = result.frame;
       target = result.snapped;
     }
@@ -978,11 +1267,14 @@ function TimelineBody({
     },
     // 純クリックは選択のみ（telopHandleDown で選択済み）。履歴も積まず区間も動かさない。
     // 修飾キー＋純クリックのときだけ、ここで複数選択のトグルを確定する。
-    onClick: () => {
+    onClick: (handle) => {
       setSnapHit(null);
       const pending = telopMultiPendingRef.current;
       telopMultiPendingRef.current = null;
-      if (pending === null) return;
+      if (pending === null) {
+        if (handle.edge === 'body') focusTelop(handle.telopId);
+        return;
+      }
       // 範囲選択カットとは相互排他（両方が同時に生きる状態を作らない）。
       setCutSelection(null);
       session.setTransient((prev) => toggleMultiTelopSelection(prev, pending));
@@ -1095,6 +1387,7 @@ function TimelineBody({
 
   // 範囲選択カットの選択帯（原本フレーム・履歴に積まない一時状態）。
   const [cutSelection, setCutSelection] = useState<{ start: number; end: number } | null>(null);
+  useEffect(() => { setCutSelection(null); }, [sequenceVisible, allowRangeCut]);
   // 選択ドラッグの起点（pointerdown 時の吸着済みフレーム）。
   const cutSelAnchorRef = useRef<number>(0);
   // 選択ドラッグ起点の生フレーム（クリック時の頭出し先・useTimelineDrag のデルタ基準）。
@@ -1137,6 +1430,20 @@ function TimelineBody({
     },
   });
 
+  /**
+   * クリップ（テロップ／画像／サブ動画／BGM／SE／図形）を選ぶ共通経路。
+   *
+   * 選択と同時に範囲選択カットの帯を捨てる（相互排他・設計書 §1）。これが無いと
+   * 「帯を引く → Tab/Enter または クリックでクリップを選ぶ → Delete」で、選んだクリップでは
+   * なく以前の帯がカットされる。Delete の keydown は帯側の effect が先に登録されており、
+   * クリップ側の effect は `cutSelection !== null` の間 譲るように書かれているため、
+   * 帯が残っている限りクリップの削除には永久に届かない（サイクル 4 Codex 指摘 P1）。
+   */
+  function selectClip(updater: (prev: EditState) => EditState): void {
+    setCutSelection(null);
+    session.setTransient(updater);
+  }
+
   // 描画用の選択帯。ドラッグ中はライブ、離した後は確定済み cutSelection。
   const cutSelectionView =
     cutSelDrag.drag !== null
@@ -1156,89 +1463,127 @@ function TimelineBody({
   useEffect(() => {
     if (cutSelection === null) return;
     function onKey(e: KeyboardEvent): void {
+      // モーダル・チュートリアル表示中は背後のタイムラインを切らない（interaction-1）。
+      if (isModalOpen()) return;
       if (e.isComposing) return;
-      const target = e.target as HTMLElement | null;
-      const inEditable =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target?.isContentEditable ?? false);
+      const inEditable = isEditableTarget(e.target);
       if (e.key === 'Escape') {
+        // 入力欄での Esc は IME を閉じる等のためのもの。選択帯まで消さない（interaction-11）。
+        if (inEditable) return;
         setCutSelection(null);
         return;
       }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.key === 'Delete' || e.key === 'Backspace') && !inEditable && cutSelection !== null) {
         e.preventDefault();
         const mode = cutButtonMode(state.cutRegions, cutSelection.start, cutSelection.end);
         session.apply(
           mode === 'open'
             ? openCutRange(state, cutSelection.start, cutSelection.end)
-            : cutRange(state, cutSelection.start, cutSelection.end),
+            : view === 'cut' ? cutMainSourceRanges(state, [cutSelection]) : cutRange(state, cutSelection.start, cutSelection.end),
         );
         setCutSelection(null);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [cutSelection, session, state]);
+  }, [cutSelection, session, state, view]);
 
   // プロジェクトを開き直したら選択帯をクリアする（取り残し防止）。
   useEffect(() => {
     setCutSelection(null);
   }, [baseProject]);
 
-  // テロップ複数選択がある間、Delete/Backspace で一括削除・Esc で選択解除。
-  // 範囲選択カットとは相互排他（§1）なので優先順位規則は要らない ——「いま生きている方」に効く。
-  // 削除できるのは飾りテロップ（manual）だけで、字幕は removeTelops がスキップする
+  // 選択中のものを Delete/Backspace で消す・Esc で複数選択を解除。
+  // 「複数選択があればそれ、無ければ選択 1 件」に効く（interaction-6。以前は 2 件以上の
+  // ときしか登録されず、1 個選んだ Delete が無反応だった）。
+  // 範囲選択カットとは相互排他（§1）。念のため選択帯がある間はそちらへ譲る。
+  // 削除できるテロップは飾りテロップ（manual）だけで、字幕は removeTelops がスキップする
   //（字幕の削除＝区間カットという既存契約を変えない）。
   const multiTelopIds = state.multiTelopIds;
+  const selection = state.selection;
   useEffect(() => {
-    if (multiTelopIds.length < 2) return;
+    const hasMulti = multiTelopIds.length >= 2;
+    if (!hasMulti && selection === null && sequenceRange === null) return;
     function onKey(e: KeyboardEvent): void {
+      // モーダル・チュートリアル表示中は背後のテロップを消さない（interaction-1）。
+      if (isModalOpen()) return;
+      // 押しっぱなしの自動リピートは 1 回目だけ扱う（削除済みの対象へ 2 回目以降が届き、
+      // 無変化の空履歴が秒間何十手も積まれて Undo 履歴を押し流すのを防ぐ）。
+      if (e.repeat) return;
       if (e.isComposing) return;
-      const target = e.target as HTMLElement | null;
-      const inEditable =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target?.isContentEditable ?? false);
-      if (inEditable) return;
+      if (isEditableTarget(e.target)) return;
       if (e.key === 'Escape') {
-        session.setTransient(clearMultiSelection);
+        setSequenceRange(null);
+        // Esc は複数選択の解除だけを担う（カット選択帯は上の effect が消す・interaction-11）。
+        if (hasMulti) session.setTransient(clearMultiSelection);
         return;
       }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (cutSelection !== null) return;
+      if (sequenceVisible && sequenceRange) { e.preventDefault(); commitSequenceRange(); return; }
+      if (view === 'cut' && selection?.kind === 'cutSegment') {
+        e.preventDefault();
+        const reason = mainClipDeleteBlockedReason(state, selection.id);
+        if (reason) setToolHint(reason);
+        else session.apply(deleteMainClip(state, selection.id));
+        return;
+      }
+      if (hasMulti) {
         e.preventDefault();
         session.apply((prev) => removeTelops(prev, prev.multiTelopIds));
-      }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [multiTelopIds, session]);
-
-  // B キー = 再生ヘッド位置でヘッド下テロップを分割。
-  useEffect(() => {
-    function onKey(e: KeyboardEvent): void {
-      if (e.isComposing) return;
-      if (e.key !== 'b' && e.key !== 'B') return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target?.isContentEditable ?? false)
-      ) {
         return;
       }
-      const t = telopAtFrame(state.telops, playheadOriginal);
-      if (t === undefined || playheadOriginal <= t.originalStart) return;
+      const remove = removeOpForSelection(selection, state);
+      if (remove === null) {
+        // 何も起きないまま終わらせない。消せない理由が言えるときは知らせる。
+        const reason = deleteBlockedReason(selection, state);
+        if (reason !== null) {
+          e.preventDefault();
+          onNoticeRef.current?.(reason);
+        }
+        return;
+      }
       e.preventDefault();
-      session.apply(splitTelopWithText(state, t.id, playheadOriginal, splitChipsFor(t)));
+      session.apply(remove);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, session, playheadOriginal]);
+  }, [multiTelopIds, selection, cutSelection, session, state, sequenceRange, sequenceVisible, view]);
+
+  // 編集では V/C でツール切替、Cmd/Ctrl+K と従来の B でヘッド分割。
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      // モーダル・チュートリアル表示中は背後のテロップを分割しない（interaction-1）。
+      if (isModalOpen()) return;
+      if (e.defaultPrevented || e.repeat || e.isComposing || isEditableTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+      const addEdit = sequenceEditing && key === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
+      if (sequenceEditing && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && (key === 'v' || key === 'c')) {
+        e.preventDefault();
+        setSequenceTool(key === 'v' ? 'select' : 'razor');
+        setSequenceRange(null);
+        setCutSelection(null);
+        return;
+      }
+      if (!addEdit && shouldIgnoreTimelineKey(e)) return;
+      if (!addEdit && key !== 'b') return;
+      if (view === 'cut') {
+        e.preventDefault();
+        if (splitBlockedReason) { setToolHint(splitBlockedReason); return; }
+        if (splitFrame !== undefined) session.apply(splitMainClip(state, splitFrame));
+        setSequenceRange(null);
+        return;
+      }
+      const t = splittableTelop;
+      if (t === undefined) return;
+      e.preventDefault();
+      session.apply(t.timelinePlacement && finalPlaybackModel ? splitPlacedText(state, finalPlaybackModel, 'telop', t.id, playerFrame) : splitTelopWithText(state, t.id, playheadOriginal, splitChipsFor(t)));
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [state, session, playheadOriginal, view, splitFrame, splitBlockedReason, sequenceEditing, splittableTelop, finalPlaybackModel, playerFrame]);
 
   // カット区間内に完全に飲まれた SE（警告表示用）。BGM の clampBgm と同方針。
   const flaggedSeIds = useMemo(
@@ -1263,7 +1608,7 @@ function TimelineBody({
     onMove: (id, frame) => session.apply((prev) => moveImage(prev, id, frame)),
     onRetimeStart: (id, start, end) => session.apply((prev) => retimeImage(prev, id, start, end)),
     onRetimeEnd: (id, start, end) => session.apply((prev) => retimeImage(prev, id, start, end)),
-    onSelectEntity: (id) => session.setTransient((prev) => selectImage(prev, id)),
+    onSelectEntity: (id) => selectClip((prev) => selectImage(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'image', handle }),
     afterCommit: () => setSnapHit(null),
     onCancel: (id) => cancelDragCommon({ kind: 'image', id }),
@@ -1280,13 +1625,9 @@ function TimelineBody({
     findEntity: (id) => state.videoInserts.find((v) => v.id === id),
     getId: (handle) => handle.videoInsertId,
     onMove: (id, frame) => session.apply((prev) => moveVideoInsert(prev, id, frame)),
-    // 端ドラッグはどちらの端でも「確定する start」を基準に上限を出す
-    // （左端を左へ伸ばすと尺が増え、消費するソース量も増えるため）。
-    onRetimeStart: (id, start, end) =>
-      session.apply((prev) => retimeVideoInsert(prev, id, start, end, videoInsertEndLimitById(id, start))),
-    onRetimeEnd: (id, start, end) =>
-      session.apply((prev) => retimeVideoInsert(prev, id, start, end, videoInsertEndLimitById(id, start))),
-    onSelectEntity: (id) => session.setTransient((prev) => selectVideoInsert(prev, id)),
+    onRetimeStart: (id, start, end) => session.apply((prev) => retimeVideoInsert(prev, id, start, end)),
+    onRetimeEnd: (id, start, end) => session.apply((prev) => retimeVideoInsert(prev, id, start, end)),
+    onSelectEntity: (id) => selectClip((prev) => selectVideoInsert(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'videoInsert', handle }),
     afterCommit: () => setSnapHit(null),
     onCancel: (id) => cancelDragCommon({ kind: 'videoInsert', id }),
@@ -1398,7 +1739,8 @@ function TimelineBody({
       telopMultiPendingRef.current = null;
       // 通常クリックは従来どおり単一選択（複数選択は解除する）。
       // 関数形。この後の pointerup（onCommit）と同じ「最新状態」の系列に載せる。
-      session.setTransient((prev) =>
+      // selectClip 経由なのでカット帯も同時に落ちる（キーボード選択と挙動を揃える）。
+      selectClip((prev) =>
         clearMultiSelection({ ...prev, selection: { kind: 'telop', id: handle.telopId } }),
       );
     }
@@ -1442,7 +1784,7 @@ function TimelineBody({
     onMove: (id, frame) => session.apply((prev) => moveShapeTime(prev, id, frame)),
     onRetimeStart: (id, start, end) => session.apply((prev) => retimeShape(prev, id, start, end)),
     onRetimeEnd: (id, start, end) => session.apply((prev) => retimeShape(prev, id, start, end)),
-    onSelectEntity: (id) => session.setTransient((prev) => selectShape(prev, id)),
+    onSelectEntity: (id) => selectClip((prev) => selectShape(prev, id)),
     onBeginSelectedHandle: (handle) => setSelectedHandle({ kind: 'shape', handle }),
     afterCommit: () => setSnapHit(null),
     onCancel: (id) => cancelDragCommon({ kind: 'shape', id }),
@@ -1460,7 +1802,16 @@ function TimelineBody({
   // Cmd＋クリックの複数選択トグルも純クリック判定が要るので同じ理由で壊れる。
   // 監視（ポインタ位置の記録と rAF ループ）は pointerdown から始める。最初の pointermove を
   // 取りこぼすと「ポインタ位置が分からないまま」になるため。
-  const edgeScrollWatching =
+  useLayoutEffect(() => {
+    // A hidden source handle must never consume the next editing-page arrow/Delete.
+    scrubDrag.cancelDrag(); cutDrag.cancelDrag(); telopDrag.cancelDrag(); seDrag.cancelDrag();
+    cutSelDrag.cancelDrag(); imageEdgeDrag.cancelDrag(); videoInsertEdgeDrag.cancelDrag();
+    bgmDrag.cancelDrag(); shapeEdgeDrag.cancelDrag();
+    setSelectedHandle(null); setSnapHit(null);
+  }, [view, cutsBypassed]);
+
+  const [sequenceAssetDrag, setSequenceAssetDrag] = useState({ active: false, moved: false });
+  const edgeScrollWatching = sequenceAssetDrag.active ||
     cutDrag.drag !== null ||
     telopDrag.drag !== null ||
     seDrag.drag !== null ||
@@ -1477,7 +1828,7 @@ function TimelineBody({
   timelineDragActiveRef.current = edgeScrollWatching || scrubDrag.drag !== null;
 
   // 実際にスクロールを始めてよいのは、ドラッグとして確定してから（moved）。
-  const edgeScrollArmed =
+  const edgeScrollArmed = sequenceAssetDrag.moved ||
     (cutDrag.drag?.moved ?? false) ||
     (telopDrag.drag?.moved ?? false) ||
     (seDrag.drag?.moved ?? false) ||
@@ -1589,11 +1940,44 @@ function TimelineBody({
     };
   }, [edgeScrollWatching]);
 
+  // 縦あふれの手がかり（ベースライン §トラック画面外）。可視域に入りきらないトラック数を数え、
+  // 「▼ さらに N トラック」を下端に出す。見えていないこと自体に気付けないのが問題なので、
+  // 空トラックの畳み込み・ビューポート連動の既定高さで足りなかったぶんをここで伝える。
+  const [hiddenTracks, setHiddenTracks] = useState(0);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el === null) return;
+    function measure(): void {
+      const e = bodyRef.current;
+      if (e === null) return;
+      const bottoms = Array.from(e.querySelectorAll<HTMLElement>('.tl-track')).map(
+        (t) => t.offsetTop + t.offsetHeight,
+      );
+      setHiddenTracks(hiddenTracksBelow(bottoms, e.scrollTop, e.clientHeight));
+    }
+    measure();
+    el.addEventListener('scroll', measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+    // トラックの本数・高さが変わる編集（レーン数が増減する）でも測り直す。
+  }, [state.telops, state.images, state.videoInserts, state.bgm, state.se, state.shapes]);
+
+  /** 「▼ さらに N トラック」を押したとき: 1 画面ぶん弱だけ下へ送る。 */
+  function scrollTracksDown(): void {
+    const el = bodyRef.current;
+    if (el === null) return;
+    el.scrollTop = el.scrollTop + Math.max(40, el.clientHeight * 0.8);
+  }
+
   return (
-    <div className="tl">
+    <div className={'tl' + (view === 'overview' ? ' is-overview' : sequenceVisible ? ' is-cut-sequence' : (view === 'cut' || (view === 'detail' && finalPlaybackModel)) && cutsBypassed ? ' is-cut-source' : ' is-detail')} data-testid="timeline-shell">
       <TimelineResizer />
       <div className="tl-head">
-        <h2>タイムライン</h2>
+        <h2>{view === 'overview' ? '全体タイムライン' : view === 'cut' ? (cutsBypassed ? 'カット前の原素材' : 'カットと並び替え') : '詳細タイムライン'}</h2>
         <div className="tl-head-tools">
           <span className="tl-total">
             完成尺 <strong>{formatClock(fps > 0 ? (speedSegments ? speedTotalFrames(speedSegments) : speedScale(playbackFrames, state.mainSpeed)) / fps : 0)}</strong>
@@ -1607,6 +1991,8 @@ function TimelineBody({
           <button
             type="button"
             className={'tl-snap-toggle' + (snapEnabled ? ' on' : '')}
+            data-testid="timeline-snap"
+            aria-label="吸着"
             title={snapEnabled ? '吸着オン（ドラッグ中 Alt で一時解除）' : '吸着オフ'}
             aria-pressed={snapEnabled}
             onClick={() => setSnapEnabled((v) => !v)}
@@ -1616,21 +2002,25 @@ function TimelineBody({
           <button
             type="button"
             className={'tl-snap-toggle tl-cuts-bypass' + (cutsBypassed ? ' on' : '')}
+            data-testid="timeline-cuts-bypass"
+            aria-label={view === 'cut' ? (cutsBypassed ? '完成順へ戻る' : 'カット前を確認') : 'カットも再生'}
             title={
               cutsBypassed
                 ? 'カット確認モード中: カットを適用せず原本全体を再生しています（もう一度押すと通常再生へ）'
                 : 'カット確認モード: カット予定の区間も飛ばさずに再生して中身を確認できます'
             }
             aria-pressed={cutsBypassed}
-            onClick={onToggleCutsBypassed}
+            onClick={() => onToggleCutsBypassed(playheadOriginal)}
           >
-            カットも再生
+            {view === 'cut' ? (cutsBypassed ? '完成順へ戻る' : 'カット前を確認') : 'カットも再生'}
           </button>
           <span className="tl-sep" aria-hidden="true" />
           <button
             type="button"
             className={'tl-cut-confirm' + (cutMode === 'open' ? ' open-mode' : '')}
-            aria-disabled={cutSelection === null}
+            data-testid="timeline-cut"
+            hidden={!allowRangeCut}
+            aria-disabled={cutSelection === null && sequenceRange === null}
             title={
               cutSelection === null
                 ? 'タイムラインをドラッグして範囲を選ぶとカットできます（カット済みブロックをクリックすると開けられます）'
@@ -1639,6 +2029,11 @@ function TimelineBody({
                   : '選択範囲をカット（Delete でも可）'
             }
             onClick={() => {
+              if (sequenceVisible) {
+                if (sequenceRange) commitSequenceRange();
+                else { setSequenceTool('sweep'); setToolHint('映像と波形の上をなぞって範囲選択 → Delete または「範囲をカット」。Escで取消。'); }
+                return;
+              }
               if (cutSelection === null) {
                 setToolHint('タイムラインを左右にドラッグして範囲を選ぶとカットできます');
                 return;
@@ -1646,40 +2041,59 @@ function TimelineBody({
               session.apply(
                 cutMode === 'open'
                   ? openCutRange(state, cutSelection.start, cutSelection.end)
-                  : cutRange(state, cutSelection.start, cutSelection.end),
+                  : view === 'cut' ? cutMainSourceRanges(state, [cutSelection]) : cutRange(state, cutSelection.start, cutSelection.end),
               );
               setCutSelection(null);
             }}
           >
-            {cutMode === 'open' ? 'カットを開ける' : '✂ カット'}
+            {sequenceVisible ? '範囲をカット' : cutMode === 'open' ? 'カットを開ける' : '✂ カット'}
           </button>
           <button
             type="button"
             className="tl-split"
-            aria-disabled={splittableTelop === undefined}
+            data-testid="timeline-split"
+            aria-disabled={view === 'cut' ? splittableMain === undefined || splitBlockedReason !== null : splittableTelop === undefined}
             title={
-              splittableTelop === undefined
+              view === 'cut' ? splitBlockedReason ?? '再生ヘッドで映像・元音声を分割（B）。クリップを選択してDeleteで詰め削除。' : splittableTelop === undefined
                 ? '再生ヘッドがテロップ上にありません'
                 : '再生ヘッド位置でテロップを分割（B キーでも可）'
             }
             onClick={() => {
+              if (view === 'cut') {
+                if (splitBlockedReason) { setToolHint(splitBlockedReason); return; }
+                if (!splittableMain || splitFrame === undefined) { setToolHint('映像区間の内側へ再生ヘッドを動かすと分割できます'); return; }
+                session.apply(splitMainClip(state, splitFrame));
+                setSequenceRange(null);
+                return;
+              }
               if (splittableTelop === undefined) {
                 setToolHint('再生ヘッドをテロップに重なる位置へ動かすと分割できます');
                 return;
               }
               session.apply(
-                splitTelopWithText(state, splittableTelop.id, playheadOriginal, splitChipsFor(splittableTelop)),
+                splittableTelop.timelinePlacement && finalPlaybackModel ? splitPlacedText(state, finalPlaybackModel, 'telop', splittableTelop.id, playerFrame) : splitTelopWithText(state, splittableTelop.id, playheadOriginal, splitChipsFor(splittableTelop)),
               );
             }}
           >
-            ヘッドで分割
+            {view === 'cut' ? '映像を分割 · B' : 'ヘッドで分割'}
           </button>
+          {sequenceEditing && <>
+            <button type="button" className="tl-sequence-tool" aria-keyshortcuts="V" aria-pressed={sequenceTool === 'select'} onClick={() => { setSequenceTool('select'); setSequenceRange(null); setCutSelection(null); }}>選択 · V</button>
+            <button type="button" className="tl-sequence-tool" data-testid="timeline-razor-tool" aria-keyshortcuts="C" title="映像または元音声をクリックした位置で、両方を分割。Vで選択へ戻ります。" aria-pressed={sequenceTool === 'razor'} onClick={() => { setSequenceTool('razor'); setSequenceRange(null); setCutSelection(null); }}>レーザー · C</button>
+            <button type="button" className="tl-sequence-tool" data-testid="timeline-sweep-tool" aria-pressed={sequenceTool === 'sweep'} onClick={() => { setSequenceTool('sweep'); setCutSelection(null); }}>なぞってカット</button>
+            <button type="button" className="tl-sequence-tool" disabled={state.selection?.kind !== 'cutSegment'} onClick={() => {
+              if (state.selection?.kind !== 'cutSegment') return;
+              const reason = mainClipDeleteBlockedReason(state, state.selection.id);
+              if (reason) setToolHint(reason); else session.apply(deleteMainClip(state, state.selection.id));
+            }}>詰め削除 · Del</button>
+          </>}
           <span className="tl-sep" aria-hidden="true" />
           <div className="dd tl-add-menu" ref={addMenu.rootRef}>
             <button
               type="button"
               ref={addMenu.triggerRef}
               className="tl-add-menu-btn"
+              data-testid="timeline-add"
               aria-haspopup="menu"
               aria-expanded={addMenu.open}
               title="効果音・画像・サブ動画・BGM・字幕・テロップを再生ヘッド位置に追加"
@@ -1756,52 +2170,173 @@ function TimelineBody({
           <span className="tl-sep" aria-hidden="true" />
           <span
             className="tl-transport-hint"
-            title="J＝巻き戻し / K＝一時停止 / L＝早送り（押すたび 1→2→4→8 倍）。←→＝1コマ送り（Shift＋←→ で 1 秒）"
+            title="Space＝再生/停止。J＝巻き戻し / K＝一時停止 / L＝早送り（押すたび 1→2→4→8 倍）。←→＝1コマ送り（Shift＋←→ で 1 秒）"
           >
-            J K L
+            Space 再生/停止 ・ J K L
           </span>
           {playbackRateLabel(playbackRate) !== '' && (
             <span className="tl-rate-badge" role="status">{playbackRateLabel(playbackRate)}</span>
           )}
           <span className="tl-sep" aria-hidden="true" />
           <div className="tl-zoom">
-            <button type="button" title="ズームアウト（再生ヘッドの位置を中心に縮小）" onClick={() => zoomBy(0.5)}>
+            {/* AI エージェント向け: 並び順ではなく名前で指名できるようにする。 */}
+            <button
+              type="button"
+              data-testid="timeline-zoom-out"
+              aria-label="ズームアウト"
+              title="ズームアウト（再生ヘッドの位置を中心に縮小）"
+              onClick={() => zoomBy(0.5)}
+            >
               −
             </button>
-            <button type="button" title="ズームイン（再生ヘッドの位置を中心に拡大）" onClick={() => zoomBy(2)}>
+            <button
+              type="button"
+              data-testid="timeline-zoom-in"
+              aria-label="ズームイン"
+              title="ズームイン（再生ヘッドの位置を中心に拡大）"
+              onClick={() => zoomBy(2)}
+            >
               ＋
+            </button>
+            <button
+              type="button"
+              className="tl-zoom-fit"
+              data-testid="timeline-zoom-fit"
+              aria-label="全体を表示"
+              title="動画の最初から最後までがひと目で見える大きさに合わせる"
+              onClick={zoomToFit}
+            >
+              全体を表示
             </button>
           </div>
         </div>
+        {view !== 'cut' && <button
+          type="button"
+          className="tl-view-toggle"
+          data-testid="timeline-view-toggle"
+          aria-expanded={view === 'detail'}
+          onClick={() => onViewChange?.(view === 'detail' ? 'overview' : 'detail')}
+        >
+          {view === 'detail' ? '全体だけ' : '詳細を開く'}
+        </button>}
         {toolHint !== null && (
           <div className="tl-tool-hint" role="status">{toolHint}</div>
         )}
       </div>
+      <div className="tl-overview" data-testid="timeline-overview">
+        <span className="tl-overview-label">
+          <strong>完成後の流れ</strong>
+          <small>カット・速度を反映</small>
+        </span>
+        <button
+          ref={overviewTrackRef}
+          type="button"
+          className="tl-overview-track"
+          aria-label="完成後の動画全体。押した位置へ移動して詳細を開く"
+          title="押した場所へ移動して詳細タイムラインを開きます"
+          onClick={(event) => {
+            if (event.detail !== 0) {
+              const rect = overviewTrackRef.current?.getBoundingClientRect();
+              if (rect && rect.width > 0) {
+                const frame = frameAtOverviewFraction((event.clientX - rect.left) / rect.width, finalDurationFrames);
+                const overviewFrame = Math.max(0, Math.min(finalDurationFrames - 1, frame));
+                const previewFrame = cutsBypassed && overviewCoordinateMap !== null
+                  ? overviewFrameToPreviewFrame(overviewFrame, overviewCoordinateMap)
+                  : overviewFrame;
+                playerRef.current?.seekTo(previewFrame);
+              }
+            }
+            onViewChange?.('detail');
+          }}
+        >
+          <span
+            className="tl-overview-window"
+            style={{ left: `${overviewWindow.start * 100}%`, width: `${Math.max(1, (overviewWindow.end - overviewWindow.start) * 100)}%` }}
+          />
+          <span
+            className="tl-overview-playhead"
+            style={{ left: `${overviewFractionForFrame(playerFrame, finalDurationFrames) * 100}%` }}
+          />
+        </button>
+        <span className="tl-overview-end">完成 {formatClock(fps > 0 ? finalDurationFrames / fps : 0)}</span>
+      </div>
       <div
         ref={bodyRef}
-        className="tl-body"
+        className={'tl-body' + (hiddenTracks > 0 ? ' has-more' : '')}
+        onScroll={updateOverviewWindow}
       >
         <div
           ref={scrollRef}
           className="tl-scroll"
-          style={{ width: trackWidth }}
+          style={{ width: sequenceVisible ? TRACK_LABEL_GUTTER_PX + finalDurationFrames * pxPerFrame : trackWidth }}
           onPointerLeave={() => onHighlightRange(null)}
-          onPointerDownCapture={rememberPreDragState}
+          onPointerDownCapture={rememberDragTrackTop}
           onPointerDown={(e) => {
             const target = e.target as HTMLElement;
-            if (target.classList.contains('tl-handle') || target.closest('.tl-telop')) return;
+            if (sequenceVisible || target.classList.contains('tl-handle') || target.closest('.tl-telop')) return;
             const rect = e.currentTarget.getBoundingClientRect();
             const x = e.clientX - rect.left;
             // ガターオフセットを反映するため xToFrameMapped に統一（生計算しない）。
             seekToOriginal(xToFrameMapped(x, pxPerFrame, displayMap));
           }}
         >
+          {sequenceVisible && finalPlaybackModel && <JoinMarkers joins={finalPlaybackModel.joins} sceneTransitions={state.sceneTransitions} pxPerFrame={pxPerFrame}
+            tailFrame={finalDurationFrames} selectedAt={state.selection?.kind === 'join' ? state.selection.at : null}
+            frameForAt={at => at === 'head' ? 0 : at === 'tail' ? finalDurationFrames : playbackToFinal(finalPlaybackModel.joins.find(j => j.atOriginal === at)?.playbackFrame ?? 0, finalPlaybackModel.overlaps)}
+            onSelect={at => session.apply(selectJoin(state, at))} />}
+          {sequenceVisible && (
+            <CutSequenceTrack
+              canReorder={allowRangeCut}
+              key={`${sequenceTool}:${sequenceVisible}`}
+              sweep={sequenceEditing && sequenceTool === 'sweep'}
+              razor={sequenceEditing && sequenceTool === 'razor'}
+              onSplit={(frame) => {
+                if (!sequenceEditing) return;
+                const reason = mainClipSplitBlockedReason(state, frame);
+                if (reason) { setToolHint(reason); return; }
+                const next = splitMainClip(state, frame);
+                if (next === state) return;
+                playerRef.current?.pause();
+                session.apply(next);
+                setSequenceRange(null);
+              }}
+              range={sequenceRange}
+              onCutRange={commitSequenceRange}
+              onRange={range => { setSequenceRange(range); if (range) session.setTransient(prev => ({ ...prev, selection: null, multiTelopIds: [] })); }}
+              segments={finalPlaybackModel?.keptSegments ?? ordering.segments}
+              overlaps={finalPlaybackModel?.overlaps ?? []}
+              finalDurationFrames={finalDurationFrames}
+              playerFrame={playerFrame}
+              pxPerFrame={pxPerFrame}
+              totalFrames={totalFrames}
+              fps={fps}
+              videoUrl={videoUrl}
+              selectedSegmentId={state.selection?.kind === 'cutSegment' ? state.selection.id : null}
+              onSelect={(id) => { setSequenceRange(null); session.setTransient(prev => ({ ...prev, selection: { kind: 'cutSegment', id }, multiTelopIds: [] })); }}
+              onSeekOriginal={seekToOriginal}
+              onSeekFinal={(frame) => { playerRef.current?.pause(); playerRef.current?.seekTo(frame); }}
+              onMove={(id, index) => {
+                if (!allowRangeCut) return;
+                pendingReorderFrameRef.current = playheadOriginal;
+                session.apply(moveCutSegment(state, id, index));
+              }}
+            />
+          )}
+          {sequenceVisible && finalPlaybackModel && <SequenceAssetTracks model={finalPlaybackModel} pxPerFrame={pxPerFrame}
+            selection={state.selection} playerFrame={playerFrame}
+            snapEnabled={snapEnabled} altHeld={altHeldRef} getAutoScrollDx={getAutoScrollDx} onDragActivity={setSequenceAssetDrag}
+            onPlace={(item, start, end, action) => session.apply(prev => placeAsset(prev, finalPlaybackModel, item.kind, item.id, start, end, action))}
+            onSelect={(selection, frame) => {
+              setSequenceRange(null);
+              session.setTransient(prev => ({ ...prev, selection, multiTelopIds: [] }));
+              playerRef.current?.pause(); playerRef.current?.seekTo(frame);
+            }} />}
           {/* つなぎ目マーク（シーン転換の ◇）。**.tl-scroll の先頭に置くこと**（2026-08-26 レビュー I-1）。
               層は position:sticky で .tl-body のスクロール域上端に貼り付くが、sticky は
               「本来の流れ位置」より上へは出られない。CutTrack の後ろに置くと scrollTop 0 では
               トラックの中ほどに沈み、少しスクロールして初めて上端へ来る（＝位置が動いて見える）。
               クリックで selectJoin。 */}
-          <JoinMarkers
+          {!sequenceVisible && <JoinMarkers
             joins={joins}
             sceneTransitions={state.sceneTransitions}
             pxPerFrame={pxPerFrame}
@@ -1809,7 +2344,7 @@ function TimelineBody({
             tailFrame={cutSelBounds.end}
             selectedAt={state.selection?.kind === 'join' ? state.selection.at : null}
             onSelect={(at) => session.apply(selectJoin(state, at))}
-          />
+          />}
           <TimelineRuler
             totalFrames={totalFrames}
             pxPerFrame={pxPerFrame}
@@ -1838,7 +2373,6 @@ function TimelineBody({
               cutDrag.beginDrag(handle, e, edgeFrame);
             }}
             pulseKeys={pulseKeys}
-            samples={waveformSamples}
             videoUrl={videoUrl}
             waveformPref={waveformPref}
             onRegionHover={(region) =>
@@ -1846,6 +2380,7 @@ function TimelineBody({
             }
             selectOnCut={cutsBypassed}
             onTrackPointerDown={(e) => {
+              if (!allowRangeCut) return;
               // kept-segment 上で始まったかどうかを記録する。
               // クリック（δ≤5px）の場合はバンドの onClick が onSelectSegment を呼ぶため、
               // cutSelDrag.onCommit の seekToOriginal/setCutSelection をスキップする。
@@ -1899,6 +2434,16 @@ function TimelineBody({
                 ? selectedHandle.handle
                 : telopDrag.drag?.handle ?? null
             }
+            fps={fps}
+            onActivate={(handle) => {
+              // キーボード選択（Enter/Space）。ドラッグは始めず、選択と
+              // 「←/→ の対象つまみ」だけを立てる（監査 interaction-10）。
+              selectClip((prev) =>
+                clearMultiSelection({ ...prev, selection: { kind: 'telop', id: handle.telopId } }),
+              );
+              setSelectedHandle({ kind: 'telop', handle });
+              focusTelop(handle.telopId);
+            }}
             onHandleDown={telopHandleDown}
           />
           {/* テロップ行（手動テロップ・variant=manual）*/}
@@ -1916,6 +2461,16 @@ function TimelineBody({
                 ? selectedHandle.handle
                 : telopDrag.drag?.handle ?? null
             }
+            fps={fps}
+            onActivate={(handle) => {
+              // キーボード選択（Enter/Space）。ドラッグは始めず、選択と
+              // 「←/→ の対象つまみ」だけを立てる（監査 interaction-10）。
+              selectClip((prev) =>
+                clearMultiSelection({ ...prev, selection: { kind: 'telop', id: handle.telopId } }),
+              );
+              setSelectedHandle({ kind: 'telop', handle });
+              focusTelop(handle.telopId);
+            }}
             onHandleDown={telopHandleDown}
           />
           <ImageTrack
@@ -1925,6 +2480,11 @@ function TimelineBody({
             flaggedImageIds={flaggedImageIds}
             selectedImageId={state.selection?.kind === 'image' ? state.selection.id : null}
             liveOverride={imageEdgeDrag.live()}
+            fps={fps}
+            onActivate={(handle) => {
+              selectClip((prev) => selectImage(prev, handle.imageId));
+              setSelectedHandle({ kind: 'image', handle });
+            }}
             onHandleDown={imageEdgeDrag.onHandleDown}
           />
           <VideoInsertTrack
@@ -1934,6 +2494,11 @@ function TimelineBody({
             flaggedVideoInsertIds={flaggedVideoInsertIds}
             selectedVideoInsertId={state.selection?.kind === 'videoInsert' ? state.selection.id : null}
             liveOverride={videoInsertEdgeDrag.live()}
+            fps={fps}
+            onActivate={(handle) => {
+              selectClip((prev) => selectVideoInsert(prev, handle.videoInsertId));
+              setSelectedHandle({ kind: 'videoInsert', handle });
+            }}
             onHandleDown={videoInsertEdgeDrag.onHandleDown}
           />
           <BgmTrack
@@ -1946,6 +2511,11 @@ function TimelineBody({
             selectedBgmId={state.selection?.kind === 'bgm' ? state.selection.id : null}
             liveOverride={liveBgm()}
             onNormalizeVolume={(bgmId, volume) => session.apply(normalizeBgmVolume(state, bgmId, volume))}
+            fps={fps}
+            onActivate={(handle) => {
+              selectClip((prev) => selectBgm(prev, handle.bgmId));
+              setSelectedHandle({ kind: 'bgm', handle });
+            }}
             onHandleDown={(handle, e) => {
               const clip = state.bgm.find((b) => b.id === handle.bgmId);
               const originStart = clip?.originalStart ?? 0;
@@ -1957,7 +2527,7 @@ function TimelineBody({
                 fadeOutFrames: clip?.fadeOutFrames ?? 0,
               };
               // 関数形。この直後の beginDrag→onDrag（fade ライブ更新）と同じ最新状態の系列に載せる。
-              session.setTransient((prev) => selectBgm(prev, handle.bgmId));
+              selectClip((prev) => selectBgm(prev, handle.bgmId));
               setSelectedHandle({ kind: 'bgm', handle });
               // フェードつまみはブロックの左端（fadeIn）または右端（fadeOut）を基準にする。
               const originFrame =
@@ -1975,6 +2545,10 @@ function TimelineBody({
             flaggedSeIds={flaggedSeIds}
             selectedSeId={state.selection?.kind === 'se' ? state.selection.id : null}
             liveOverride={liveSe()}
+            onActivate={(handle) => {
+              selectClip((prev) => selectSe(prev, handle.seId));
+              setSelectedHandle({ kind: 'se', handle });
+            }}
             onHandleDown={(handle, e) => {
               const clip = state.se.find((x) => x.id === handle.seId);
               const originStart = clip?.originalStart ?? 0;
@@ -1986,7 +2560,7 @@ function TimelineBody({
                 fadeOutFrames: clip?.fadeOutFrames ?? 0,
               };
               // 関数形。この直後の beginDrag→onDrag（fade ライブ更新）と同じ最新状態の系列に載せる。
-              session.setTransient((prev) => selectSe(prev, handle.seId));
+              selectClip((prev) => selectSe(prev, handle.seId));
               setSelectedHandle({ kind: 'se', handle });
               const originFrame = handle.edge === 'end' || handle.edge === 'fadeOut' ? originEnd : originStart;
               seDrag.beginDrag(handle, e, originFrame);
@@ -2000,6 +2574,11 @@ function TimelineBody({
             flaggedShapeIds={flaggedShapeIds}
             selectedShapeId={state.selection?.kind === 'shape' ? state.selection.id : null}
             liveOverride={shapeEdgeDrag.live()}
+            fps={fps}
+            onActivate={(handle) => {
+              selectClip((prev) => selectShape(prev, handle.shapeId));
+              setSelectedHandle({ kind: 'shape', handle });
+            }}
             onHandleDown={shapeEdgeDrag.onHandleDown}
           />
           <div
@@ -2032,7 +2611,7 @@ function TimelineBody({
                   session.apply(
                     cutMode === 'open'
                       ? openCutRange(state, cutSelection.start, cutSelection.end)
-                      : cutRange(state, cutSelection.start, cutSelection.end),
+                      : view === 'cut' ? cutMainSourceRanges(state, [cutSelection]) : cutRange(state, cutSelection.start, cutSelection.end),
                   );
                   setCutSelection(null);
                 }}
@@ -2060,6 +2639,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {telopDrag.drag !== null && (
@@ -2069,6 +2649,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {seDrag.drag !== null && seDrag.drag.handle.edge !== 'fadeIn' && seDrag.drag.handle.edge !== 'fadeOut' && (
@@ -2082,6 +2663,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {imageEdgeDrag.drag !== null && (
@@ -2095,6 +2677,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {videoInsertEdgeDrag.drag !== null && (
@@ -2108,6 +2691,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {bgmDrag.drag !== null && bgmDrag.drag.handle.edge !== 'fadeIn' && bgmDrag.drag.handle.edge !== 'fadeOut' && (
@@ -2121,6 +2705,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {shapeEdgeDrag.drag !== null && (
@@ -2134,6 +2719,7 @@ function TimelineBody({
               pxPerFrame={pxPerFrame}
               map={displayMap}
               fps={fps}
+              top={dragTrackTopRef.current}
             />
           )}
           {snapHit !== null &&
@@ -2151,6 +2737,17 @@ function TimelineBody({
           )}
         </div>
       </div>
+      {hiddenTracks > 0 && (
+        <button
+          type="button"
+          className="tl-more-tracks"
+          data-testid="timeline-more-tracks"
+          title="下にあるトラックまで表示を送ります（タイムラインの上辺をドラッグすると高さも変えられます）"
+          onClick={scrollTracksDown}
+        >
+          {moreTracksLabel(hiddenTracks)}
+        </button>
+      )}
     </div>
   );
 }
@@ -2164,13 +2761,17 @@ function TimelineBody({
  * これにより Rules of Hooks 違反（早期 return 後にフック呼び出し）を構造的に解消する。
  */
 export function Timeline({
+  allowRangeCut = true,
+  view = 'detail',
+  onViewChange,
+  finalDurationFrames,
+  finalPlaybackModel,
   session,
   baseProject,
   playerRef,
   seLibrary,
   imageLibrary,
   videoLibrary,
-  videoDurations,
   bgmLibrary,
   videoUrl,
   projectId,
@@ -2184,6 +2785,8 @@ export function Timeline({
   waveformPref,
   playbackRate,
   onPlaybackRateChange,
+  onNotice,
+  snapPref,
 }: TimelineProps) {
   if (!session || !baseProject) {
     return (
@@ -2201,13 +2804,17 @@ export function Timeline({
 
   return (
     <TimelineBody
+      allowRangeCut={allowRangeCut}
+      view={view}
+      onViewChange={onViewChange}
+      finalDurationFrames={finalDurationFrames ?? playbackTotalFrames(baseProject.videoConfig.durationFrames, session.state.cutRegions)}
+      finalPlaybackModel={finalPlaybackModel}
       session={session}
       baseProject={baseProject}
       playerRef={playerRef}
       seLibrary={seLibrary}
       imageLibrary={imageLibrary}
       videoLibrary={videoLibrary}
-      videoDurations={videoDurations}
       bgmLibrary={bgmLibrary}
       videoUrl={videoUrl}
       projectId={projectId}
@@ -2221,6 +2828,8 @@ export function Timeline({
       waveformPref={waveformPref}
       playbackRate={playbackRate}
       onPlaybackRateChange={onPlaybackRateChange}
+      onNotice={onNotice}
+      snapPref={snapPref}
     />
   );
 }

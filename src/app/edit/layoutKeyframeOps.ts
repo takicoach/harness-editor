@@ -22,6 +22,8 @@ function withSorted(list: LayoutKeyframe[]): LayoutKeyframe[] {
 
 /** 原本フレームにキーフレームを追加/置換（同 originalFrame は置換）。昇順維持。 */
 export function addKeyframeAt(state: EditState, kf: LayoutKeyframe): EditState {
+  // 非有限値を含むキーフレームは打たない（既定値へ倒した偽のKFを黙って挿さないため）。
+  if (![kf.originalFrame, kf.x, kf.y, kf.scale, kf.rotation].every((v) => Number.isFinite(v))) return state;
   const c = clampKeyframe(kf);
   const rest = state.layoutKeyframes.filter((k) => k.originalFrame !== c.originalFrame);
   return { ...state, layoutKeyframes: withSorted([...rest, c]) };

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   HELP_TOPICS,
   filterHelpTopics,
@@ -135,5 +136,22 @@ describe('prevTopicId / nextTopicId', () => {
   it('選択なし（null）は前後とも null', () => {
     expect(prevTopicId(HELP_TOPICS, null)).toBeNull();
     expect(nextTopicId(HELP_TOPICS, null)).toBeNull();
+  });
+});
+
+describe('画面の実表示との食い違い（spec 2026-09-25）', () => {
+  const addButton = () => HELP_TOPICS.find((t) => t.id === 'add-button')!.description;
+  it('道具列を「タイムライン上部」と書かない（2026-09-21 からプレビューの横）', () => {
+    for (const t of HELP_TOPICS) expect(t.description, t.id).not.toContain('タイムライン上部');
+    expect(addButton()).toContain('プレビューの左');
+    expect(addButton()).toContain('マウスを乗せると名前が出ます');
+    expect(HELP_TOPICS.find((t) => t.id === 'telop')!.description).toContain('プレビュー横の道具列の「＋ テロップ」');
+  });
+  it('道具列のボタン名は NativeAddBar の表示名と一致する', () => {
+    const source = readFileSync('src/app/native/NativeAddBar.tsx', 'utf8');
+    for (const name of ['＋ テロップ', '＋ タイトル', '＋ 図形', '＋ 画像', '＋ BGM', '＋ 効果音']) {
+      expect(source, name).toContain(name);
+      expect(addButton(), name).toContain(`「${name}」`);
+    }
   });
 });

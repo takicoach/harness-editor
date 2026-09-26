@@ -2,6 +2,10 @@
  * ゴミ箱移動／完全削除の確認ダイアログ。HeavyJobConfirmDialog のオーバーレイ構造を踏襲。
  * 既定ボタン（autoFocus）は常にキャンセル — 使用中素材の誤削除防止（設計書 Phase 1 ④）。
  */
+import { useRef } from 'react';
+import { useDialogEscape } from '../useDialogEscape';
+import { useFocusTrap } from '../useFocusTrap';
+
 export interface TrashConfirmDialogProps {
   /** 表示名（ファイル名 or プロジェクト名）。 */
   name: string;
@@ -24,6 +28,8 @@ export interface TrashConfirmDialogProps {
 const NAME_LIST_LIMIT = 10;
 
 export function TrashConfirmDialog({ name, usedCount, names, mode, busy = false, onConfirm, onCancel }: TrashConfirmDialogProps) {
+  // status-ia-12: 閉じ方をヘルプ・作成モーダルと揃える。送信中は誤操作を避けて無効。
+  useDialogEscape(onCancel, !busy);
   const bulk = names !== undefined && names.length > 0;
   const text = bulk
     ? mode === 'purge'
@@ -34,11 +40,16 @@ export function TrashConfirmDialog({ name, usedCount, names, mode, busy = false,
       : usedCount > 0
         ? `「${name}」はタイムラインで ${usedCount} 箇所使われています。ゴミ箱へ移動すると、その箇所の表示・音が失われます。`
         : `「${name}」をゴミ箱へ移動します。あとで復元できます。`;
+  // aria-modal を名乗る以上、Tab はこの中だけを巡回させる（サイクル 3 残 Minor）。
+  const trashDialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trashDialogRef);
   return (
     <div className="hjc-overlay" onClick={() => { if (!busy) onCancel(); }}>
       <div
+        ref={trashDialogRef}
         className="hjc-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label="削除確認"
         data-testid="trash-confirm-dialog"
         onClick={(e) => e.stopPropagation()}

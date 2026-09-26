@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type CutSegment } from './types';
 
@@ -13,6 +13,7 @@ export function parseCutData(source: string | null): CutSegment[] {
   if (!Array.isArray(m.cutData)) {
     throw new ProjectFileError('cutData.ts', 'cutData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('cutData.ts', 'cutData', m.cutData);
   return m.cutData as CutSegment[];
 }
 

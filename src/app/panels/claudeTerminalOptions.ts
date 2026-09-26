@@ -21,7 +21,7 @@ import { terminalColorsFor } from '../../shared/terminalColors';
  * 「桁がずれる」（実測 12px: 英数字 M/l/O = 7.20px に対し `─│▶⚠╭` が 12.00px まで開く
  * ケースを確認済み）。
  *
- * Windows / Linux の利用者にも配布するため、macOS だけでなく各 OS 標準の等幅フォントを
+ * Windows / Linux の受講生にも配布するため、macOS だけでなく各 OS 標準の等幅フォントを
  * 明示的に列挙する（`ui-monospace` は macOS/iOS で SF Mono を指すが Windows/Linux には
  * 無いキーワードのため、後続に `Cascadia Mono`/`Consolas`（Windows）・
  * `DejaVu Sans Mono`/`Liberation Mono`（Linux）を並べ、最後に総称 `monospace` で

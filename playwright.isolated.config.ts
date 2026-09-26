@@ -6,7 +6,8 @@ import base from './playwright.config';
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
   ...(base as object),
-  use: { baseURL: 'http://localhost:5199' },
+  // base の use を落とさないように必ず spread する（baseURL だけ差し替える）。
+  use: { ...(base as any).use, baseURL: 'http://localhost:5199' },
   webServer: {
     ...(base as any).webServer,
     command: 'npm run edit -- --port 5199 --strictPort',

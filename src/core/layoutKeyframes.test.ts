@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse, format, sampleAtOriginalFrame, type LayoutKeyframe } from './layoutKeyframes';
+import { parse, format, clampKeyframe, sampleAtOriginalFrame, type LayoutKeyframe } from './layoutKeyframes';
 
 describe('layoutKeyframes.parse', () => {
   it('2要素の配列を parse できる（originalFrame 昇順）', () => {
@@ -101,5 +101,22 @@ describe('layoutKeyframes.sampleAtOriginalFrame', () => {
   });
   it('要素が0なら恒等値', () => {
     expect(sampleAtOriginalFrame([], 50)).toEqual({ x: 0, y: 0, scale: 1, rotation: 0 });
+  });
+});
+
+describe('clampKeyframe の非有限値の扱い', () => {
+  it('NaN / Infinity を既定値へ倒す（mainLayoutData.ts へ NaN を書かない）', () => {
+    expect(clampKeyframe({ originalFrame: Number.NaN, x: Number.NaN, y: Number.POSITIVE_INFINITY, scale: Number.NaN, rotation: Number.NaN }))
+      .toEqual({ originalFrame: 0, x: 0, y: 0, scale: 1, rotation: 0 });
+  });
+
+  it('format の出力に NaN / Infinity が現れない', () => {
+    const out = format([{ originalFrame: Number.NaN, x: 0, y: 0, scale: Number.POSITIVE_INFINITY, rotation: 0 }]);
+    expect(out).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('正常値はそのまま通す', () => {
+    expect(clampKeyframe({ originalFrame: 12, x: 0.2, y: -0.3, scale: 1.5, rotation: 10 }))
+      .toEqual({ originalFrame: 12, x: 0.2, y: -0.3, scale: 1.5, rotation: 10 });
   });
 });

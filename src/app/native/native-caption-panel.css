@@ -1,0 +1,23 @@
+.native-caption-panel { padding: 16px; min-width: 0; }
+.native-caption-panel > header, .native-caption-row-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.native-caption-panel h3 { margin: 0; }
+.native-caption-panel > header label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.native-caption-panel article { margin:2px 0; padding:4px 8px; border:1px solid transparent; border-radius:6px; cursor:pointer; }
+.native-caption-panel article:hover { border-color:var(--border); }
+.native-caption-panel article.is-selected { border-color:var(--accent); padding:8px; margin:8px 0; cursor:default; }
+.native-caption-panel article.is-playing { box-shadow: inset 3px 0 var(--accent); }
+.native-caption-panel article.is-cut .native-caption-text { text-decoration:line-through; color:var(--text-muted); }
+.native-caption-row-heading { display:flex; align-items:baseline; gap:8px; min-height:28px; }
+.native-caption-time { font-variant-numeric:tabular-nums; font-size:12px; color:var(--text-muted); flex:none; }
+.native-caption-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.native-caption-panel article.is-selected .native-caption-text { white-space:normal; }
+.native-caption-count { font-size:12px; color:var(--text-muted); }
+.native-caption-row-heading small { color: var(--text-muted); }
+/* 展開行だけ本文欄の最低高さを残す（1 行表示の行には効かせない）。 */
+.native-caption-panel article.is-selected textarea { display:block; box-sizing:border-box; width:100%; min-height:68px; resize:vertical; margin:8px 0; font:inherit; line-height:1.6; }
+.native-caption-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.native-caption-row-actions button { font-size: 12px; min-height: 30px; }
+.native-caption-panel [role=alert] { overflow-wrap: anywhere; }
+.native-caption-chips { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0; }
+.native-caption-chip { font-size:12px; min-height:26px; padding:2px 7px; border:1px solid var(--border); border-radius:4px; background:var(--bg-2); color:var(--fg-1); cursor:pointer; }
+.native-caption-chip.is-cut { text-decoration:line-through; color:var(--text-muted); }

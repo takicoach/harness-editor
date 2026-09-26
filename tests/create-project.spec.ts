@@ -2,13 +2,37 @@ import { test, expect } from '@playwright/test';
 import { execSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { writeLegacyLinkedProjectFixture } from './fixtures/legacyLinkedProject';
+
+function expectManagedSource(directory:string,source:string):void {
+  const saved=JSON.parse(readFileSync(resolve(directory,'.harness/project.v2.json'),'utf8'));
+  const document=saved.document??saved;
+  expect(document.schemaVersion).toBe(2);expect(document.assets).toHaveLength(1);
+  const managed=resolve(directory,document.assets[0].file);
+  expect(lstatSync(managed).isSymbolicLink()).toBe(false);
+  expect(readFileSync(managed)).toEqual(readFileSync(source));
+  expect(existsSync(resolve(directory,'package.json'))).toBe(false);
+  expect(existsSync(resolve(directory,'node_modules'))).toBe(false);
+}
 
 // ホーム「動画を作成する」の e2e。プロジェクトルート＝__fixtures__ に新規フォルダを
 // 作るため、専用名で作成し前後で必ず削除する（他 spec と共有 fixture を汚さない）。
 const FIXTURES_ROOT = resolve(import.meta.dirname, '../src/server/__fixtures__');
-const PROJECT_NAME = 'e2e-create-project-tmp';
+
+/**
+ * 素材・プロジェクト名に混ぜる **worker 番号**。
+ *
+ * playwright は 1 ファイルの中のテストを**複数 worker に分けて並列実行**し、
+ * `beforeAll` / `afterAll` は **worker ごとに** 走る。だから素材やプロジェクト名を
+ * worker 間で共有すると、片方の `afterAll` が**もう片方の実行中の素材を消す**。
+ * 実測（本ブランチ・フルスイート 6 ラン目）: `リンク取り込み` の 1 本目が
+ * ファイラで `external-source.mp4` を 60s 待って落ちた＝もう一方の worker の
+ * `afterAll` が共有素材を消していた。名前に worker 番号を混ぜて所有者を分ける。
+ */
+const W = process.env['TEST_PARALLEL_INDEX'] ?? '0';
+const PROJECT_NAME = `e2e-create-project-tmp-${W}`;
 const PROJECT_DIR = resolve(FIXTURES_ROOT, PROJECT_NAME);
-const TMP_DIR = resolve(import.meta.dirname, '.create-project-tmp');
+const TMP_DIR = resolve(import.meta.dirname, `.create-project-tmp-${W}`);
 const SRC_VIDEO = resolve(TMP_DIR, 'source.mp4');
 
 test.beforeAll(() => {
@@ -46,12 +70,8 @@ test('ホームから動画を選んで新規プロジェクトを作成し、�
   await nameInput.fill(PROJECT_NAME);
   await page.locator('.export-start').click();
 
-  // 作成完了 → そのままエディタが開く（タイムラインの＋追加ボタンで判定）。
-  await expect(page.locator('.tl-add-menu-btn')).toBeVisible({ timeout: 30_000 });
-
-  // サーバー側にも実体ができている（テンプレ骨格＋動画＋videoConfig 反映）。
-  expect(existsSync(resolve(PROJECT_DIR, 'public', 'main.mp4'))).toBe(true);
-  expect(existsSync(resolve(PROJECT_DIR, 'src', 'videoConfig.ts'))).toBe(true);
+  await expect(page.locator('.native-timeline-panel')).toBeVisible({ timeout: 30_000 });
+  expectManagedSource(PROJECT_DIR,SRC_VIDEO);
 });
 
 test('同名プロジェクトがあるとモーダル内にエラーを表示する', async ({ page }) => {
@@ -67,23 +87,32 @@ test('同名プロジェクトがあるとモーダル内にエラーを表示�
 
 
 // ---------------------------------------------------------------------------
-// 外付けストレージ想定の「リンクで取り込む」（コピーせず symlink）。
+// フォルダ選択も新規作成は管理用コピー。既存の旧リンク案件は別に回帰確認する。
 // 走査起点は playwright.config.ts が SME_BROWSE_ROOTS で tests/.browse-root に絞る。
 // プロジェクト作成系はこのファイルに集約する（別ファイルで並列に作ると
 // fixtures ルートを取り合って他 spec を巻き込む）。
 // ---------------------------------------------------------------------------
-// テストごとに別名にする。作成直後に走る npm install がディレクトリを掴んでいる間に
-// 消すと復活することがあり、名前を使い回すと次のテストが 409（同名あり）で落ちるため。
-const LINK_PROJECT_NAMES = ['e2e-link-import-a', 'e2e-link-import-b'] as const;
+// 並列テストの作成・削除が別ケースへ影響しないよう名前を分ける。
+const LINK_PROJECT_NAMES = [`e2e-link-import-a-${W}`, `e2e-link-import-b-${W}`] as const;
 const BROWSE_ROOT = resolve(import.meta.dirname, '.browse-root');
-const EXTERNAL_VIDEO = resolve(BROWSE_ROOT, 'external-source.mp4');
+const EXTERNAL_VIDEO_NAME = `external-source-${W}.mp4`;
+const EXTERNAL_VIDEO = resolve(BROWSE_ROOT, EXTERNAL_VIDEO_NAME);
+/**
+ * 「接続先が消える」テスト専用の素材。同 describe 内のテストは**並列に走る**ため、
+ * 外付けを外す側が共有素材を消すと、ファイラから選ぶ側が
+ * `.mp-file external-source.mp4` を見つけられずタイムアウトする（実測: フルスイート 17 回目）。
+ * 消す側には消してよい自前の素材を渡し、共有素材には触らせない。
+ */
+const BROKEN_LINK_VIDEO = resolve(BROWSE_ROOT, `link-broken-source-${W}.mp4`);
 
 function makeExternalVideo(): void {
   mkdirSync(BROWSE_ROOT, { recursive: true });
-  execSync(
-    `ffmpeg -y -f lavfi -i testsrc=duration=1:size=320x240:rate=60 -pix_fmt yuv420p "${EXTERNAL_VIDEO}"`,
-    { stdio: 'ignore' },
-  );
+  for (const out of [EXTERNAL_VIDEO, BROKEN_LINK_VIDEO]) {
+    execSync(
+      `ffmpeg -y -f lavfi -i testsrc=duration=1:size=320x240:rate=60 -pix_fmt yuv420p "${out}"`,
+      { stdio: 'ignore' },
+    );
+  }
 }
 
 test.describe('リンク取り込み', () => {
@@ -91,41 +120,38 @@ test.describe('リンク取り込み', () => {
     for (const n of LINK_PROJECT_NAMES) rmSync(resolve(FIXTURES_ROOT, n), { recursive: true, force: true });
   };
   test.beforeAll(() => { cleanup(); makeExternalVideo(); });
-  test.afterAll(() => { cleanup(); rmSync(EXTERNAL_VIDEO, { force: true }); });
+  test.afterAll(() => {
+    cleanup();
+    rmSync(EXTERNAL_VIDEO, { force: true });
+    rmSync(BROKEN_LINK_VIDEO, { force: true });
+  });
 
-  test('フォルダから選んだ動画をコピーせずリンクで取り込む', async ({ page }) => {
+  test('フォルダから選んだ動画を、案内どおり管理用コピーで取り込む', async ({ page }) => {
     await page.goto('/');
     await page.locator('.home-create-link-btn').first().click();
 
     // ファイラ: 起点 → 動画を選ぶ。
     await expect(page.locator('.mp-dialog')).toBeVisible();
     await page.locator('.mp-root').first().click();
-    await page.locator('.mp-file', { hasText: 'external-source.mp4' }).click();
+    await page.locator('.mp-file', { hasText: EXTERNAL_VIDEO_NAME }).click();
 
-    // 名前確認モーダルに「リンクで取り込みます」と接続先が出る。
+    // 実際にコピーすることを、作成前に明示する。
     const nameInput = page.locator('.home-create-name');
     await expect(nameInput).toBeVisible();
-    await expect(page.locator('.home-create-link-note')).toContainText('external-source.mp4');
+    await expect(page.locator('.home-create-link-note')).toContainText('編集用のコピー');
     await nameInput.fill(LINK_PROJECT_NAMES[0]);
     await page.locator('.export-start').click();
 
-    await expect(page.locator('.tl-add-menu-btn')).toBeVisible({ timeout: 30_000 });
-
-    // 実体はコピーされず symlink＋接続先が記録されている。
+    await expect(page.locator('.native-timeline-panel')).toBeVisible({ timeout: 30_000 });
     const dir = resolve(FIXTURES_ROOT, LINK_PROJECT_NAMES[0]);
-    expect(lstatSync(resolve(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(true);
-    const record = JSON.parse(
-      readFileSync(resolve(dir, '.sme', 'videoLink.json'), 'utf8'),
-    ) as { target: string };
-    expect(record.target).toBe(EXTERNAL_VIDEO);
+    expectManagedSource(dir,EXTERNAL_VIDEO);
   });
 
   test('リンクが切れると警告バナーが出て、音量調整と書き出しは止まる', async ({ page }) => {
     const name = LINK_PROJECT_NAMES[1];
-    const create = await page.request.post(
-      `/api/create-project-link?name=${encodeURIComponent(name)}&path=${encodeURIComponent(EXTERNAL_VIDEO)}`,
-    );
-    expect(create.ok(), await create.text()).toBe(true);
+    // Historical fixture construction only: the retired HTTP API must not create
+    // new legacy projects. Existing linked-project recovery remains covered.
+    writeLegacyLinkedProjectFixture(resolve(FIXTURES_ROOT, name), BROKEN_LINK_VIDEO);
 
     // 音量調整は原本をプロジェクト内へ複製するためリンク型では拒否される。
     const normalize = await page.request.post(`/api/normalize?id=${encodeURIComponent(name)}`, {
@@ -133,10 +159,10 @@ test.describe('リンク取り込み', () => {
     });
     expect(normalize.status()).toBe(409);
 
-    // 接続先を消す＝外付けを外した状態。
-    rmSync(EXTERNAL_VIDEO, { force: true });
+    // 接続先を消す＝外付けを外した状態（消すのは自分専用の素材のみ）。
+    rmSync(BROKEN_LINK_VIDEO, { force: true });
 
-    await page.goto('/');
+    await page.goto('/?legacy=1');
     await page.locator('.home-card', { hasText: name }).click();
     await expect(page.locator('.vl-banner')).toContainText('元動画が見つかりません', { timeout: 20_000 });
 
@@ -150,16 +176,14 @@ test.describe('リンク取り込み', () => {
 });
 
 // ---------------------------------------------------------------------------
-// D&D／ファイル選択の自動リンク化。ブラウザは元パスを渡さないため、サーバが
-// 登録済みブラウズルート（SME_BROWSE_ROOTS＝tests/.browse-root）から同一実体を
-// 探し、確証が取れたらコピーをやめて symlink 取り込みへ切り替える。
+// アップロードは所在によらず管理用コピーを作る。コピーしない旧自動リンクは退役。
 // ---------------------------------------------------------------------------
-const AUTO_LINK_NAMES = ['e2e-auto-link-hit', 'e2e-auto-link-miss'] as const;
-const AUTO_LINK_VIDEO = resolve(BROWSE_ROOT, 'auto-link-source.mp4');
+const AUTO_LINK_NAMES = [`e2e-auto-link-hit-${W}`, `e2e-auto-link-miss-${W}`] as const;
+const AUTO_LINK_VIDEO = resolve(BROWSE_ROOT, `auto-link-source-${W}.mp4`);
 // 起点の外に置いた素材（＝リンク化されない対照）。
 const OUTSIDE_VIDEO = resolve(TMP_DIR, 'outside-source.mp4');
 
-test.describe('アップロードの自動リンク化', () => {
+test.describe('アップロードの管理用コピー', () => {
   const cleanup = (): void => {
     for (const n of AUTO_LINK_NAMES) rmSync(resolve(FIXTURES_ROOT, n), { recursive: true, force: true });
   };
@@ -183,21 +207,17 @@ test.describe('アップロードの自動リンク化', () => {
     rmSync(OUTSIDE_VIDEO, { force: true });
   });
 
-  test('登録済みフォルダに同一実体があればコピーせずリンクになる', async ({ page }) => {
+  test('登録済みフォルダに同一実体があっても案内どおりコピーする', async ({ page }) => {
     const name = AUTO_LINK_NAMES[0];
     await page.goto('/');
     // ファイル選択は「ブラウザが元パスを渡さない」経路そのもの。中身は外付けの実体と同一。
     await page.locator('[data-testid=home-create-file]').setInputFiles(AUTO_LINK_VIDEO);
     await page.locator('.home-create-name').fill(name);
     await page.locator('.export-start').click();
-    await expect(page.locator('.tl-add-menu-btn')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.native-timeline-panel')).toBeVisible({ timeout: 30_000 });
 
     const dir = resolve(FIXTURES_ROOT, name);
-    expect(lstatSync(resolve(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(true);
-    const record = JSON.parse(
-      readFileSync(resolve(dir, '.sme', 'videoLink.json'), 'utf8'),
-    ) as { target: string };
-    expect(record.target).toBe(AUTO_LINK_VIDEO);
+    expectManagedSource(dir,AUTO_LINK_VIDEO);
   });
 
   test('登録済みフォルダに実体が無ければ従来どおりコピーになる', async ({ page }) => {
@@ -206,10 +226,10 @@ test.describe('アップロードの自動リンク化', () => {
     await page.locator('[data-testid=home-create-file]').setInputFiles(OUTSIDE_VIDEO);
     await page.locator('.home-create-name').fill(name);
     await page.locator('.export-start').click();
-    await expect(page.locator('.tl-add-menu-btn')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.native-timeline-panel')).toBeVisible({ timeout: 30_000 });
 
     const dir = resolve(FIXTURES_ROOT, name);
-    expect(lstatSync(resolve(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(false);
+    expectManagedSource(dir,OUTSIDE_VIDEO);
     // リンク化していないプロジェクトには sidecar を生やさない。
     expect(existsSync(resolve(dir, '.sme', 'videoLink.json'))).toBe(false);
   });

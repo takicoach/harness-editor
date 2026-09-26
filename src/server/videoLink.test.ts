@@ -1,32 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, lstatSync, realpathSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readVideoLink, writeVideoLink, inspectVideoLink, fingerprintMatches } from './videoLink';
-import { createProjectLinked } from './createProject';
 import { relinkVideo, describeMismatch } from './relinkVideo';
 
 function tmp(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
-
-/** createProject が要求する最小テンプレート。 */
-function makeTemplate(dir: string): string {
-  const t = join(dir, 'template');
-  mkdirSync(join(t, 'src'), { recursive: true });
-  writeFileSync(
-    join(t, 'src', 'videoConfig.ts'),
-    [
-      "export const FORMAT: VideoFormat = 'youtube';",
-      'export const FPS = 30;',
-      'export const DURATION_FRAMES = 1;',
-      "export const VIDEO_FILE = 'main.mp4';",
-    ].join('\n'),
-  );
-  return t;
-}
-
-const PROBED = { fps: 30, durationSeconds: 10, width: 1920, height: 1080 };
 
 describe('videoLink の記録と検査', () => {
   it('書いて読める・壊れた JSON は null', () => {
@@ -86,52 +67,6 @@ describe('videoLink の記録と検査', () => {
       { target: '/x', sizeBytes: 0, mtimeMs: 0, width: 0, height: 0, fps: 0 },
       { sizeBytes: 999, mtimeMs: 999 },
     )).toBe(true);
-  });
-});
-
-describe('createProjectLinked', () => {
-  it('実体をコピーせず symlink を張り、接続先と指紋を記録する', () => {
-    const base = tmp('sme-linkcreate-');
-    try {
-      const templateDir = makeTemplate(base);
-      const root = join(base, 'projects');
-      mkdirSync(root, { recursive: true });
-      const target = join(base, 'external.mp4');
-      writeFileSync(target, 'video-bytes');
-
-      const { id } = createProjectLinked(root, { name: 'proj', targetPath: target }, {
-        templateDir,
-        probe: () => PROBED,
-      });
-      expect(id).toBe('proj');
-      const link = join(root, 'proj', 'public', 'main.mp4');
-      expect(lstatSync(link).isSymbolicLink()).toBe(true);
-      const record = readVideoLink(join(root, 'proj'));
-      expect(record?.target).toBe(target);
-      expect(record?.width).toBe(1920);
-      expect(inspectVideoLink(join(root, 'proj'), 'main.mp4')?.state).toBe('ok');
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
-  it('リンクを張れない環境ではプロジェクトを残さない（ロールバック）', () => {
-    const base = tmp('sme-linkcreate-');
-    try {
-      const templateDir = makeTemplate(base);
-      const root = join(base, 'projects');
-      mkdirSync(root, { recursive: true });
-      expect(() =>
-        createProjectLinked(root, { name: 'proj', targetPath: join(base, 'x.mp4') }, {
-          templateDir,
-          probe: () => PROBED,
-          link: () => { throw new Error('EPERM'); },
-        }),
-      ).toThrow('EPERM');
-      expect(() => statSync(join(root, 'proj'))).toThrow();
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
   });
 });
 

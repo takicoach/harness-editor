@@ -116,6 +116,11 @@ export interface UseNormalizeReturn {
   start: (strength: NormalizeStrength) => Promise<void>;
   /** 音量正規化を元に戻す（バックアップから復元）。 */
   restore: () => Promise<void>;
+  /**
+   * 失敗表示を閉じて idle へ戻す（status-ia-7）。
+   * 失敗は status が idle に戻るまで居座るため、利用者が畳めるようにする。
+   */
+  dismissError: () => void;
   /** 重ジョブ負荷確認ダイアログの状態・操作（HeavyJobConfirmDialog に配線する）。 */
   heavyJobConfirm: UseHeavyJobConfirmReturn;
 }
@@ -224,5 +229,10 @@ export function useNormalize(projectId: string): UseNormalizeReturn {
     }
   };
 
-  return { state, start, restore, heavyJobConfirm };
+  // status-ia-7: error 表示を閉じる。applied（マーカー）は保ったまま idle へ戻す。
+  const dismissError = (): void => {
+    setState((prev) => (prev.status === 'error' ? { status: 'idle', applied: prev.applied } : prev));
+  };
+
+  return { state, start, restore, dismissError, heavyJobConfirm };
 }

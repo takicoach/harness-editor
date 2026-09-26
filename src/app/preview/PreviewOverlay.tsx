@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import type { PlayerRef } from '@remotion/player';
-import type { EditorTelop, EditorVideoInsert, EditorImage, EditorShape, ShapeKind } from '../../core/types';
+import type { EditorPlaybackRef as PlayerRef } from './editorPlayback';
+import type { CutRegion, EditorTelop, EditorVideoInsert, EditorImage, EditorShape, ShapeKind } from '../../core/types';
 import { clearMultiSelection, type EditState } from '../edit/editState';
 import {
   setTelopPosition,
@@ -28,21 +28,27 @@ import {
   type Rect,
 } from './overlayGeometry';
 import { snapPosition, SNAP_LINES } from './previewSnap';
+import type { SnapPref } from '../useSnapPref';
 import { visibleTelopBoxes } from './visibleTelopBoxes';
 import { findMeasureRoot, measureTelopHits } from './measureBox';
 import { useMeasuredBox, type MeasuredKind } from './useMeasuredBox';
-import { playbackToOriginal } from '../../core/cutEngine';
+import type { LegacyMeasurementReader } from '../../preview/native/legacyMeasurement';
+import { nativeMeasurementRect } from './nativeMeasurements';
+import { playbackToOriginal, originalToPlayback } from '../../core/cutEngine';
 import { cutOrderingOf } from '../../core/cutOrder';
 import type { SpeedSegment } from '../../core/speedEngine';
 import type { PlaybackOverlap } from '../../core/transitionEngine';
-import { playerToPlayback } from '../../preview/speedBridge';
+import { playerToPlayback, playbackToPlayer } from '../../preview/speedBridge';
+import { telopClockCaption, type TelopClockCaption } from '../panels/inspector/SettingsTab';
 import { pointerToVideoPoint } from '../../core/shapeStyle';
 import { telopScaleOriginY, telopVCoeff } from '../../preview/telopLayout';
+import { telopFocusPlaybackFrame } from '../timeline/telopFocus';
 
 /** Toolbar から受け取る描画ツール種別。null なら選択・ドラッグモード。 */
 export type DrawingKind = ShapeKind | null;
 
 interface PreviewOverlayProps {
+  readNativeMeasurement?: LegacyMeasurementReader;
   /** composition（動画）解像度。content 矩形の算出に使う。 */
   compWidth: number;
   compHeight: number;
@@ -68,6 +74,15 @@ interface PreviewOverlayProps {
   speedSegments?: SpeedSegment[] | null;
   /** 速度前（speedScale 前）の境界重なり。playerToPlayback で使う。 */
   playbackOverlaps?: PlaybackOverlap[];
+  /** 時刻表示用の fps。省略時は 30（案内文の時刻だけに使う）。 */
+  fps?: number;
+  /** カット確認中は Player と同じく原本座標を使う。 */
+  cutsBypassed?: boolean;
+  /**
+   * 吸着の共有設定（監査 interaction-7）。タイムラインと同じ 1 つを App から受け取る。
+   * 未指定なら従来どおり常時吸着（後方互換）。
+   */
+  snapPref?: SnapPref;
 }
 
 type Corner = 'nw' | 'ne' | 'sw' | 'se';
@@ -75,6 +90,7 @@ const CORNERS: Corner[] = ['nw', 'ne', 'sw', 'se'];
 
 /** @remotion/player のコントロールバー想定高さ（px）。移動ドラッグ面はこの下端帯を避ける。 */
 const CONTROLS_RESERVED = 48;
+const NO_CUT_REGIONS: CutRegion[] = [];
 
 /**
  * 移動ドラッグ面の最低高さ（px）。実測枠は文字の高さそのもので薄く、下端が
@@ -115,6 +131,11 @@ interface DragBase {
   /** composition（動画）解像度。縦係数（telopVCoeff）算出に使う。 */
   compW: number;
   compH: number;
+  /**
+   * kind==='telop' のときの選択枠の実測（または近似）幅（`content` と同じ stage ローカル px）。
+   * pointerToPosition の安全クランプ（clampTelopX）に渡す。それ以外の kind は undefined。
+   */
+  elemWidthPx?: number;
   /** move: 開始 position。 */
   startX: number;
   startY: number;
@@ -185,8 +206,15 @@ export function PreviewOverlay({
   mainSpeed = 1,
   speedSegments = null,
   playbackOverlaps = [],
+  fps = 30,
+  cutsBypassed = false,
+  snapPref,
+  readNativeMeasurement,
 }: PreviewOverlayProps) {
+  const nativeMeasurementRef=useRef(readNativeMeasurement);nativeMeasurementRef.current=readNativeMeasurement;
   const speedView = { speedSegments, playbackOverlaps, mainSpeed };
+  const playbackCutRegions = cutsBypassed ? NO_CUT_REGIONS : state.cutRegions;
+  const playbackOrdering = cutsBypassed ? undefined : cutOrderingOf(state);
   const rootRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const dragRef = useRef<DragBase | null>(null);
@@ -195,6 +223,9 @@ export function PreviewOverlay({
   // onLive/onEdit/state を ref に逃がし、drag-effect の依存配列を最小化する（I-1）。
   const cbRef = useRef({ onLive, onEdit });
   useEffect(() => { cbRef.current = { onLive, onEdit }; });
+  // 吸着設定はドラッグ中の window リスナから読むので ref に写す（購読を貼り直さない）。
+  const snapPrefRef = useRef<SnapPref | undefined>(snapPref);
+  snapPrefRef.current = snapPref;
 
   // state を ref で最新を保持する（描画モードの onUp で使う）。
   const stateRef = useRef(state);
@@ -245,10 +276,24 @@ export function PreviewOverlay({
     selectedTelop ? 'telop' : selectedVideoInsert ? 'videoInsert' : selectedImage ? 'image' : isMainVideo ? 'mainVideo' : isCutSegment ? 'cutSegment' : null;
 
   // content 矩形（stage 左上原点のローカル座標）。
-  const content = useMemo(
+  const fallbackContent = useMemo(
     () => fitContentRect(size.w, size.h, compWidth, compHeight),
     [size.w, size.h, compWidth, compHeight],
   );
+  const [nativeContent,setNativeContent]=useState<Rect|null>(null);
+  useLayoutEffect(()=>{
+    if(!readNativeMeasurement)return;
+    const snapshot=readNativeMeasurement(null),overlay=rootRef.current;
+    let next:Rect|null=null;
+    if(snapshot&&overlay){
+      const origin=overlay.getBoundingClientRect(),v=snapshot.viewport;
+      if([v.left,v.top,v.width,v.height].every(Number.isFinite)&&v.width>0&&v.height>0)
+        next={x:v.left-origin.left,y:v.top-origin.top,w:v.width,h:v.height};
+    }
+    setNativeContent(prev=>prev&&next&&prev.x===next.x&&prev.y===next.y&&prev.w===next.w&&prev.h===next.h?prev:next);
+  });
+  const content = readNativeMeasurement ? nativeContent??fallbackContent : fallbackContent;
+  useLayoutEffect(()=>{rootRef.current?.toggleAttribute('inert',Boolean(readNativeMeasurement&&!nativeContent));});
 
   // content を ref で保持（shape 描画の pointerup 時に使う）。
   const contentRef = useRef(content);
@@ -277,6 +322,7 @@ export function PreviewOverlay({
     kind: measuredKind,
     id: measuredKind === null ? null : (target?.id ?? null),
     playerRef,
+    readNativeMeasurement,
   });
   const box = measured.rect ?? fallbackBox;
   const boxSource = measured.source;
@@ -308,8 +354,15 @@ export function PreviewOverlay({
       if (d.mode === 'move') {
         const raw = fullFrame
           ? pointerToVideoInsertPosition(d.content, { x: d.startX, y: d.startY }, e.clientX - d.pointerX, e.clientY - d.pointerY)
-          : pointerToPosition(d.content, { x: d.startX, y: d.startY }, e.clientX - d.pointerX, e.clientY - d.pointerY, d.compW, d.compH);
-        const snapped = snapPosition(raw);
+          : pointerToPosition(d.content, { x: d.startX, y: d.startY }, e.clientX - d.pointerX, e.clientY - d.pointerY, d.compW, d.compH, d.elemWidthPx);
+        // 吸着はタイムラインと同じ規則に揃える（監査 interaction-7）:
+        // トグルが OFF、またはドラッグ中に Alt を押している間は吸着しない。
+        // 未配線（snapPref 省略）のときは従来どおり常時吸着。
+        const pref = snapPrefRef.current;
+        const snapOn = pref === undefined ? true : pref.snapEnabled && !pref.altHeldRef.current;
+        const snapped = snapOn
+          ? snapPosition(raw)
+          : { position: raw, guideX: null, guideY: null };
         const next =
           d.kind === 'image'
             ? setImagePosition(d.before, d.targetId, snapped.position.x, snapped.position.y)
@@ -467,6 +520,14 @@ export function PreviewOverlay({
       lastHitScanRef.current = now;
       const el = rootRef.current;
       if (el === null) return;
+      if(nativeMeasurementRef.current){
+        const snapshot=nativeMeasurementRef.current('telop'),origin=el.getBoundingClientRect();
+        const next=snapshot?snapshot.items.flatMap(item=>{
+          if(item.kind!=='telop')return [];
+          const rect=nativeMeasurementRect(snapshot,item,origin);return rect?[{id:item.id,rect}]:[];
+        }):[];
+        setMeasuredHits(prev=>sameHits(prev,next)?prev:next);return;
+      }
       const root = findMeasureRoot(el.parentElement ?? el);
       if (root === null) return;
       const next = measureTelopHits(root, {
@@ -485,6 +546,10 @@ export function PreviewOverlay({
     setMeasuredHits((prev) => (prev.length === 0 ? prev : []));
   }, [state.telops]);
 
+  useEffect(() => {
+    if(readNativeMeasurement)setMeasuredHits(prev=>prev.length?[]:prev);
+  }, [readNativeMeasurement,playbackFrame]);
+
   // stage のリサイズでも捨てる（レターボックスが変わると測定値は全部ずれる）。
   // size は root の ResizeObserver が更新する値なので、これを依存に置けば追従できる。
   useEffect(() => {
@@ -495,11 +560,11 @@ export function PreviewOverlay({
   const hitTelops = useMemo(
     () => {
       // playbackFrame は Player の速度後フレーム。playerToPlayback で再生座標へ戻してから原本へ。
-      const orig = playbackToOriginal(playerToPlayback(playbackFrame, speedView), state.cutRegions, cutOrderingOf(state));
+      const orig = playbackToOriginal(playerToPlayback(playbackFrame, speedView), playbackCutRegions, playbackOrdering);
       return visibleTelopBoxes(state.telops, orig, content, compWidth, compHeight, telopBottomOffset);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [playbackFrame, mainSpeed, speedSegments, playbackOverlaps, state.cutRegions, state.telops, content, compWidth, compHeight, telopBottomOffset],
+    [playbackFrame, mainSpeed, speedSegments, playbackOverlaps, playbackCutRegions, playbackOrdering, state.telops, content, compWidth, compHeight, telopBottomOffset],
   );
 
   // 実測できたテロップだけ矩形を差し替える（測れなかった分は従来式のまま＝補完）。
@@ -516,11 +581,18 @@ export function PreviewOverlay({
   // 再生→原本フレームの変換はテロップのヒット判定と同経路（裁定 P2-4）。
   const visibleShapes = useMemo(
     () => {
-      const orig = playbackToOriginal(playerToPlayback(playbackFrame, speedView), state.cutRegions, cutOrderingOf(state));
+      const orig = playbackToOriginal(playerToPlayback(playbackFrame, speedView), playbackCutRegions, playbackOrdering);
       return state.shapes.filter((s) => s.originalStart <= orig && orig < s.originalEnd);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [playbackFrame, mainSpeed, speedSegments, playbackOverlaps, state.cutRegions, state.shapes],
+    [playbackFrame, mainSpeed, speedSegments, playbackOverlaps, playbackCutRegions, playbackOrdering, state.shapes],
+  );
+
+  // 現在の原本フレーム（案内文と「再生位置の外」判定に使う）。
+  const originalFrameNow = useMemo(
+    () => playbackToOriginal(playerToPlayback(playbackFrame, speedView), playbackCutRegions, playbackOrdering),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playbackFrame, mainSpeed, speedSegments, playbackOverlaps, playbackCutRegions, playbackOrdering, state.selection],
   );
 
   // 図形の編集ドラッグ（本体移動 / ハンドルでリサイズ）。
@@ -919,6 +991,10 @@ export function PreviewOverlay({
       content,
       compW: compWidth,
       compH: compHeight,
+      // 実測（measured.source==='measured'）のときだけ渡す。フォールバック枠（BOX_FRAC_W の
+      // 近似・実際の文字幅と無関係な固定比率）を渡すと、狭い本文まで一律にクランプしてしまい
+      // 正当な移動を止める（実測: PreviewOverlay.multiDrag.test.tsx で回帰確認）。
+      elemWidthPx: narrowKind === 'telop' && boxSource === 'measured' ? box.w : undefined,
       startX: position.x,
       startY: position.y,
       startScale: scale,
@@ -964,6 +1040,44 @@ export function PreviewOverlay({
       cornerY,
     };
     setDragging(true);
+  }
+
+  const safeFps = fps > 0 ? fps : 30;
+  /**
+   * 選択中のテロップが現在の再生位置の**外**にあるとき、そのテロップ。範囲内なら null。
+   * 枠だけが空中に描かれる状態（`after/c1/17b-conflict-after-fix.png`）を防ぐ判定。
+   */
+  const telopAway: EditorTelop | null =
+    narrowKind === 'telop' &&
+    selectedTelop !== undefined &&
+    (originalFrameNow < selectedTelop.originalStart || originalFrameNow >= selectedTelop.originalEnd)
+      ? selectedTelop
+      : null;
+
+  /**
+   * 案内文の時刻（完成尺＝カット後が主・カット前が副）。
+   * インスペクタ見出しと同じ `telopClockCaption` から作り、基準の食い違いを構造的に防ぐ。
+   */
+  const awayClock = ((): TelopClockCaption => {
+    if (telopAway === null) return { playback: null, original: null, note: null };
+    const pbStart = originalToPlayback(telopAway.originalStart, playbackCutRegions, playbackOrdering);
+    const pbEnd = originalToPlayback(telopAway.originalEnd, playbackCutRegions, playbackOrdering, 'end');
+    return telopClockCaption(
+      pbStart ?? telopAway.originalStart,
+      pbEnd ?? telopAway.originalEnd,
+      telopAway.originalStart,
+      telopAway.originalEnd,
+      safeFps,
+      pbStart !== null && pbEnd !== null,
+    );
+  })();
+
+  /** 選択中テロップを、文字が読める可視区間中央で停止表示する。 */
+  function focusTelop(telop: EditorTelop): void {
+    playerRef.current?.pause();
+    const playback = telopFocusPlaybackFrame(telop, playbackCutRegions, playbackOrdering);
+    if (playback === null) return;
+    playerRef.current?.seekTo(playbackToPlayer(playback, speedView));
   }
 
   // ガイド線（正規化）を content 上の画面座標へ変換する。
@@ -1028,6 +1142,33 @@ export function PreviewOverlay({
             style={{ top: guideLineY(n), left: content.x, width: content.w }}
           />
         ))}
+      {/* 選択中のテロップが今の再生位置に出ていないとき（サイクル 4 A-4）。
+          枠とつまみを出すと「中身の無い枠」が画面の何もない所に浮き、掴んでも
+          何が動いているのか分からない。代わりに、いつ出るテロップなのかと
+          そこへ移動する導線を出す。 */}
+      {telopAway !== null ? (
+        <div className="pv-telop-away" role="status">
+          {/* 時刻の基準はインスペクタ（SettingsTab）と同じ関数から作る。
+              原本（カット前）フレームをそのまま出していたため、完成尺 3:18 の動画を見ながら
+              「1:46〜2:10 に表示されます」と出て、同じ画面のインスペクタ（0:08〜0:24）と
+              食い違っていた（44b-telop-away.png・サイクル 4 レビュー Important）。
+              主＝完成尺（カット後）、副＝カット前。断りの無い時刻を 2 通り出さない。 */}
+          <span>
+            {awayClock.playback !== null
+              ? `このテロップは ${awayClock.playback}${awayClock.original !== null ? `（カット前 ${awayClock.original}）` : ''} に表示されます`
+              : `このテロップは カット前 ${awayClock.original ?? ''} に表示されます（${awayClock.note ?? ''}）`}
+          </span>
+          <button
+            type="button"
+            className="pv-telop-away-goto"
+            data-testid="preview-telop-goto"
+            onClick={() => focusTelop(telopAway)}
+          >
+            そこへ移動
+          </button>
+        </div>
+      ) : (
+      <>
       {/* テロップ操作ボックス（枠は表示専用。本体ドラッグ＝移動、四隅ハンドル＝拡縮）。 */}
       <div
         className="pv-telop-box"
@@ -1047,6 +1188,8 @@ export function PreviewOverlay({
           <div key={c} className={`pv-handle ${c}`} onPointerDown={(e) => beginScale(c, e)} />
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }

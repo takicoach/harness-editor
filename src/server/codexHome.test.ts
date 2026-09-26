@@ -317,15 +317,15 @@ describe('prepareCodexHome', () => {
     // 隔離 home を作ってしまう。cwd を汚染しないことを確認するため、実行前後で
     // cwd 直下に `.supermovie` が存在しないことも検査する。
     const editorDir = mkdtempSync(join(tmpdir(), 'sme-codexhome-editor-'));
-    const cwdDotStateDir = join(process.cwd(), '.supermovie');
-    expect(existsSync(cwdDotStateDir)).toBe(false); // 前提: 事前に無いこと
+    const cwdSupermovieDir = join(process.cwd(), '.supermovie');
+    expect(existsSync(cwdSupermovieDir)).toBe(false); // 前提: 事前に無いこと
     try {
       const r = prepareCodexHome(editorDir, { homeDir: () => '' });
       expect(r).toEqual({ env: {}, notes: [FALLBACK_NOTE] });
-      expect(existsSync(cwdDotStateDir)).toBe(false);
+      expect(existsSync(cwdSupermovieDir)).toBe(false);
     } finally {
       rmSync(editorDir, { recursive: true, force: true });
-      rmSync(cwdDotStateDir, { recursive: true, force: true }); // 実装が壊れていた場合の後始末（安全網）
+      rmSync(cwdSupermovieDir, { recursive: true, force: true }); // 実装が壊れていた場合の後始末（安全網）
     }
   });
 });
@@ -359,9 +359,9 @@ describe('codexRuntimeDir（配布 ZIP に資格情報を含めないための�
   });
 
   it('別の場所にある同名フォルダは異なるディレクトリになる（配布 ZIP を各自展開した時に必ず起きる形）', () => {
-    // インストール分離の本丸はここ: 利用者が配布 ZIP を自分の環境で展開すると、
+    // インストール分離の本丸はここ: 受講生が配布 ZIP を自分の環境で展開すると、
     // basename は同じ（例: "harness-editor"）で親ディレクトリだけが違う状態が
-    // 必ず発生する（例: ~/Marketing/.../harness-editor と ~/Downloads/harness-editor）。
+    // 必ず発生する（例: ~/Documents/harness-editor と ~/Downloads/harness-editor）。
     // basename が既に異なる mkdtempSync 同士を比較するだけでは、ハッシュを丸ごと
     // 削っても緑のままになってしまい、この分離を検証できない。
     const parentA = mkdtempSync(join(tmpdir(), 'sme-codexhome-parentA-'));

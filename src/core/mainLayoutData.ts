@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertFiniteNumbers } from './dataModule';
 import {
   DEFAULT_MAIN_LAYOUT,
   isIdentityMainLayout,
@@ -9,6 +9,15 @@ import {
 import { hasPerSegmentLayout, segmentDiffersFromBase } from './segmentLayout';
 import { parseMotion, formatMotion } from './motion';
 import { parse as parseLayoutKeyframeList, format as formatLayoutKeyframeList, type LayoutKeyframe } from './layoutKeyframes';
+import {
+  DEFAULT_COLOR_GRADE,
+  clampColorGradeValue,
+  defaultColorGrade,
+  isIdentityColorGrade,
+  isIdentityColorWheels,
+  normalizeColorWheels,
+  type ColorGrade,
+} from './colorGrade';
 import type { MainLayout, SegmentLayout } from './types';
 
 /** 既定レイアウトの新規コピー（ネスト position も複製）。 */
@@ -59,13 +68,39 @@ function extractSegmentLayouts(m: Record<string, unknown>): Record<number, Segme
     const y = typeof pos.y === 'number' && Number.isFinite(pos.y) ? clampLayoutPos(pos.y) : 0;
     const scale = typeof o.scale === 'number' && Number.isFinite(o.scale) ? clampLayoutScale(o.scale) : 1;
     const rotation = typeof o.rotation === 'number' && Number.isFinite(o.rotation) ? clampRotation(o.rotation) : 0;
-    const motion = parseMotion(o.motion);
+    // メイン動画の区間 motion はキーフレーム非対応。書き出し側の複製
+    // （src/server/mainLayoutPayload/layoutSegments.ts）が 2 点アニメしか解釈しないため、
+    // keys を通すとプレビューだけ動いて書き出しが静止する（黙って食い違う）。
+    // メイン動画の時間変化は大域キーフレーム（LAYOUT_KEYFRAMES）が担当する。
+    const parsedMotion = parseMotion(o.motion);
+    const motion = parsedMotion === undefined
+      ? undefined
+      : (() => { const { keys: _drop, ...rest } = parsedMotion; return rest; })();
     out[id] = {
       position: { x, y }, scale, rotation, flipH: o.flipH === true, flipV: o.flipV === true,
       ...(motion !== undefined ? { motion } : {}),
     };
   }
   return out;
+}
+
+/**
+ * 評価済みモジュール `m` から COLOR_GRADE を取り出す（不在/不正は無補正へフォールバック）。
+ * 旧プロジェクト（COLOR_GRADE を持たない mainLayoutData.ts）は必ず無補正になる。
+ */
+function extractColorGrade(m: Record<string, unknown>): ColorGrade {
+  const raw = m.COLOR_GRADE;
+  if (typeof raw !== 'object' || raw === null) return defaultColorGrade();
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) ? clampColorGradeValue(v) : 0;
+  return {
+    brightness: num(o.brightness),
+    contrast: num(o.contrast),
+    saturation: num(o.saturation),
+    temperature: num(o.temperature),
+    ...(!isIdentityColorWheels(o.wheels) ? { wheels: normalizeColorWheels(o.wheels) } : {}),
+  };
 }
 
 /** 評価済みモジュール `m` から LAYOUT_KEYFRAMES を取り出す（大域配列・不正/不在は空配列）。 */
@@ -80,10 +115,39 @@ function extractLayoutKeyframes(m: Record<string, unknown>): LayoutKeyframe[] {
  */
 export function parseLayoutKeyframesData(source: string | null): LayoutKeyframe[] {
   if (source === null) return [];
+  let m: Record<string, unknown>;
   try {
-    return extractLayoutKeyframes(evalDataModule(source, {}));
+    m = evalDataModule(source, {});
   } catch {
+    // 評価できない（構文エラー等）＝キーフレーム無しとして扱う（従来どおり）。
     return [];
+  }
+  // 評価は通るが値が壊れている場合は握り潰さない（catch の外で投げる）。
+  assertMainLayoutFinite(m);
+  return extractLayoutKeyframes(m);
+}
+
+/**
+ * 評価済みモジュールの数値が有限か検査する（壊れた数値だけを fail-loud にする）。
+ *
+ * このファイルのパーサは「型が違う・欠けている」を既定へフォールバックする設計だが、
+ * **NaN/±Infinity は型が正しいまま壊れている**ため、そのフォールバックに巻き込むと
+ * ユーザーの指定したレイアウト・キーフレームが黙って恒等値へ倒れる（見た目は正常に開き、
+ * 次の保存でその既定が確定して元の値は永久に失われる）。型違いのフォールバックは
+ * 後方互換のため残し、壊れた数値だけをここで止める。
+ */
+function assertMainLayoutFinite(m: Record<string, unknown>): void {
+  assertFiniteNumbers('mainLayoutData.ts', 'MAIN_LAYOUT', m.MAIN_LAYOUT);
+  assertFiniteNumbers('mainLayoutData.ts', 'SEGMENT_LAYOUTS', m.SEGMENT_LAYOUTS);
+  assertFiniteNumbers('mainLayoutData.ts', 'LAYOUT_KEYFRAMES', m.LAYOUT_KEYFRAMES);
+  const grade = m.COLOR_GRADE;
+  if (grade !== null && typeof grade === 'object' && !Array.isArray(grade)) {
+    // Legacy scalar corruption still fails loudly; the new optional wheel
+    // contract explicitly normalizes malformed/non-finite coordinates to zero.
+    const { wheels: _wheels, ...legacy } = grade as Record<string, unknown>;
+    assertFiniteNumbers('mainLayoutData.ts', 'COLOR_GRADE', legacy);
+  } else {
+    assertFiniteNumbers('mainLayoutData.ts', 'COLOR_GRADE', grade);
   }
 }
 
@@ -96,18 +160,27 @@ export function parseMainLayoutFile(source: string | null): {
   layout: MainLayout;
   segmentLayouts: Record<number, SegmentLayout>;
   layoutKeyframes: LayoutKeyframe[];
+  colorGrade: ColorGrade;
 } {
-  if (source === null) return { layout: defaultCopy(), segmentLayouts: {}, layoutKeyframes: [] };
+  const empty = (): {
+    layout: MainLayout;
+    segmentLayouts: Record<number, SegmentLayout>;
+    layoutKeyframes: LayoutKeyframe[];
+    colorGrade: ColorGrade;
+  } => ({ layout: defaultCopy(), segmentLayouts: {}, layoutKeyframes: [], colorGrade: defaultColorGrade() });
+  if (source === null) return empty();
   let m: Record<string, unknown>;
   try {
     m = evalDataModule(source, {});
   } catch {
-    return { layout: defaultCopy(), segmentLayouts: {}, layoutKeyframes: [] };
+    return empty();
   }
+  assertMainLayoutFinite(m);
   return {
     layout: extractMainLayout(m),
     segmentLayouts: extractSegmentLayouts(m),
     layoutKeyframes: extractLayoutKeyframes(m),
+    colorGrade: extractColorGrade(m),
   };
 }
 
@@ -164,10 +237,18 @@ export function serializeMainLayoutData(
   layout: MainLayout,
   segmentLayouts: Record<number, SegmentLayout> = {},
   layoutKeyframes: LayoutKeyframe[] = [],
+  colorGrade: ColorGrade = DEFAULT_COLOR_GRADE,
 ): string | null {
   const perSeg = hasPerSegmentLayout(layout, segmentLayouts);
   const hasKeyframes = layoutKeyframes.length >= 2;
-  if (isIdentityMainLayout(layout) && layout.background === DEFAULT_MAIN_LAYOUT.background && !perSeg && !hasKeyframes) {
+  const hasColor = !isIdentityColorGrade(colorGrade);
+  if (
+    isIdentityMainLayout(layout) &&
+    layout.background === DEFAULT_MAIN_LAYOUT.background &&
+    !perSeg &&
+    !hasKeyframes &&
+    !hasColor
+  ) {
     return null;
   }
   const x = clampLayoutPos(layout.position.x);
@@ -189,9 +270,34 @@ export function serializeMainLayoutData(
     `// Harness Editor が生成・更新します（メイン動画のレイアウト）\n\n` +
     `export const MAIN_LAYOUT = { ${parts.join(', ')} };\n` +
     `export const SEGMENT_LAYOUTS: Record<number, ${segType}> = ${formatSegmentLayouts(layout, segmentLayouts)};\n` +
-    `export const LAYOUT_KEYFRAMES: ${kfType} = ${formatLayoutKeyframes(layoutKeyframes)};\n`
+    `export const LAYOUT_KEYFRAMES: ${kfType} = ${formatLayoutKeyframes(layoutKeyframes)};\n` +
+    formatColorGradeExport(colorGrade)
   );
 }
+
+/**
+ * COLOR_GRADE の export 行。**ファイルを出すときは無補正でも必ず出す**。
+ *
+ * 導入済み案件の `MainVideo.tsx` は `import { COLOR_GRADE } from './mainLayoutData'` を
+ * 静的に持つ。無補正のときだけ export を落とすと「レイアウトは非既定・色は無補正」の
+ * 案件で import が解決できず **`remotion render` がビルドで落ちる**（＝書き出せない）。
+ * 出す/出さないの分岐を持たず、常在させる。
+ *
+ * ファイルそのものを出さない条件（完全既定 → null）は `serializeMainLayoutData` 側にある。
+ * 旧案件（mainLayoutData.ts を持たない）は従来どおり 1 バイトも生えない。
+ */
+export function formatColorGradeExport(colorGrade: ColorGrade): string {
+  const g = colorGrade;
+  return (
+    `export const COLOR_GRADE = { brightness: ${clampColorGradeValue(g.brightness)}, ` +
+    `contrast: ${clampColorGradeValue(g.contrast)}, ` +
+    `saturation: ${clampColorGradeValue(g.saturation)}, ` +
+    `temperature: ${clampColorGradeValue(g.temperature)}` +
+    (!isIdentityColorWheels(g.wheels) ? `, wheels: ${JSON.stringify(normalizeColorWheels(g.wheels))}` : '') +
+    ` };\n`
+  );
+}
+
 
 /**
  * `mainLayoutData.ts` の `SEGMENT_LAYOUTS` を parse する（NaN/範囲外はガード・不在は空マップ）。

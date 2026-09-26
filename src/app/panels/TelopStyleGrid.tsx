@@ -5,36 +5,16 @@ import {
   useEffect,
   useRef,
   useState,
-  type ComponentType,
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { Thumbnail } from '@remotion/player';
 import type { TelopComponent } from '../../preview/loadTelopComponent';
+import { acquireNativeTelop, cachedNativeTelop, type NativeTelopRevision } from '../../preview/nativeTelopCache';
+import { NativeTelopSwatch } from './NativeTelopSwatch';
 import { TELOP_PACK } from '../../server/telopPack/manifest';
 
-// スウォッチ描画用の合成尺。中間フレームを描けばフェードイン/アウトを避けられる。
-const SWATCH_DURATION = 60;
-const SWATCH_FRAME = Math.floor(SWATCH_DURATION / 2);
-// サンプル文字変更で30枚を同時再描画するカクつきを抑えるデバウンス。
+// サンプル文字変更で全スタイルを同時再描画するカクつきを抑えるデバウンス。
 const DEBOUNCE_MS = 250;
-
-interface SwatchSegment {
-  text: string;
-  startFrame: number;
-  endFrame: number;
-  template: number;
-}
-
-interface SwatchProps extends Record<string, unknown> {
-  telopComponent: TelopComponent;
-  segment: SwatchSegment;
-}
-
-/** Thumbnail の component。inputProps を受けて本物アダプタを1スタイル描画する薄ラッパ。 */
-const SwatchComposition: ComponentType<SwatchProps> = ({ telopComponent: Telop, segment }) => (
-  <Telop segment={segment} />
-);
 
 /** 値が ms 変化しなくなってから反映するデバウンス。 */
 function useDebouncedValue<T>(value: T, ms: number): T {
@@ -71,9 +51,12 @@ function useInView(ref: { current: Element | null }): boolean {
   return inView;
 }
 
-/** 1スタイルの Thumbnail 描画失敗を握りつぶし、名前表示にフォールバックする境界。 */
-class CellBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
+/** 1スタイルの描画失敗を名前表示へ戻す境界。 */
+class CellBoundary extends Component<{ fallback: ReactNode; children: ReactNode; component: TelopComponent }, { failed: boolean; component: TelopComponent }> {
+  state = { failed: false, component: this.props.component };
+  static getDerivedStateFromProps(props: { component: TelopComponent }, state: { component: TelopComponent }) {
+    return props.component === state.component ? null : { failed: false, component: props.component };
+  }
   static getDerivedStateFromError(): { failed: boolean } {
     return { failed: true };
   }
@@ -83,7 +66,7 @@ class CellBoundary extends Component<{ fallback: ReactNode; children: ReactNode 
 }
 
 interface SwatchCellProps {
-  telopComponent: TelopComponent;
+  telopComponent?: TelopComponent;
   templateId: number;
   name: string;
   sampleText: string;
@@ -107,7 +90,6 @@ const SwatchCell = memo(function SwatchCell({
 }: SwatchCellProps) {
   const ref = useRef<HTMLButtonElement>(null);
   const inView = useInView(ref);
-  const segment: SwatchSegment = { text: sampleText, startFrame: 0, endFrame: SWATCH_DURATION, template: templateId };
   // 歪み防止：描画ボックスのアスペクトを実解像度に合わせる（CSS 変数で渡す）。
   const stageStyle = { ['--comp-aspect']: String(width / height) } as CSSProperties;
   const placeholder = <span className="ins-style-cell-ph">{name}</span>;
@@ -120,19 +102,10 @@ const SwatchCell = memo(function SwatchCell({
       title={name}
     >
       <span className="ins-style-cell-stage" style={stageStyle}>
-        {inView ? (
-          <CellBoundary fallback={placeholder}>
+        {inView && telopComponent ? (
+          <CellBoundary fallback={placeholder} component={telopComponent}>
             <span className="swatch-fit">
-              <Thumbnail
-                component={SwatchComposition}
-                inputProps={{ telopComponent, segment }}
-                compositionWidth={width}
-                compositionHeight={height}
-                durationInFrames={SWATCH_DURATION}
-                fps={fps}
-                frameToDisplay={SWATCH_FRAME}
-                style={{ width: '100%', height: '100%' }}
-              />
+              <NativeTelopSwatch Telop={telopComponent} text={sampleText} template={templateId} width={width} height={height} fps={fps} />
             </span>
           </CellBoundary>
         ) : (
@@ -145,20 +118,22 @@ const SwatchCell = memo(function SwatchCell({
 });
 
 interface TelopStyleGridProps {
-  /** プロジェクト導入済みの本物アダプタ。 */
-  telopComponent: TelopComponent;
+  projectId: string;
+  /** Stable across ordinary edits, replaced after successful project reload. */
+  componentRevision: NativeTelopRevision;
   previewWidth: number;
   previewHeight: number;
   fps: number;
   /** 既に swatchSampleText 適用済みの表示文字列。 */
   sampleText: string;
-  /** resolveTemplate 済みの現在のテンプレ番号（1..TELOP_PACK.length）。 */
+  /** resolveTemplate 済みの現在のテンプレ番号（1..30）。 */
   currentTemplate: number;
   onSelect: (id: number) => void;
 }
 
 export function TelopStyleGrid({
-  telopComponent,
+  projectId,
+  componentRevision,
   previewWidth,
   previewHeight,
   fps,
@@ -166,17 +141,32 @@ export function TelopStyleGrid({
   currentTemplate,
   onSelect,
 }: TelopStyleGridProps) {
+  const [loaded, setLoaded] = useState<{ projectId: string; source: NativeTelopRevision; component?: TelopComponent; error?: string }>();
+  useEffect(() => {
+    const lease = acquireNativeTelop(projectId, componentRevision);
+    let live = true;
+    void lease.promise.then(component => {
+      if (live) setLoaded({ projectId, source: componentRevision, component });
+    }, error => {
+      if (live) setLoaded({ projectId, source: componentRevision, error: error instanceof Error ? error.message : 'スタイルの見本を読み込めませんでした' });
+    });
+    return () => { live = false; lease.release(); };
+  }, [projectId, componentRevision]);
+  const current = loaded?.projectId === projectId && loaded.source === componentRevision ? loaded : undefined;
+  const component = cachedNativeTelop(projectId, componentRevision) ?? current?.component;
   const debouncedText = useDebouncedValue(sampleText, DEBOUNCE_MS);
   // onSelect の同一性が毎描画で変わっても SwatchCell の memo を効かせるため ref 経由で安定化。
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const stableSelect = useCallback((id: number) => onSelectRef.current(id), []);
   return (
+    <>
+    {current?.error && <p role="alert">スタイルの見本を表示できません。名前から選択できます。{current.error}</p>}
     <div className="ins-style-grid">
       {TELOP_PACK.map((e) => (
         <SwatchCell
           key={e.id}
-          telopComponent={telopComponent}
+          telopComponent={component}
           templateId={e.id}
           name={e.name}
           sampleText={debouncedText}
@@ -188,5 +178,6 @@ export function TelopStyleGrid({
         />
       ))}
     </div>
+    </>
   );
 }

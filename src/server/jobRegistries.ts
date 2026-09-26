@@ -16,6 +16,8 @@ import { normalizeJobs } from './normalizeApi';
 import { renderJobs } from './renderApi';
 import { previewProxyJobs } from './previewProxyApi';
 import type { JobLookup } from './projectBusy';
+import { sequenceTranscriptions } from './sequence/transcriptions';
+import { sequenceExports } from './sequence/exports';
 
 /** busy 照会（get）と後始末（killAll）の両方に使える、プロジェクト単位のジョブ登録簿。 */
 export interface ProjectJobManager extends JobLookup {
@@ -29,6 +31,8 @@ export interface ProjectJobManager extends JobLookup {
 export const PROJECT_JOB_MANAGERS: Record<string, ProjectJobManager> = {
   render: renderJobs,
   transcribe: transcribeJobs,
+  nativeTranscribe: sequenceTranscriptions,
+  nativeRender: sequenceExports,
   denoise: denoiseJobs,
   normalize: normalizeJobs,
   previewProxy: previewProxyJobs,

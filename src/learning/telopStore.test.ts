@@ -19,8 +19,8 @@ const entry = (
 });
 
 describe('telopStore', () => {
-  beforeEach(() => { process.env.HARNESS_LEARNING_HOME = mkdtempSync(join(tmpdir(), 'sme-learn-')); });
-  afterEach(() => { delete process.env.HARNESS_LEARNING_HOME; });
+  beforeEach(() => { process.env.SUPERMOVIE_LEARNING_HOME = mkdtempSync(join(tmpdir(), 'sme-learn-')); });
+  afterEach(() => { delete process.env.SUPERMOVIE_LEARNING_HOME; });
 
   it('recordApprovedTelopFeedback は jsonl 追記と telop_rules.json 更新を行う（異なる動画で2回観測）', () => {
     recordApprovedTelopFeedback([entry('素振りする', '素振りをする', { videoId: 'v1' })]);

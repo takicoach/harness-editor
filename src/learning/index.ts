@@ -1,4 +1,4 @@
-// ハーネス学習ループ（LL Phase A）の公開 API。
+// ハーネス形式学習ループ（LL Phase A）の公開 API。
 export * from './types';
 export { learnStart, learnFinish, TRACKED_FILES } from './learn';
 export { runCli, type CliResult } from './cli';
@@ -23,6 +23,7 @@ export {
   saveCutRules,
   recordApprovedCutFeedback,
   countUndistilledFeedback,
+  countJsonlLines,
 } from './cutStore';
 export {
   applyTelopFeedback,

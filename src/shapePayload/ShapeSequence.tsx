@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sequence } from 'remotion';
+import { Sequence } from '@harness/frame-runtime';
 import { InsertShape } from './InsertShape';
 import { shapeData } from './shapeData';
 import type { ShapeSegment } from './types';

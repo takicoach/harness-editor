@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { loadProject, validateProject, type ProjectFiles } from '../core';
 import type { EditorProject, ValidationResult } from '../core/types';
@@ -14,12 +14,16 @@ import { isBgmInstalled } from './installBgm';
 import { isShapeInstalled } from './installShape';
 import { isTransitionInstalled } from './installTransition';
 import { isDenoiseApplied } from './denoiseState';
+import { detectMotionKeysSupport, type MotionKeysSupport } from './motionKeysSupport';
+import { detectColorGradeSupport, detectColorWheelsSupport } from './colorGradeSupport';
+import { detectMainAudioSupport } from './mainAudioSupport';
+import { detectImageRenderingSupport, type ImageRenderingSupport } from './installImageRendering';
 import { inspectVideoLink, type VideoLinkStatus } from './videoLink';
 import { VIDEO_EXTENSIONS } from '../shared/videoExtensions';
 
 const TELOP_DIR = 'テロップテンプレート';
 const TELOP_DATA_REL = `src/${TELOP_DIR}/telopData.ts`;
-// cutData.ts は ハーネス形式の出力位置が一定しないため複数候補を探す。無ければカット無し。
+// cutData.ts はハーネス形式の出力位置が一定しないため複数候補を探す。無ければカット無し。
 const CUT_DATA_CANDIDATES = ['cutData.ts', 'src/cutData.ts', `src/${TELOP_DIR}/cutData.ts`];
 const SE_DATA_REL = 'src/SoundEffects/seData.ts';
 /** SE 素材として認識する拡張子（uploadMaterial と共有）。 */
@@ -40,6 +44,9 @@ const INSERT_SHAPE_DATA_REL = 'src/InsertShape/shapeData.ts';
 const TRANSITION_DATA_REL = 'src/Transition/transitionData.ts';
 const SPEED_DATA_REL = 'src/speedData.ts';
 const MAIN_LAYOUT_DATA_REL = 'src/mainLayoutData.ts';
+const MAIN_AUDIO_DATA_REL = 'src/mainAudioData.ts';
+export const SCRIPT_DOCUMENT_REL = 'shooting-script.json';
+export const EDITOR_TIMELINE_REL = 'editor-timeline.json';
 
 function readRequired(dir: string, rel: string, label: string): string {
   const path = join(dir, rel);
@@ -156,6 +163,8 @@ export function readProjectFiles(dir: string): ProjectFiles {
     telopDataSource: readRequired(dir, TELOP_DATA_REL, 'テロップデータ telopData.ts'),
     cutDataSource,
     transcriptJson: readRequired(dir, 'transcript.json', '文字起こし transcript.json'),
+    scriptDocumentJson: readOptional(dir, SCRIPT_DOCUMENT_REL),
+    editorTimelineJson: readOptional(dir, EDITOR_TIMELINE_REL),
     projectConfigJson: readOptional(dir, 'project-config.json'),
     seDataSource: readOptional(dir, SE_DATA_REL),
     insertImageDataSource: readOptional(dir, INSERT_IMAGE_DATA_REL),
@@ -166,6 +175,7 @@ export function readProjectFiles(dir: string): ProjectFiles {
     transitionDataSource: readOptional(dir, TRANSITION_DATA_REL),
     speedDataSource: readOptional(dir, SPEED_DATA_REL),
     mainLayoutDataSource: readOptional(dir, MAIN_LAYOUT_DATA_REL),
+    mainAudioDataSource: readOptional(dir, MAIN_AUDIO_DATA_REL),
   };
 }
 
@@ -182,6 +192,9 @@ export interface SaveMeta {
   transitionDataRelPath: string;
   speedDataRelPath: string;
   mainLayoutDataRelPath: string;
+  mainAudioDataRelPath: string;
+  scriptDocumentRelPath: string;
+  editorTimelineRelPath: string;
   fingerprint: ProjectFingerprint;
 }
 
@@ -228,6 +241,20 @@ export interface LoadedProject {
   shapeInstalled: boolean;
   /** denoise.json marker が applied=true か（ノイズ除去適用済み判定）。 */
   denoiseApplied: boolean;
+  /**
+   * キーフレーム（motion.keys）が書き出しへ反映されるか（部品の版で決まる・F-1）。
+   * 未対応の案件では UI が注意書きを出す（黙って効かないのを防ぐ）。
+   */
+  motionKeysSupport: MotionKeysSupport;
+  imageRendering: ImageRenderingSupport;
+  /**
+   * カラー補正（COLOR_GRADE）が書き出しへ反映されるか（部品の版と配線で決まる・F-2）。
+   * 未対応の案件では UI が注意書きを出す（プレビューだけ変わる事故を防ぐ）。
+   */
+  colorGradeSupported: boolean;
+  colorWheelsSupported: boolean;
+  /** 後続のpreview/payload接続まではfalse。非既定設定を黙って適用済みに見せない。 */
+  mainAudioSupported: boolean;
 }
 
 /** プロジェクトを読み込み、コアの検証と保存メタデータを併せて返す。失敗は HttpError(400)。 */
@@ -284,6 +311,9 @@ export function loadProjectFromDir(dir: string): LoadedProject {
     transitionDataRelPath: TRANSITION_DATA_REL,
     speedDataRelPath: SPEED_DATA_REL,
     mainLayoutDataRelPath: MAIN_LAYOUT_DATA_REL,
+    mainAudioDataRelPath: MAIN_AUDIO_DATA_REL,
+    scriptDocumentRelPath: SCRIPT_DOCUMENT_REL,
+    editorTimelineRelPath: EDITOR_TIMELINE_REL,
     fingerprint: {
       telopData: telopFp,
       cutData: fingerprintFile(join(dir, cutDataRelPath), cutDataRelPath),
@@ -296,6 +326,9 @@ export function loadProjectFromDir(dir: string): LoadedProject {
       transitionData: fingerprintFile(join(dir, TRANSITION_DATA_REL), TRANSITION_DATA_REL),
       speedData: fingerprintFile(join(dir, SPEED_DATA_REL), SPEED_DATA_REL),
       mainLayoutData: fingerprintFile(join(dir, MAIN_LAYOUT_DATA_REL), MAIN_LAYOUT_DATA_REL),
+      mainAudioData: fingerprintFile(join(dir, MAIN_AUDIO_DATA_REL), MAIN_AUDIO_DATA_REL),
+      scriptDocument: fingerprintFile(join(dir, SCRIPT_DOCUMENT_REL), SCRIPT_DOCUMENT_REL),
+      editorTimeline: fingerprintFile(join(dir, EDITOR_TIMELINE_REL), EDITOR_TIMELINE_REL),
     },
   };
   // 原本の有無と「プレビューできる動画の有無」を分ける。原本が外付け上にあり未接続でも、
@@ -307,9 +340,12 @@ export function loadProjectFromDir(dir: string): LoadedProject {
   // 「実際に配信されるファイル」で取る（プロキシ生成完了→再読込で URL が変わり切り替わる）。
   const servedVideoPath = resolvePreviewVideoPath(join(dir, 'public'), project.videoConfig.videoFile);
   const hasVideo = existsSync(servedVideoPath);
-  const videoStat = hasVideo ? statSync(servedVideoPath) : null;
-  const videoVersion =
-    videoStat === null ? null : versionToken(videoStat.size, videoStat.mtimeMs);
+  // fingerprintFile を経由する: 生の statSync 直呼びだと existsSync 通過後にファイルが
+  // 消える/権限エラーになるレースで例外が飛び 500 化する（fileFingerprint.ts と同じ失敗モード）。
+  // videoVersion は波形キャッシュのバスターと /api/video の &v= を兼ねるため、取得失敗時は
+  // 「バージョン無し」（&v= 無しの従来 URL）にフォールバックし、プレビュー自体は止めない。
+  const videoFp = hasVideo ? fingerprintFile(servedVideoPath, project.videoConfig.videoFile) : null;
+  const videoVersion = videoFp === null ? null : versionToken(videoFp.size, videoFp.mtimeMs);
   const seLibrary = listAssetFiles(dir, 'se', AUDIO_EXTENSIONS);
   const imageLibrary = listAssetFilesRecursive(dir, 'images', IMAGE_EXTENSIONS);
   const telopPackInstalled = isTelopPackInstalled(dir);
@@ -324,5 +360,8 @@ export function loadProjectFromDir(dir: string): LoadedProject {
   const transitionInstalled = isTransitionInstalled(dir);
   const shapeInstalled = isShapeInstalled(dir);
   const denoiseApplied = isDenoiseApplied(dir);
-  return { project, validation, save, hasVideo, sourceAvailable, videoLink, videoVersion, seLibrary, imageLibrary, telopPackInstalled, videoLibrary, videoInsertInstalled, bgmLibrary, assetVersions, bgmInstalled, transitionInstalled, shapeInstalled, denoiseApplied };
+  const motionKeysSupport = detectMotionKeysSupport(dir);
+  const colorGradeSupported = detectColorGradeSupport(dir);
+  const colorWheelsSupported = detectColorWheelsSupport(dir);
+  return { project, validation, save, hasVideo, sourceAvailable, videoLink, videoVersion, seLibrary, imageLibrary, telopPackInstalled, videoLibrary, videoInsertInstalled, bgmLibrary, assetVersions, bgmInstalled, transitionInstalled, shapeInstalled, denoiseApplied, motionKeysSupport, imageRendering: detectImageRenderingSupport(dir), colorGradeSupported, colorWheelsSupported, mainAudioSupported: detectMainAudioSupport(dir) };
 }

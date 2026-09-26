@@ -11,7 +11,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { EditorProject, EditorTelop } from '../../core/types';
 import type { EditState } from '../edit/editState';
 import { useEditSession } from '../useEditSession';
@@ -105,7 +105,6 @@ function Harness({ project }: { project: EditorProject }) {
         {JSON.stringify(state.telops.map((t) => ({ id: t.id, start: t.originalStart, end: t.originalEnd })))}
       </div>
       <Timeline
-        videoDurations={{}}
         session={session}
         baseProject={project}
         playerRef={playerRef}

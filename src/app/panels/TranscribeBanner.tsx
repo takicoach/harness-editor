@@ -47,30 +47,35 @@ export function TranscribeBanner({ projectId, onReloadRequested }: TranscribeBan
   }, [state.kind, state.kind === 'running' ? state.startedAt : 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onStart = async (): Promise<void> => {
-    setState({ kind: 'starting' });
+    const starting = { kind: 'starting' } as const;
+    setState(starting);
+    // A terminal SSE event may arrive before the POST response. Only this
+    // request's untouched starting state can be settled by that response.
+    const settleStart = (next: BannerState): void => {
+      setState(prev => prev === starting ? next : prev);
+    };
     try {
       const outcome = await heavyJobConfirm.start(`/api/transcribe?id=${encodeURIComponent(projectId)}`, {
         method: 'POST',
       });
       if (outcome === 'cancelled') {
-        setState({ kind: 'idle' });
+        settleStart({ kind: 'idle' });
         return;
       }
       const res = outcome;
       if (!res.ok) {
         const body: { error?: string } = await res.json().catch(() => ({}));
         const code = body.error ?? 'unknown';
-        setState({
+        settleStart({
           kind: 'failed',
           error: { code, message: body.error ?? `HTTP ${res.status}` },
         });
         return;
       }
       const body: { startedAt: number } = await res.json();
-      setState({ kind: 'running', phase: 'starting', startedAt: body.startedAt });
-      // SSE 接続は state.kind を deps にした useEffect が張り直す。
+      settleStart({ kind: 'running', phase: 'starting', startedAt: body.startedAt });
     } catch (e) {
-      setState({ kind: 'failed', error: { code: 'network', message: String(e) } });
+      settleStart({ kind: 'failed', error: { code: 'network', message: String(e) } });
     }
   };
 
@@ -79,9 +84,13 @@ export function TranscribeBanner({ projectId, onReloadRequested }: TranscribeBan
     // cancelled イベントは SSE で来るので setState はそこに任せる
   };
 
+  // status-ia-6: キャンセル／失敗の終端状態から idle へ戻す。
+  // これが無いと読み込み直すまで「もう一度実行」が二度と出ない。
+  const onDismiss = (): void => setState({ kind: 'idle' });
+
   return (
     <div className={`tx-misalign tx-misalign-${state.kind}`} role="status">
-      {renderContent(state, elapsedSec, onStart, onCancel, onReloadRef.current)}
+      {renderContent(state, elapsedSec, onStart, onCancel, onReloadRef.current, onDismiss)}
       {heavyJobConfirm.pendingConfirm ? (
         <HeavyJobConfirmDialog
           running={heavyJobConfirm.pendingConfirm.running}
@@ -99,13 +108,14 @@ function renderContent(
   onStart: () => void,
   onCancel: () => void,
   onReload: () => void,
+  onDismiss: () => void,
 ): ReactNode {
   if (state.kind === 'idle') {
     return (
       <>
-        <span>transcript と動画の長さが大きく異なるため、単語チップ（クリックでカット）は無効化されています。</span>
+        <span>文字起こしと動画の長さが大きく異なるため、単語チップ（クリックでカット）は無効化されています。</span>
         <button className="tx-misalign-btn" onClick={onStart}>
-          video から transcript を作り直す（推定 1-3 分）
+          動画から文字起こしを作り直す（推定 1-3 分）
         </button>
       </>
     );
@@ -117,7 +127,7 @@ function renderContent(
     const phaseJa = phaseLabel(state.phase);
     return (
       <>
-        <span>再 transcribe 中… {phaseJa}　経過 {elapsedSec} 秒</span>
+        <span>文字起こしをやり直しています… {phaseJa}　経過 {elapsedSec} 秒</span>
         <button className="tx-misalign-btn ghost" onClick={onCancel}>キャンセル</button>
       </>
     );
@@ -125,16 +135,38 @@ function renderContent(
   if (state.kind === 'completed') {
     return (
       <>
-        <span>✓ 再 transcribe 完了。反映するには再読込してください。</span>
+        <span>✓ 文字起こしのやり直しが完了しました。反映するには再読込してください。</span>
         <button className="tx-misalign-btn" onClick={onReload}>再読込</button>
       </>
     );
   }
+  // status-ia-6: 終端状態（キャンセル／失敗）で固まらせない。押し直せば再実行でき、
+  // 閉じれば「単語チップが無効な理由」の案内（idle）へ戻る。
   if (state.kind === 'cancelled') {
-    return <span>キャンセルしました。</span>;
+    return (
+      <>
+        <span>キャンセルしました。</span>
+        <button className="tx-misalign-btn" data-testid="transcribe-retry" onClick={onStart}>
+          もう一度実行
+        </button>
+        <button className="tx-misalign-btn ghost" data-testid="transcribe-dismiss" onClick={onDismiss}>
+          閉じる
+        </button>
+      </>
+    );
   }
   if (state.kind === 'failed') {
-    return <span>失敗しました: {errorMessage(state.error)}</span>;
+    return (
+      <>
+        <span className="sme-error">失敗しました: {errorMessage(state.error)}</span>
+        <button className="tx-misalign-btn" data-testid="transcribe-retry" onClick={onStart}>
+          もう一度実行
+        </button>
+        <button className="tx-misalign-btn ghost" data-testid="transcribe-dismiss" onClick={onDismiss}>
+          閉じる
+        </button>
+      </>
+    );
   }
   return null;
 }
@@ -154,7 +186,7 @@ function errorMessage(error: { code: string; message: string }): string {
     case 'no-whisper-backend':
       return 'Whisper が見つかりません。Mac: pip install mlx-whisper / Windows: pip install openai-whisper を実行してから再度お試しください';
     case 'video-not-found':
-      return 'main.mp4 が見つかりません';
+      return '動画ファイルが見つかりません（保存先を確認してください）';
     case 'video-unreadable':
       return '動画ファイルが読めません';
     case 'params-invalid':

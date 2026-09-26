@@ -1,7 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { openEditor } from './helpers';
+import { cancelRenderJob, openEditor, useTempProject } from './helpers';
 
 // 重ジョブ負荷確認ダイアログ（HeavyJobConfirmDialog）の e2e。
 //
@@ -16,22 +14,20 @@ import { openEditor } from './helpers';
 // force=1 で再送する／中止する」という Task 5 のクライアント側契約を、他 spec に影響を
 // 与えず検証できる。
 
-const FIXTURE_DIR = resolve(import.meta.dirname, '../src/server/__fixtures__/sample-project');
+// 共有 sample-project は smoke.spec.ts の afterEach（git checkout / git clean）が
+// 実行中ずっと書き換え続けるため、その窓に重なって開くと壊れた状態を読む
+// （実測: 「[telopData.ts] telopData 配列が見つかりません」で editor が止まる）。
+// 専用コピーへ隔離する（helpers.ts の useTempProject）。
+const projectId = useTempProject('heavy-job-tmp');
 
 test.afterEach(async ({ request }) => {
   // render ジョブマネージャは server 側シングルトン。テスト完了前に残ると
   // 次テストが running/done を拾ってしまうため、残ジョブを破棄する
   // （render-button.spec.ts と同型のクリーンアップ）。
-  await request.delete('/api/render?id=sample-project').catch(() => {});
-});
-
-test.afterEach(() => {
-  try {
-    execSync(`git checkout -- "${FIXTURE_DIR}"`, { stdio: 'ignore' });
-    execSync(`git clean -fdx "${FIXTURE_DIR}"`, { stdio: 'ignore' });
-  } catch {
-    // git 管理外環境（CI キャッシュなど）では無視する
-  }
+  // 1 回投げるだけだと、まだジョブ登録が済んでいない瞬間の DELETE が 404 で捨てられ、
+  // 直後に登録されたジョブが止まらないまま走り続ける（残骸が間欠的に出る原因）。
+  // 登録が済むまで短く送り直す。
+  await cancelRenderJob(request, projectId());
 });
 
 /** 書き出しボタン → プリセットダイアログ → 開始、まで進める共通ヘルパ（render-button.spec.ts と同型）。 */
@@ -82,7 +78,7 @@ test('render 実行中に見立てた409で確認ダイアログが表示され�
   });
 
   await mockConfirmationRequired(page);
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   await startExport(page);
 
@@ -111,7 +107,7 @@ test('[それでも実行] で force=1 付き再送により書き出しが開�
   });
 
   await mockConfirmationRequired(page);
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   await startExport(page);
 

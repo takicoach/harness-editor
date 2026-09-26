@@ -9,7 +9,7 @@ export interface SeDiffItem {
   nearbyText: string;
 }
 
-/** endFrame 省略時は旧データ互換で 90 フレーム区間とみなす（SE 区間の既定長の契約と同式）。 */
+/** endFrame 省略時は旧データ互換で 90 フレーム区間とみなす（SE の区間の既定と同式）。 */
 function seEnd(s: SoundEffect): number {
   return s.endFrame ?? s.startFrame + 90;
 }

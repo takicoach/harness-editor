@@ -179,7 +179,7 @@ describe('saveProjectToDir', () => {
       };
       const firstRes = saveProjectToDir(dir, firstReq);
       expect(firstRes.fingerprint.seData).not.toBeNull();
-      // 保存先は ハーネス形式の seData.ts なのでフィールド名は startFrame（再生フレーム）。
+      // 保存先はハーネス形式の seData.ts なのでフィールド名は startFrame（再生フレーム）。
       expect(readFileSync(seAbs, 'utf8')).toContain('startFrame: 50');
 
       // 2) クライアント側 baseProject.seDataSource は null のまま（読込時スナップショット）
@@ -272,6 +272,57 @@ describe('saveProjectToDir', () => {
       }
       // 書き込まれていない（外部編集マーカーが残る）
       expect(readFileSync(telopPath, 'utf8')).toContain('外部編集');
+    });
+  });
+
+  /**
+   * 保存衝突からの復帰（2026-09-04 のデータ損失）。
+   * 同じプロジェクトを複数の画面が開けるため、後から保存した側が全ファイルを書き戻し、
+   * 先に開いていた側は 409 で保存不能になる。従来は「開き直してください」しか出口が無く、
+   * 開き直すと未保存の編集が消えた。利用者が明示的に選んだときだけ上書きを許す。
+   */
+  it('overwrite:true なら外部変更を検知しても利用者の内容で上書きする', () => {
+    withProjectCopy((dir) => {
+      const loaded = loadProjectFromDir(dir);
+      const telopPath = join(dir, 'src', 'テロップテンプレート', 'telopData.ts');
+      writeFileSync(telopPath, readFileSync(telopPath, 'utf8') + '\n// 外部編集\n', 'utf8');
+      const req: SaveRequest = {
+        project: loaded.project,
+        fingerprint: loaded.save.fingerprint,
+        overwrite: true,
+      };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+      // 外部編集は利用者の内容で置き換わる
+      expect(readFileSync(telopPath, 'utf8')).not.toContain('外部編集');
+      // 返る指紋は書き戻し後の実ファイルと一致する（次回保存が即 409 にならない）
+      const st = statSync(telopPath);
+      expect(res.fingerprint.telopData.size).toBe(st.size);
+    });
+  });
+
+  it('overwrite が無い/false なら従来どおり 409（既定は安全側）', () => {
+    withProjectCopy((dir) => {
+      const loaded = loadProjectFromDir(dir);
+      const telopPath = join(dir, 'src', 'テロップテンプレート', 'telopData.ts');
+      writeFileSync(telopPath, readFileSync(telopPath, 'utf8') + '\n// 外部編集\n', 'utf8');
+      const base = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      expect(() => saveProjectToDir(dir, base as SaveRequest)).toThrow(HttpError);
+      expect(() => saveProjectToDir(dir, { ...base, overwrite: false } as SaveRequest)).toThrow(
+        HttpError,
+      );
+      expect(readFileSync(telopPath, 'utf8')).toContain('外部編集');
+    });
+  });
+
+  it('validateSaveRequest は overwrite が真偽値でなければ弾く', () => {
+    withProjectCopy((dir) => {
+      const loaded = loadProjectFromDir(dir);
+      const base = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      expect(() => validateSaveRequest({ ...base, overwrite: 'yes' })).toThrow(/overwrite/);
+      // 未指定・真偽値は通る（旧クライアント互換）
+      expect(() => validateSaveRequest(base)).not.toThrow();
+      expect(() => validateSaveRequest({ ...base, overwrite: true })).not.toThrow();
     });
   });
 });
@@ -858,6 +909,305 @@ describe('saveProjectToDir — レイアウト導入済みは speedData.ts を�
       // レイアウト導入済みなので speedData.ts が作成（保持）される。
       expect(existsSync(speedAbs)).toBe(true);
       expect(readFileSync(speedAbs, 'utf8')).toContain('MAIN_SPEED = 1');
+    });
+  });
+});
+
+describe('saveProjectToDir — サブ動画 endAt のソース長クランプ (A-2)', () => {
+  it('ソース実長(cam2.mp4=0.5s=30fr@60fps)を超える設定は保存時に originalEnd がソース長内へ縮む', () => {
+    withProjectCopy((dir) => {
+      const insertVideoDir = join(dir, 'src', 'InsertVideo');
+      mkdirSync(insertVideoDir, { recursive: true });
+      // sourceInFrame=5 + 消費長30(=endFrame-startFrame) = 35 > ソース長30（超過）。
+      writeFileSync(
+        join(insertVideoDir, 'insertVideoData.ts'),
+        `import type { VideoInsert } from './types';
+export const insertVideoData: VideoInsert[] = [
+  { id: 1, startFrame: 10, endFrame: 40, file: "sub/cam2.mp4", sourceInFrame: 5 },
+];
+`,
+        'utf8',
+      );
+      const loaded = loadProjectFromDir(dir);
+      const req: SaveRequest = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+
+      const reloaded = loadProjectFromDir(dir);
+      const vi = (reloaded.project.videoInserts ?? []).find((v) => v.id === 1);
+      expect(vi).toBeDefined();
+      // クランプ後は sourceInFrame + 消費長 がソース長(30fr)以内でなければならない。
+      expect(vi!.sourceInFrame + (vi!.originalEnd - vi!.originalStart)).toBeLessThanOrEqual(30);
+      // originalStart・sourceInFrame は不変（非破壊・イン点は動かさず終わりだけ詰める）。
+      expect(vi!.originalStart).toBe(10);
+      expect(vi!.sourceInFrame).toBe(5);
+    });
+  });
+
+  it('C-2: クランプが起きたら応答にも正規化後の値を返す（画面がディスクと無言で食い違わないため）', () => {
+    withProjectCopy((dir) => {
+      const insertVideoDir = join(dir, 'src', 'InsertVideo');
+      mkdirSync(insertVideoDir, { recursive: true });
+      writeFileSync(
+        join(insertVideoDir, 'insertVideoData.ts'),
+        `import type { VideoInsert } from './types';
+export const insertVideoData: VideoInsert[] = [
+  { id: 1, startFrame: 10, endFrame: 40, file: "sub/cam2.mp4", sourceInFrame: 5 },
+];
+`,
+        'utf8',
+      );
+      const loaded = loadProjectFromDir(dir);
+      const req: SaveRequest = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+
+      const reloaded = loadProjectFromDir(dir);
+      const vi = (reloaded.project.videoInserts ?? []).find((v) => v.id === 1);
+      expect(vi).toBeDefined();
+
+      // 応答の clampedVideoInserts が、実際にディスクへ書かれたクランプ後の値と一致する。
+      expect(res.clampedVideoInserts).toBeDefined();
+      expect(res.clampedVideoInserts).toEqual([{ id: 1, originalEnd: vi!.originalEnd }]);
+    });
+  });
+
+  it('C-2: クランプが起きなければ clampedVideoInserts を返さない', () => {
+    withProjectCopy((dir) => {
+      const insertVideoDir = join(dir, 'src', 'InsertVideo');
+      mkdirSync(insertVideoDir, { recursive: true });
+      // sourceInFrame=0 + 消費長10 = 10 <= ソース長30（超過なし）。
+      writeFileSync(
+        join(insertVideoDir, 'insertVideoData.ts'),
+        `import type { VideoInsert } from './types';
+export const insertVideoData: VideoInsert[] = [
+  { id: 1, startFrame: 10, endFrame: 20, file: "sub/cam2.mp4", sourceInFrame: 0 },
+];
+`,
+        'utf8',
+      );
+      const loaded = loadProjectFromDir(dir);
+      const req: SaveRequest = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+      expect(res.clampedVideoInserts ?? []).toEqual([]);
+    });
+  });
+
+  it('X-2(a): 再生可能フレームが残っていないサブ動画は unplayableVideoInserts として応答へ載せる', () => {
+    withProjectCopy((dir) => {
+      const insertVideoDir = join(dir, 'src', 'InsertVideo');
+      mkdirSync(insertVideoDir, { recursive: true });
+      // sourceInFrame=35 はソース長30fr の終端より後。クランプでは直せない
+      // （末尾を詰めても再生できるフレームが1枚も無い）ので、黙って通さず利用者へ伝える。
+      writeFileSync(
+        join(insertVideoDir, 'insertVideoData.ts'),
+        `import type { VideoInsert } from './types';
+export const insertVideoData: VideoInsert[] = [
+  { id: 1, startFrame: 10, endFrame: 40, file: "sub/cam2.mp4", sourceInFrame: 35 },
+];
+`,
+        'utf8',
+      );
+      const loaded = loadProjectFromDir(dir);
+      const req: SaveRequest = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+      expect(res.unplayableVideoInserts).toEqual([{ id: 1, file: 'sub/cam2.mp4' }]);
+      // クランプではないので clampedVideoInserts には現れない（直せた件と混ぜない）。
+      expect(res.clampedVideoInserts ?? []).toEqual([]);
+
+      // 非破壊: データは変更しない（勝手に削除も1フレーム捏造もしない）。
+      const reloaded = loadProjectFromDir(dir);
+      const vi = (reloaded.project.videoInserts ?? []).find((v) => v.id === 1);
+      expect(vi!.sourceInFrame).toBe(35);
+      expect(vi!.originalEnd - vi!.originalStart).toBe(30);
+    });
+  });
+
+  it('X-2(a): 再生可能フレームがあるだけなら unplayableVideoInserts を返さない', () => {
+    withProjectCopy((dir) => {
+      const insertVideoDir = join(dir, 'src', 'InsertVideo');
+      mkdirSync(insertVideoDir, { recursive: true });
+      writeFileSync(
+        join(insertVideoDir, 'insertVideoData.ts'),
+        `import type { VideoInsert } from './types';
+export const insertVideoData: VideoInsert[] = [
+  { id: 1, startFrame: 10, endFrame: 40, file: "sub/cam2.mp4", sourceInFrame: 5 },
+];
+`,
+        'utf8',
+      );
+      const loaded = loadProjectFromDir(dir);
+      const req: SaveRequest = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+      expect(res.unplayableVideoInserts ?? []).toEqual([]);
+    });
+  });
+
+  it('ソース長が計測不能（動画として読めない壊れたファイル）なら originalEnd をクランプしない', () => {
+    withProjectCopy((dir) => {
+      const insertVideoDir = join(dir, 'src', 'InsertVideo');
+      mkdirSync(insertVideoDir, { recursive: true });
+      // main.mp4 は波形デコード e2e（G-3）用に実データへ差し替え済みのため、
+      // 「ffprobe が読めない壊れたファイル」はこのテスト専用のスタブを別途用意する。
+      writeFileSync(join(dir, 'public', 'broken.mp4'), 'not a real video file', 'utf8');
+      writeFileSync(
+        join(insertVideoDir, 'insertVideoData.ts'),
+        `import type { VideoInsert } from './types';
+export const insertVideoData: VideoInsert[] = [
+  { id: 1, startFrame: 10, endFrame: 100000, file: "broken.mp4", sourceInFrame: 5 },
+];
+`,
+        'utf8',
+      );
+      const loaded = loadProjectFromDir(dir);
+      const before = (loaded.project.videoInserts ?? []).find((v) => v.id === 1);
+      expect(before).toBeDefined();
+      const req: SaveRequest = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+      const res = saveProjectToDir(dir, req);
+      expect(res.ok).toBe(true);
+
+      const reloaded = loadProjectFromDir(dir);
+      const vi = (reloaded.project.videoInserts ?? []).find((v) => v.id === 1);
+      expect(vi).toBeDefined();
+      // 長さ不明（ffprobe が読めない）なら安全側＝クランプしない。区間は保存前と不変。
+      expect(vi!.originalStart).toBe(before!.originalStart);
+      expect(vi!.originalEnd).toBe(before!.originalEnd);
+    });
+  });
+});
+
+describe('validateSaveRequest — 非有限・null の数値を弾く（生成ソースの破壊防止）', () => {
+  const FP = { telopData: {}, cutData: null, seData: null, insertImageData: null, videoInsertData: null, bgmData: null, titleData: null };
+  /** 最小の正常 project に arrays を差し込んだリクエストを作る。 */
+  function req(patch: Record<string, unknown>): unknown {
+    return {
+      project: {
+        telops: [], cutRegions: [], videoConfig: {}, telopDataSource: 'x',
+        se: [], seDataSource: null, images: [], insertImageDataSource: null,
+        ...patch,
+      },
+      fingerprint: FP,
+    };
+  }
+
+  it('正常な数値なら通る', () => {
+    expect(() => validateSaveRequest(req({
+      telops: [{ id: 1, originalStart: 0, originalEnd: 30, text: 'あ', scale: 1, position: { x: 0, y: 0 } }],
+    }))).not.toThrow();
+  });
+
+  it('null の数値フィールドを 400 で弾く（JSON は NaN を null にして運ぶ）', () => {
+    // telopData.ts の生成は `scale: ${s.scale}` の素の埋め込みなので、
+    // null がここを通ると `scale: null` と書かれてプロジェクトが静かに壊れる。
+    expect(() => validateSaveRequest(req({
+      telops: [{ id: 1, originalStart: 0, originalEnd: 30, text: 'あ', scale: null }],
+    }))).toThrow(HttpError);
+    try {
+      validateSaveRequest(req({ telops: [{ id: 1, originalStart: 0, originalEnd: 30, text: 'あ', scale: null }] }));
+    } catch (err) {
+      expect((err as HttpError).status).toBe(400);
+    }
+  });
+
+  it('入れ子（position）の null も弾く', () => {
+    expect(() => validateSaveRequest(req({
+      telops: [{ id: 1, originalStart: 0, originalEnd: 30, text: 'あ', position: { x: null, y: 0 } }],
+    }))).toThrow(HttpError);
+  });
+
+  it('Infinity / NaN を弾く（JSON 以外の経路から届く場合）', () => {
+    expect(() => validateSaveRequest(req({
+      images: [{ id: 1, originalStart: 0, originalEnd: 10, file: 'a.png', type: 'photo', scale: Number.NaN }],
+    }))).toThrow(HttpError);
+    expect(() => validateSaveRequest(req({
+      bgm: [{ id: 1, originalStart: 0, originalEnd: 10, file: 'a.mp3', volume: Number.POSITIVE_INFINITY, fadeInFrames: 0, fadeOutFrames: 0 }],
+    }))).toThrow(HttpError);
+  });
+
+  it('mainSpeed / segmentSpeeds / layoutKeyframes の非有限も弾く', () => {
+    expect(() => validateSaveRequest(req({ mainSpeed: Number.NaN }))).toThrow(HttpError);
+    expect(() => validateSaveRequest(req({ segmentSpeeds: { 1: null } }))).toThrow(HttpError);
+    expect(() => validateSaveRequest(req({
+      layoutKeyframes: [{ originalFrame: 0, x: 0, y: 0, scale: Number.NaN, rotation: 0 }],
+    }))).toThrow(HttpError);
+  });
+
+  it('省略（undefined）は従来どおり許容する', () => {
+    expect(() => validateSaveRequest(req({
+      telops: [{ id: 1, originalStart: 0, originalEnd: 30, text: 'あ' }],
+      videoInserts: undefined, bgm: undefined,
+    }))).not.toThrow();
+  });
+});
+
+describe('saveProjectToDir — 原子的書込 (data-safety-7)', () => {
+  it('2 ファイル目の書込で失敗しても 1 ファイル目は旧内容のまま・.tmp が残らない', () => {
+    withProjectCopy((dir) => {
+      const loaded = loadProjectFromDir(dir);
+      const telopAbs = join(dir, loaded.save.telopDataRelPath);
+      const cutAbs = join(dir, loaded.save.cutDataRelPath);
+      const telopBefore = readFileSync(telopAbs, 'utf8');
+      const cutBefore = readFileSync(cutAbs, 'utf8');
+
+      // 2 ファイル目（cutData.ts）の tmp 先をディレクトリにして書込を失敗させる。
+      mkdirSync(`${cutAbs}.tmp`);
+
+      const project = {
+        ...loaded.project,
+        telops: loaded.project.telops.map((t) => (t.id === 1 ? { ...t, text: '書き換え' } : t)),
+        cutRegions: [{ start: 10, end: 20 }],
+      };
+      expect(() =>
+        saveProjectToDir(dir, { project, fingerprint: loaded.save.fingerprint }),
+      ).toThrow();
+
+      // どちらのファイルも旧内容のまま（テロップだけ新しい不整合を作らない）。
+      expect(readFileSync(telopAbs, 'utf8')).toBe(telopBefore);
+      expect(readFileSync(cutAbs, 'utf8')).toBe(cutBefore);
+      // 中途半端な .tmp を残さない。
+      expect(existsSync(`${telopAbs}.tmp`)).toBe(false);
+    });
+  });
+});
+
+describe('saveProjectToDir — 上書き前の退避 (data-safety-4)', () => {
+  it('overwrite:true は消す前の内容を .sme/backup/<日時>/ へ複写し backupDir を返す', () => {
+    withProjectCopy((dir) => {
+      const loaded = loadProjectFromDir(dir);
+      const telopPath = join(dir, 'src', 'テロップテンプレート', 'telopData.ts');
+      // 相手（別画面・AI）がディスクへ書いた内容。
+      const foreign = readFileSync(telopPath, 'utf8') + '\n// 相手が書いた内容\n';
+      writeFileSync(telopPath, foreign, 'utf8');
+
+      const res = saveProjectToDir(dir, {
+        project: loaded.project,
+        fingerprint: loaded.save.fingerprint,
+        overwrite: true,
+      });
+
+      // 上書きは成立し、相手の内容は画面の内容で置き換わる。
+      expect(readFileSync(telopPath, 'utf8')).not.toContain('相手が書いた内容');
+      // 消える前の内容が退避先に残っている（取り返しがつく）。
+      expect(res.backupDir).toBeDefined();
+      const backedUp = join(dir, res.backupDir!, 'src', 'テロップテンプレート', 'telopData.ts');
+      expect(existsSync(backedUp)).toBe(true);
+      expect(readFileSync(backedUp, 'utf8')).toBe(foreign);
+      expect(res.backupDir!.startsWith('.sme/backup/')).toBe(true);
+    });
+  });
+
+  it('通常保存（overwrite なし）は退避しない・backupDir も返さない', () => {
+    withProjectCopy((dir) => {
+      const loaded = loadProjectFromDir(dir);
+      const res = saveProjectToDir(dir, {
+        project: loaded.project,
+        fingerprint: loaded.save.fingerprint,
+      });
+      expect(res.backupDir).toBeUndefined();
+      expect(existsSync(join(dir, '.sme', 'backup'))).toBe(false);
     });
   });
 });

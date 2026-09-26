@@ -7,6 +7,7 @@ import {
   parseLayoutKeyframesData,
 } from './mainLayoutData';
 import { DEFAULT_MAIN_LAYOUT } from './mainLayout';
+import { DEFAULT_COLOR_GRADE } from './colorGrade';
 
 describe('serializeMainLayoutData', () => {
   it('完全既定（全画面・黒）は null（ファイル不要）', () => {
@@ -148,12 +149,12 @@ describe('mainLayoutData 区間ごと(SEGMENT_LAYOUTS)', () => {
 
 describe('parseMainLayoutFile（1回の eval で両方 parse）', () => {
   it('null は既定 layout・空 segmentLayouts・空 layoutKeyframes', () => {
-    expect(parseMainLayoutFile(null)).toEqual({ layout: DEFAULT_MAIN_LAYOUT, segmentLayouts: {}, layoutKeyframes: [] });
+    expect(parseMainLayoutFile(null)).toEqual({ layout: DEFAULT_MAIN_LAYOUT, segmentLayouts: {}, layoutKeyframes: [], colorGrade: DEFAULT_COLOR_GRADE });
   });
   it('壊れたソースは既定へフォールバック', () => {
     expect(parseMainLayoutFile('export const NOPE =;')).toEqual({
       layout: DEFAULT_MAIN_LAYOUT,
-      segmentLayouts: {}, layoutKeyframes: [],
+      segmentLayouts: {}, layoutKeyframes: [], colorGrade: DEFAULT_COLOR_GRADE,
     });
   });
   it('serializeMainLayoutData の出力を round-trip できる（MAIN_LAYOUT・SEGMENT_LAYOUTS 両方）', () => {
@@ -161,7 +162,7 @@ describe('parseMainLayoutFile（1回の eval で両方 parse）', () => {
     const seg = { position: { x: 0.5, y: 0 }, scale: 2, rotation: 90, flipH: true, flipV: false };
     const src = serializeMainLayoutData(layout, { 3: seg });
     expect(src).not.toBeNull();
-    expect(parseMainLayoutFile(src)).toEqual({ layout, segmentLayouts: { 3: seg }, layoutKeyframes: [] });
+    expect(parseMainLayoutFile(src)).toEqual({ layout, segmentLayouts: { 3: seg }, layoutKeyframes: [], colorGrade: DEFAULT_COLOR_GRADE });
   });
   it('parseMainLayoutData / parseSegmentLayoutsData と同じ結果を返す（既存 API との整合）', () => {
     const src = `export const MAIN_LAYOUT = { position: { x: 0.2, y: 0 }, scale: 1.5, background: '#000000' };
@@ -222,5 +223,47 @@ describe('mainLayoutData × layoutKeyframes（大域配列・originalFrame ア�
     const src = serializeMainLayoutData(base, {}, kfs) ?? '';
     const parsed = parseMainLayoutFile(src);
     expect(parsed.layoutKeyframes).toEqual(kfs);
+  });
+});
+
+describe('mainLayoutData × COLOR_GRADE（カラー補正・F-2）', () => {
+  it('無補正・恒等レイアウトならファイル自体を出さない（旧案件に 1 バイトも生えない）', () => {
+    expect(serializeMainLayoutData(DEFAULT_MAIN_LAYOUT, {}, [], DEFAULT_COLOR_GRADE)).toBeNull();
+    // 引数省略時も同じ（既存呼び出し元の後方互換）。
+    expect(serializeMainLayoutData(DEFAULT_MAIN_LAYOUT)).toBeNull();
+  });
+
+  it('補正だけ非既定ならファイルを出し、往復で保持する', () => {
+    const grade = { brightness: 25, contrast: -10, saturation: 40, temperature: -5 };
+    const src = serializeMainLayoutData(DEFAULT_MAIN_LAYOUT, {}, [], grade);
+    expect(src).not.toBeNull();
+    expect(src).toContain('export const COLOR_GRADE = {');
+    expect(parseMainLayoutFile(src).colorGrade).toEqual(grade);
+  });
+
+  it('ファイルを出すときは無補正でも COLOR_GRADE を必ず export する（import 解決）', () => {
+    const layout = { ...DEFAULT_MAIN_LAYOUT, scale: 1.5 };
+    const src = serializeMainLayoutData(layout, {}, [], DEFAULT_COLOR_GRADE);
+    expect(src).not.toBeNull();
+    expect(src).toContain('export const COLOR_GRADE = { brightness: 0, contrast: 0, saturation: 0, temperature: 0 };');
+  });
+
+  it('COLOR_GRADE を持たない旧ファイルは無補正として読める', () => {
+    const legacy = `export const MAIN_LAYOUT = { position: { x: 0, y: 0 }, scale: 1.2, background: '#000000' };\n`;
+    expect(parseMainLayoutFile(legacy).colorGrade).toEqual(DEFAULT_COLOR_GRADE);
+  });
+
+  it('範囲外・型違いはクランプ／既定へ倒す', () => {
+    const src = `export const MAIN_LAYOUT = { position: { x: 0, y: 0 }, scale: 1, background: '#000000' };
+export const COLOR_GRADE = { brightness: 999, contrast: -999, saturation: 'x', temperature: 12 };\n`;
+    expect(parseMainLayoutFile(src).colorGrade).toEqual({
+      brightness: 100, contrast: -100, saturation: 0, temperature: 12,
+    });
+  });
+
+  it('NaN は握り潰さず fail-loud（値が黙って既定へ倒れない）', () => {
+    const src = `export const MAIN_LAYOUT = { position: { x: 0, y: 0 }, scale: 1, background: '#000000' };
+export const COLOR_GRADE = { brightness: NaN, contrast: 0, saturation: 0, temperature: 0 };\n`;
+    expect(() => parseMainLayoutFile(src)).toThrow();
   });
 });

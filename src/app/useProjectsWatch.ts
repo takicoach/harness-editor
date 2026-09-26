@@ -13,6 +13,7 @@ type ProjectStatusPatch = Pick<
   | 'lastEditedAt'
   // 工程ステッパー（out/video.mp4 の増減で rendered が変わる）。
   | 'steps'
+  | 'statusSeq'
 >;
 
 /**
@@ -59,9 +60,12 @@ export function useProjectsWatch(
       return;
     }
     if (d.type !== 'status' || typeof d.id !== 'string') return;
-    const { id, status, stageManual, activityLabel, activityStartedAt, activityStale, lastEditedAt, steps } = d;
+    const { id, status, stageManual, activityLabel, activityStartedAt, activityStale, lastEditedAt, steps, statusSeq } = d;
     onStatusRef.current(id, {
       status,
+      // この差分がどの観測から来たか。受け手（applyStatusPatch）が一覧の全置換と
+      // どちらが新しいかを到着順ではなく番号で決めるために必ず渡す。
+      statusSeq,
       // steps はサーバが毎イベント必ず載せるため、undefined 上書きの心配はない。
       steps,
       // stage が null（自動判定）へ戻ったイベントでは JSON からキーごと落ちるため、

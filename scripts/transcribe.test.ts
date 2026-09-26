@@ -4,12 +4,14 @@ import { resolve } from 'node:path';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolvePythonBin } from '../src/server/resolvePython';
 
 const SCRIPT = resolve(import.meta.dirname, 'transcribe.py');
 
 function runScript(args: string[]): { stdout: string; code: number } {
+  const python = resolvePythonBin();
   try {
-    const stdout = execFileSync('python3', [SCRIPT, ...args], { encoding: 'utf8' });
+    const stdout = execFileSync(python, [SCRIPT, ...args], { encoding: 'utf8' });
     return { stdout, code: 0 };
   } catch (e: unknown) {
     const err = e as { stdout?: string; status?: number };

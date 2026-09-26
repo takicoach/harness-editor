@@ -10,6 +10,13 @@ describe('load/saveFolderOpen', () => {
     });
   });
   it('既定は開', () => expect(loadFolderOpen()).toBe(true));
+  it('狭い画面の初回は閉じ、利用者が開いた選択は次回も維持する', () => {
+    expect(loadFolderOpen(false)).toBe(false);
+    saveFolderOpen(true);
+    expect(loadFolderOpen(false)).toBe(true);
+    saveFolderOpen(false);
+    expect(loadFolderOpen(true)).toBe(false);
+  });
   it('閉→保存往復', () => { saveFolderOpen(false); expect(loadFolderOpen()).toBe(false); });
   it('開→保存往復', () => { saveFolderOpen(false); saveFolderOpen(true); expect(loadFolderOpen()).toBe(true); });
   it('localStorage 不可でも開にフォールバック', () => {

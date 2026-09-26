@@ -22,6 +22,21 @@ interface TelopPositionFieldsProps {
   onScale: (scale: number) => void;
 }
 
+/** 3x3 プリセットの読み上げ名（行×列 → 「左上に配置」等）。座標を知らなくても押せるようにする。 */
+const PRESET_ROW_LABEL = ['上', '中央', '下'] as const;
+const PRESET_COL_LABEL = ['左', '中央', '右'] as const;
+
+/** 位置プリセットの説明ラベル（純関数）。 */
+export function positionPresetLabel(row: number, col: number): string {
+  const r = PRESET_ROW_LABEL[row] ?? '';
+  const c = PRESET_COL_LABEL[col] ?? '';
+  if (r === '中央' && c === '中央') return '中央に配置';
+  if (r === '中央') return `${c}中央に配置`;
+  if (c === '中央') return `${r}中央に配置`;
+  // 日本語の語順は「左上」（横→縦）。
+  return `${c}${r}に配置`;
+}
+
 /**
  * テロップの位置プリセット・左右/上下位置・大きさの入力部（単一選択と複数選択で共有）。
  * 位置プリセットのクリックは commitMode に関わらず即時確定（クリック自体が確定操作）。
@@ -70,7 +85,11 @@ export function TelopPositionFields({
             <button
               key={`${ri}-${ci}`}
               className={position.x === preset.x && position.y === preset.y ? 'active' : ''}
-              title={`位置プリセット (${preset.x}, ${preset.y})`}
+              // 座標だけの title では押しどころが分からない（読み上げ・AI 操作の両方）。
+              aria-label={positionPresetLabel(ri, ci)}
+              data-testid={`${idPrefix}-pos-preset-${ri}-${ci}`}
+              aria-pressed={position.x === preset.x && position.y === preset.y}
+              title={`${positionPresetLabel(ri, ci)}（${preset.x}, ${preset.y}）`}
               onClick={() => onPosition(preset.x, preset.y)}
             />
           )),
@@ -81,6 +100,7 @@ export function TelopPositionFields({
           <label htmlFor={`${idPrefix}-pos-x`} title="-1=左 / 0=中央 / 1=右">左右位置</label>
           <input
             id={`${idPrefix}-pos-x`}
+            data-testid={`${idPrefix}-pos-x`}
             type="number"
             step={0.1}
             value={immediate ? position.x : xStr}
@@ -103,6 +123,7 @@ export function TelopPositionFields({
           <label htmlFor={`${idPrefix}-pos-y`} title="-1=上 / -0.5=中央 / 0=下（既定）">上下位置</label>
           <input
             id={`${idPrefix}-pos-y`}
+            data-testid={`${idPrefix}-pos-y`}
             type="number"
             step={0.1}
             value={immediate ? position.y : yStr}
@@ -125,6 +146,7 @@ export function TelopPositionFields({
           <label htmlFor={`${idPrefix}-scale`} title="1=標準（0.3〜3 の範囲）">大きさ</label>
           <input
             id={`${idPrefix}-scale`}
+            data-testid={`${idPrefix}-scale`}
             type="number"
             step={0.1}
             value={immediate ? scale : scaleStr}

@@ -62,27 +62,12 @@ export function useAutoSave({
 }: UseAutoSaveParams): void {
   const saveRef = useRef(save);
   saveRef.current = save;
-
-  // IME 変換中は保存を割り込ませない。composition イベントで追う。
-  // 変換中も onChange で state が動き、下の effect は state のたびに貼り直されるので、
-  // フラグは effect の外（ref）に置き、購読もマウント中ずっと 1 本だけ張る。
-  // effect ローカルに持つと再レンダーのたびに false へ戻り、変換の途中で blur や
-  // 延期上限の強制保存が走ってしまう。
+  /**
+   * IME 変換中か。effect の外（ref）で持つ。
+   * 以前は effect のローカル変数だったため、編集のたびに effect が張り直されると
+   * 変換の途中でも false へ戻り、「変換中は保存しない」ガードが抜けていた。
+   */
   const composingRef = useRef(false);
-  useEffect(() => {
-    const onCompositionStart = (): void => {
-      composingRef.current = true;
-    };
-    const onCompositionEnd = (): void => {
-      composingRef.current = false;
-    };
-    window.addEventListener('compositionstart', onCompositionStart);
-    window.addEventListener('compositionend', onCompositionEnd);
-    return () => {
-      window.removeEventListener('compositionstart', onCompositionStart);
-      window.removeEventListener('compositionend', onCompositionEnd);
-    };
-  }, []);
 
   useEffect(() => {
     if (!enabled || !dirty || saveStatus !== 'idle') return;
@@ -90,22 +75,33 @@ export function useAutoSave({
     let timer: ReturnType<typeof setTimeout>;
     // テキスト編集中を理由に先送りした回数（この dirty 区間かぎり）。
     let deferrals = 0;
+    // IME 変換中は保存を割り込ませない。composition イベントで追う（値は ref に持つ）。
+    const onCompositionStart = (): void => {
+      composingRef.current = true;
+    };
+    const onCompositionEnd = (): void => {
+      composingRef.current = false;
+    };
 
     const check = (): void => {
       const focusInEditable = isFocusInEditable();
-      if (!shouldFireAutoSave({ enabled, dirty, saveStatus, focusInEditable })) {
-        // 発火条件そのものが崩れているとき（保存中・保存失敗後など）は何もしない。
-        if (!focusInEditable) return;
+      if (shouldFireAutoSave({ enabled, dirty, saveStatus, focusInEditable })) {
+        void saveRef.current();
+        return;
+      }
+      if (focusInEditable) {
         deferrals += 1;
         if (shouldForceAutoSave(deferrals, composingRef.current)) {
           void saveRef.current();
           return;
         }
-        // まだ猶予があるあいだは、同じ静止時間だけ後で再チェックする。
-        timer = setTimeout(check, delayMs);
-        return;
       }
-      void saveRef.current();
+      // 発火しなかった理由に関わらず、必ず次のチェックを予約する。
+      // 以前は「テキスト編集中」以外の理由（保存中など）で return しており、
+      // その dirty のまま二度と自動保存が来ない（fail-silent）状態が作れた。
+      // 条件が本当に消えたとき（トグル OFF・dirty 解消・保存失敗）は effect ごと
+      // 張り直されてこのタイマーは片付けられる。
+      timer = setTimeout(check, delayMs);
     };
 
     // 離席・タブ切替は「もう触らない」の合図なので、静止時間を待たず保存を試みる。
@@ -118,10 +114,14 @@ export function useAutoSave({
     };
 
     timer = setTimeout(check, delayMs);
+    window.addEventListener('compositionstart', onCompositionStart);
+    window.addEventListener('compositionend', onCompositionEnd);
     window.addEventListener('blur', saveNow);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       clearTimeout(timer);
+      window.removeEventListener('compositionstart', onCompositionStart);
+      window.removeEventListener('compositionend', onCompositionEnd);
       window.removeEventListener('blur', saveNow);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };

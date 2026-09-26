@@ -1,26 +1,16 @@
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { openEditor, useTempProject } from './helpers';
 
 // 改行位置でのテロップ分割（実機バグ再現: 改行を入れて「分割」を押すと改行位置で割れる）。
 
-const FIXTURE_DIR = resolve(import.meta.dirname, '../src/server/__fixtures__/sample-project');
-
-test.afterEach(() => {
-  try {
-    execSync(`git checkout -- "${FIXTURE_DIR}"`, { stdio: 'ignore' });
-    execSync(`git clean -fdx "${FIXTURE_DIR}"`, { stdio: 'ignore' });
-  } catch {
-    // git 管理外環境では無視
-  }
-});
-
+// 共有 sample-project は smoke.spec.ts の afterEach（git checkout / git clean）が
+// 実行中ずっと書き換え続けるため、その窓に重なって開くと壊れた状態を読む
+// （実測: 「[telopData.ts] telopData 配列が見つかりません」で editor が止まる）。
+// 専用コピーへ隔離する（helpers.ts の useTempProject）。
+// コピーは afterEach で丸ごと消すので、共有フィクスチャの git 巻き戻しは不要になった。
+const projectId = useTempProject('split-newline-tmp');
 test('textarea の改行位置で分割される（時間中央ではなく）', async ({ page }) => {
-  await page.goto('/');
-  const item = page.locator('.home-card', { hasText: 'sample-project' });
-  await expect(item).toBeVisible({ timeout: 15_000 });
-  await item.click();
-  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+  await openEditor(page, projectId());
 
   // 最初のテロップ「ゆる素振り」（チップ: ゆる / 素振り）を選択し、改行を入れる。
   const firstRow = page.locator('.tx-row').first();

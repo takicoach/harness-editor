@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { INSTALL_APIS, type InstallKind } from './install';
 
 const ALL_KINDS: InstallKind[] = [
+  'imageRendering',
   'telopPack',
   'videoInsert',
   'bgm',
@@ -15,7 +16,7 @@ const ALL_KINDS: InstallKind[] = [
 ];
 
 describe('INSTALL_APIS', () => {
-  it('全7種の導入 API を持つ', () => {
+  it('全種の導入 API を持つ', () => {
     expect(Object.keys(INSTALL_APIS).sort()).toEqual([...ALL_KINDS].sort());
   });
 

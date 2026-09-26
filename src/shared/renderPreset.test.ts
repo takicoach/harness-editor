@@ -12,17 +12,17 @@ import {
 } from './renderPreset';
 
 describe('renderExtraArgs', () => {
-  it('full は中間 CRF 14＋1.5 倍スーパーサンプリング', () => {
+  it('full は中間 CRF 14＋1.5 倍SSをh264-mkv/PCMで生成する', () => {
     expect(renderExtraArgs({ resolution: 'full', quality: 'high' }))
-      .toEqual(['--crf', '14', '--scale', '1.5']);
+      .toEqual(['--crf', '14', '--scale', '1.5', '--codec', 'h264-mkv', '--audio-codec', 'pcm-16', '--image-format', 'png', '--color-space', 'bt709']);
   });
   it('720p も中間は 1.5 倍 SS（縮小は仕上げ側で 4/9）', () => {
     expect(renderExtraArgs({ resolution: '720p', quality: 'light' }))
-      .toEqual(['--crf', '14', '--scale', '1.5']);
+      .toEqual(['--crf', '14', '--scale', '1.5', '--codec', 'h264-mkv', '--audio-codec', 'pcm-16', '--image-format', 'png', '--color-space', 'bt709']);
   });
   it('品質は中間引数に影響しない（最終 CRF は postScaleArgs 側）', () => {
     expect(renderExtraArgs({ resolution: 'full', quality: 'standard' }))
-      .toEqual(['--crf', '14', '--scale', '1.5']);
+      .toEqual(['--crf', '14', '--scale', '1.5', '--codec', 'h264-mkv', '--audio-codec', 'pcm-16', '--image-format', 'png', '--color-space', 'bt709']);
   });
 });
 
@@ -49,6 +49,28 @@ describe('postScaleArgs', () => {
     expect(postScaleArgs({ resolution: '1080p', quality: 'high' }, 'a', 'b', { width: 3840, height: 2160 }).join(' '))
       .toContain('scale=1920:1080:flags=lanczos');
   });
+  it('RemotionのPCM中間だけ最終AACへ一度encodeし、既存呼出はcopyを維持する', () => {
+    expect(postScaleArgs({ resolution: 'full', quality: 'high' }, 'in.mkv', 'out.mp4', HD, 'aac').join(' '))
+      .toContain('-c:a aac');
+    expect(postScaleArgs({ resolution: 'full', quality: 'high' }, 'in.mkv', 'out.mp4', HD, 'aac').join(' '))
+      .toContain('-b:a 320k');
+    expect(postScaleArgs({ resolution: 'full', quality: 'high' }, 'in.mp4', 'out.mp4', HD).join(' '))
+      .toContain('-c:a copy');
+    expect(postScaleArgs({ resolution: 'full', quality: 'high' }, 'in.mp4', 'out.mp4', HD).join(' '))
+      .not.toContain('-b:a');
+  });
+  it('RGBからBT.709へ変換済みのRemotion中間だけ最終MP4へ色情報を明示する', () => {
+    const remotion = postScaleArgs({ resolution: '720p', quality: 'high' }, 'in.mkv', 'out.mp4', HD, 'aac');
+    expect(remotion[remotion.indexOf('-vf') + 1]).toBe('scale=1280:720:flags=lanczos,setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709');
+    for (const flag of ['-colorspace', '-color_primaries', '-color_trc']) {
+      expect(remotion[remotion.indexOf(flag) + 1]).toBe('bt709');
+    }
+    expect(remotion[remotion.indexOf('-color_range') + 1]).toBe('tv');
+    const native = postScaleArgs({ resolution: '720p', quality: 'high' }, 'in.mp4', 'out.mp4', HD);
+    for (const flag of ['-colorspace', '-color_primaries', '-color_trc', '-color_range']) {
+      expect(native).not.toContain(flag);
+    }
+  });
 });
 
 describe('renderOutputName', () => {
@@ -74,6 +96,27 @@ describe('parseRenderOptions', () => {
     expect(parseRenderOptions({ resolution: 'full', quality: 'ultra' })).toBeNull();
     expect(parseRenderOptions({ resolution: 'full' })).toBeNull();
     expect(parseRenderOptions('post')).toBeNull();
+  });
+
+  describe('ducking', () => {
+    it('省略は有効（undefined のまま通す・後方互換）', () => {
+      const parsed = parseRenderOptions({ resolution: 'full', quality: 'high' });
+      expect(parsed).toEqual({ resolution: 'full', quality: 'high' });
+      expect(parsed && 'ducking' in parsed).toBe(false);
+    });
+    it('supplied（enabled・strength）はそのまま返す', () => {
+      expect(parseRenderOptions({ resolution: 'full', quality: 'high', ducking: { enabled: true, strength: 'mid' } }))
+        .toEqual({ resolution: 'full', quality: 'high', ducking: { enabled: true, strength: 'mid' } });
+      expect(parseRenderOptions({ resolution: 'full', quality: 'high', ducking: { enabled: false, strength: 'weak' } }))
+        .toEqual({ resolution: 'full', quality: 'high', ducking: { enabled: false, strength: 'weak' } });
+    });
+    it('不正値（strength 非 enum・enabled 非 boolean）は null', () => {
+      expect(parseRenderOptions({ resolution: 'full', quality: 'high', ducking: { enabled: true, strength: 'x' } }))
+        .toBeNull();
+      expect(parseRenderOptions({ resolution: 'full', quality: 'high', ducking: { enabled: 'yes', strength: 'mid' } }))
+        .toBeNull();
+      expect(parseRenderOptions({ resolution: 'full', quality: 'high', ducking: 'mid' })).toBeNull();
+    });
   });
 });
 
@@ -112,4 +155,9 @@ describe('resolutionLabel', () => {
   it('原本が 1080 以下なら 1080p を選んでも拡大しない', () => {
     expect(resolutionLabel(1280, 720, '1080p')).toBe('1280×720');
   });
+});
+
+it('postScaleArgsの音声は320 kbpsを維持する',()=>{
+  const args=postScaleArgs({resolution:'full',quality:'high'},'in.mkv','out.mp4',{width:320,height:180},'aac');
+  expect(args[args.indexOf('-b:a')+1]).toBe('320k');
 });

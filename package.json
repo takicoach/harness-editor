@@ -1,9 +1,12 @@
 {
   "name": "harness-editor",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.7.0",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "edit": "vite",
     "dev": "vite",
@@ -11,26 +14,34 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "typecheck": "tsc --noEmit",
+    "test:e2e:isolated": "playwright test --config playwright.isolated.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.legacy-fixtures.json",
     "learn": "node --import tsx src/learning/bin.ts",
     "aggregate-cuts": "node --import tsx src/server/aggregateCutLearningBin.ts",
     "docs:gifs": "node scripts/record-guide-gifs.mjs",
-    "docs:help-shots": "node scripts/capture-help-shots.mjs"
+    "docs:help-shots": "node scripts/capture-help-shots.mjs",
+    "desktop:dev": "HARNESS_DESKTOP_NODE=$(command -v node) npm --prefix desktop start",
+    "desktop:mac": "npm --prefix desktop run package:mac",
+    "test:desktop": "npm --prefix desktop test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@remotion/player": "4.0.489",
-    "@remotion/transitions": "4.0.489",
+    "@noble/hashes": "2.4.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "esbuild": "^0.25.0",
+    "mammoth": "1.12.3",
+    "mp4box": "2.4.1",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "5.6.205",
+    "playwright-core": "1.60.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "remotion": "4.0.489",
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.0",
     "@playwright/test": "^1.49.0",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.9.0",

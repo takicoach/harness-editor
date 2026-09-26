@@ -1,11 +1,11 @@
 // src/server/renderApi.test.ts — reveal のプラットフォーム分岐と handleRenderPost の分岐を検証。
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import type { ServerResponse } from 'node:http';
-import { revealInFinder, handleRenderPost, handleRenderSse, renderJobs, tmpOutputName } from './renderApi';
-import type { RenderJob, RenderJobEvent } from './renderJob';
+import { revealInFinder, handleRenderReveal, handleRenderPost, handleRenderSse, renderJobs, tmpOutputName } from './renderApi';
+import type { RenderJob, RenderJobEvent } from './renderJobTypes';
 
 /** writeHead の status とレスポンス本文を捕捉するモック ServerResponse。 */
 function makeRes(): { res: ServerResponse; status(): number; body(): unknown } {
@@ -24,6 +24,7 @@ function makeRes(): { res: ServerResponse; status(): number; body(): unknown } {
 function makeReq(bodyText = ''): never {
   const chunks = bodyText === '' ? [] : [Buffer.from(bodyText, 'utf8')];
   return {
+    socket:{localPort:2109},headers:{host:"untrusted.invalid"},
     async *[Symbol.asyncIterator]() {
       yield* chunks;
     },
@@ -44,6 +45,31 @@ afterEach(() => {
 });
 
 describe('revealInFinder', () => {
+  it('reveals the completed 720p output, not an older full-size export', () => {
+    const dir = makeProjectDir(false);
+    mkdirSync(join(dir, 'out'));
+    writeFileSync(join(dir, 'out', 'video.mp4'), 'older output');
+    writeFileSync(join(dir, 'out', 'video-720p.mp4'), 'latest output');
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue({ projectId: 'p1', startedAt: 1, phase: 'done', outputFile: 'video-720p.mp4' });
+    const reveal = vi.fn();
+    const response = makeRes();
+    handleRenderReveal(dummyReq, response.res, 'p1', dir, reveal);
+    expect(response.status()).toBe(200);
+    expect(reveal).toHaveBeenCalledWith(join(dir, 'out', 'video-720p.mp4'), process.platform);
+  });
+
+  it('does not substitute an older export when the latest completed output is missing', () => {
+    const dir = makeProjectDir(false);
+    mkdirSync(join(dir, 'out'));
+    writeFileSync(join(dir, 'out', 'video.mp4'), 'older output');
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue({ projectId: 'p1', startedAt: 1, phase: 'done', outputFile: 'video-720p.mp4' });
+    const reveal = vi.fn();
+    const response = makeRes();
+    handleRenderReveal(dummyReq, response.res, 'p1', dir, reveal);
+    expect(response.status()).toBe(404);
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
   it('darwin は open -R <path> を fire-and-forget で spawn する', () => {
     const child = { on: vi.fn().mockReturnThis(), unref: vi.fn() };
     const spawnFn = vi.fn(() => child);
@@ -104,7 +130,7 @@ describe('handleRenderSse', () => {
   it('live 購読中に failed イベントを受けると unsub 後 discard を呼ぶ', () => {
     const projectId = `p-sse-live-failed-${Date.now()}`;
     const preparingJob: RenderJob = { projectId, startedAt: Date.now(), phase: 'preparing' };
-    vi.spyOn(renderJobs, 'get').mockReturnValue(preparingJob);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(preparingJob);
     let capturedFn: ((ev: RenderJobEvent) => void) | undefined;
     const unsub = vi.fn();
     vi.spyOn(renderJobs, 'subscribe').mockImplementation((_id, fn) => {
@@ -140,94 +166,41 @@ describe('tmpOutputName', () => {
   });
 });
 
-describe('handleRenderPost', () => {
-  it('既にジョブが走っていれば 409 already-running を返す', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(true);
-    const startSpy = vi.spyOn(renderJobs, 'start');
-    const dir = makeProjectDir(true);
-    const { res, status, body } = makeRes();
-    await handleRenderPost(dummyReq, res, 'p1', dir);
-    expect(status()).toBe(409);
-    expect(body()).toEqual({ error: 'already-running' });
-    expect(startSpy).not.toHaveBeenCalled();
+describe('handleRenderPost native route', () => {
+  it.each([true,false])('uses native export regardless of old node_modules: %s',async installed=>{
+    const dir=makeProjectDir(installed),response=makeRes();
+    const start=vi.spyOn(renderJobs,'start').mockReturnValue({projectId:'p1',startedAt:123,phase:'preparing',outputFile:'video.mp4'});
+    await handleRenderPost(makeReq(),response.res,'p1',dir);
+    expect(start).toHaveBeenCalledWith('p1',{projectDir:dir,origin:'http://127.0.0.1:2109',options:{resolution:'full',quality:'high'}});
+    expect(response.status()).toBe(200);expect(response.body()).toMatchObject({ok:true,startedAt:123,outputFile:'video.mp4',native:true,fastCut:false});
   });
-
-  it('node_modules があれば needsInstall=false で out/ を作り tmp/final パスを渡す', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(false);
-    const startSpy = vi.spyOn(renderJobs, 'start').mockReturnValue({ projectId: 'p1', startedAt: 123, phase: 'preparing' });
-    const dir = makeProjectDir(true);
-    const { res, status, body } = makeRes();
-    await handleRenderPost(dummyReq, res, 'p1', dir);
-    expect(existsSync(join(dir, 'out'))).toBe(true);
-    expect(startSpy).toHaveBeenCalledTimes(1);
-    const opts = startSpy.mock.calls[0]![1];
-    expect(opts.needsInstall).toBe(false);
-    expect(opts.finalOutput).toBe(join(dir, 'out', 'video.mp4'));
-    expect(opts.tmpOutput).toMatch(new RegExp(`out/\\.sme-render-tmp-p1-\\d+\\.mp4$`));
-    expect(dirname(opts.tmpOutput)).toBe(join(dir, 'out'));
-    expect(status()).toBe(200);
-    // fastCut=false: この fixture はテロップ等があるため通常の Remotion 経路。
-    expect(body()).toEqual({ ok: true, startedAt: 123, fastCut: false });
+  it('passes resolution, quality, filename and ducking to the immutable native preparation',async()=>{
+    const dir=makeProjectDir(false),response=makeRes(),options={resolution:'720p',quality:'light',outputName:'素振り result.mp4',ducking:{enabled:true,strength:'strong'}};
+    const start=vi.spyOn(renderJobs,'start').mockReturnValue({projectId:'p1',startedAt:1,phase:'preparing'});
+    await handleRenderPost(makeReq(JSON.stringify(options)),response.res,'p1',dir);
+    expect(response.status()).toBe(200);expect(start).toHaveBeenCalledWith('p1',{projectDir:dir,origin:'http://127.0.0.1:2109',options});
   });
-
-  it('node_modules が無ければ needsInstall=true を渡す', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(false);
-    const startSpy = vi.spyOn(renderJobs, 'start').mockReturnValue({ projectId: 'p1', startedAt: 1, phase: 'preparing' });
-    const dir = makeProjectDir(false);
-    const { res } = makeRes();
-    await handleRenderPost(dummyReq, res, 'p1', dir);
-    expect(startSpy.mock.calls[0]![1].needsInstall).toBe(true);
+  it('keeps the running-job rejection and does not start a duplicate',async()=>{
+    vi.spyOn(renderJobs,'exists').mockReturnValue(true);const start=vi.spyOn(renderJobs,'start'),response=makeRes();
+    await handleRenderPost(makeReq(),response.res,'p1',makeProjectDir(false));
+    expect(response.status()).toBe(409);expect(response.body()).toEqual({error:'already-running'});expect(start).not.toHaveBeenCalled();
   });
-
-  it('空 body は既定プリセット（中間 1.5 倍 SS・video.mp4・ffmpeg 仕上げ付き）で開始する', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(false);
-    const startSpy = vi.spyOn(renderJobs, 'start').mockReturnValue({ projectId: 'p1', startedAt: 1, phase: 'preparing' });
-    const dir = makeProjectDir(true);
-    const { res } = makeRes();
-    await handleRenderPost(makeReq(), res, 'p1', dir);
-    const opts = startSpy.mock.calls[0]![1];
-    expect(opts.extraArgs).toEqual(['--crf', '14', '--scale', '1.5']);
-    expect(opts.finalOutput).toBe(join(dir, 'out', 'video.mp4'));
-    expect(opts.post!.command).toBe('ffmpeg');
-    expect(opts.post!.output).toBe(`${opts.tmpOutput}.final.mp4`);
-    expect(opts.post!.args.join(' ')).toContain('-crf 18');
+  it.each([undefined,'comparison.mp4'])('preserves existing output bytes: %s',async outputName=>{
+    const dir=makeProjectDir(false);mkdirSync(join(dir,'out'));const file=join(dir,'out',outputName??'video.mp4');writeFileSync(file,'keep this video');
+    const start=vi.spyOn(renderJobs,'start'),response=makeRes();
+    await handleRenderPost(makeReq(JSON.stringify({resolution:'full',quality:'high',...(outputName?{outputName}:{})})),response.res,'p1',dir);
+    expect(response.status()).toBe(409);expect(response.body()).toMatchObject({error:'output-exists'});expect(start).not.toHaveBeenCalled();expect(readFileSync(file,'utf8')).toBe('keep this video');
   });
-
-  it('720p/light の body は中間等倍・video-720p.mp4・仕上げ CRF 28 になる', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(false);
-    const startSpy = vi.spyOn(renderJobs, 'start').mockReturnValue({ projectId: 'p1', startedAt: 1, phase: 'preparing' });
-    const dir = makeProjectDir(true);
-    const { res } = makeRes();
-    await handleRenderPost(makeReq(JSON.stringify({ resolution: '720p', quality: 'light' })), res, 'p1', dir);
-    const opts = startSpy.mock.calls[0]![1];
-    expect(opts.extraArgs).toEqual(['--crf', '14', '--scale', '1.5']);
-    expect(opts.finalOutput).toBe(join(dir, 'out', 'video-720p.mp4'));
-    expect(opts.post!.args.join(' ')).toContain('-crf 24');
+  it.each(['{not json',JSON.stringify({resolution:'4k',quality:'high'}),JSON.stringify({resolution:'full',quality:'high',outputName:'../escape.mp4'})])('rejects malformed options before native preparation: %s',async value=>{
+    const start=vi.spyOn(renderJobs,'start'),response=makeRes();await handleRenderPost(makeReq(value),response.res,'p1',makeProjectDir(false));
+    expect(response.status()).toBe(400);expect(response.body()).toEqual({error:'invalid-render-options'});expect(start).not.toHaveBeenCalled();
   });
-
-  it('不正な body は 400 invalid-render-options', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(false);
-    const startSpy = vi.spyOn(renderJobs, 'start');
-    const dir = makeProjectDir(true);
-    for (const bad of ['{not json', JSON.stringify({ resolution: '4k', quality: 'high' })]) {
-      const { res, status, body } = makeRes();
-      await handleRenderPost(makeReq(bad), res, 'p1', dir);
-      expect(status()).toBe(400);
-      expect(body()).toEqual({ error: 'invalid-render-options' });
-    }
-    expect(startSpy).not.toHaveBeenCalled();
+  it('rejects an oversized body before native preparation',async()=>{
+    const start=vi.spyOn(renderJobs,'start'),response=makeRes();await handleRenderPost(makeReq(JSON.stringify({pad:'a'.repeat(2*1024*1024)})),response.res,'p1',makeProjectDir(false));
+    expect(response.status()).toBe(413);expect(response.body()).toEqual({error:'render-body-too-large'});expect(start).not.toHaveBeenCalled();
   });
-
-  it('過大な body は 413 render-body-too-large で開始しない', async () => {
-    vi.spyOn(renderJobs, 'exists').mockReturnValue(false);
-    const startSpy = vi.spyOn(renderJobs, 'start');
-    const dir = makeProjectDir(true);
-    const { res, status, body } = makeRes();
-    // 1MiB 上限を超える body（プリセットオプションは本来数KB）
-    const huge = JSON.stringify({ pad: 'a'.repeat(2 * 1024 * 1024) });
-    await handleRenderPost(makeReq(huge), res, 'p1', dir);
-    expect(status()).toBe(413);
-    expect(body()).toEqual({ error: 'render-body-too-large' });
-    expect(startSpy).not.toHaveBeenCalled();
+  it('does not activate mock warnings on the real native manager',async()=>{
+    const start=vi.spyOn(renderJobs,'start').mockReturnValue({projectId:'p1',startedAt:1,phase:'preparing'}),warn=vi.spyOn(renderJobs,'warn');
+    await handleRenderPost(makeReq(),makeRes().res,'p1',makeProjectDir(false),false,true);expect(start).toHaveBeenCalled();expect(warn).not.toHaveBeenCalled();
   });
 });

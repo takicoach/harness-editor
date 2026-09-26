@@ -2,9 +2,11 @@ import React from 'react';
 import type { Join } from '../../core/joinEngine';
 import type { SceneTransition } from '../../core/types';
 import { frameToXMapped } from './timelineGeometry';
+import { handleClipNavKey, rovingTabIndex } from './clipAria';
 import type { DisplayMap } from '../../core/timelineDisplayMap';
 
 interface Props {
+  frameForAt?: (at: 'head' | 'tail' | number) => number;
   joins: Join[];
   sceneTransitions: SceneTransition[];
   pxPerFrame: number;
@@ -95,7 +97,7 @@ export function clusterTitle(cluster: JoinMarkCluster): string {
 }
 
 /** つなぎ目マーク（菱形）。転換設定済みは .set クラス、選択中は .selected。頭尾も両端に描く。 */
-export const JoinMarkers: React.FC<Props> = ({ joins, sceneTransitions, pxPerFrame, tailFrame, selectedAt, onSelect, map }) => {
+export const JoinMarkers: React.FC<Props> = ({ joins, sceneTransitions, pxPerFrame, tailFrame, selectedAt, onSelect, map, frameForAt }) => {
   const hasAt = (at: 'head' | 'tail' | number) => sceneTransitions.some((t) => t.at === at);
   const markClass = (cluster: JoinMarkCluster): string => {
     const cls = ['tl-join-mark'];
@@ -106,13 +108,18 @@ export const JoinMarkers: React.FC<Props> = ({ joins, sceneTransitions, pxPerFra
     return cls.join(' ');
   };
   const clusters = clusterJoinMarks(
-    joinMarkSpecs(joins, tailFrame),
+    joinMarkSpecs(joins, tailFrame).map(spec => frameForAt ? { ...spec, frame: frameForAt(spec.at) } : spec),
     (frame) => frameToXMapped(frame, pxPerFrame, map),
     JOIN_MARK_MIN_GAP_PX,
   );
+  // ロービング tabindex（サイクル 4 レビュー Important）。マークは <button> なので
+  // 素のままだと 40 個超のタブ停止になる。停止は 1 個にし、↑/↓・Home/End で隣のマークへ移る。
+  // 添字を id 代わりに使う（at は 'head' | 'tail' | number の混合で数値 id ではないため）。
+  const selectedIndex = clusters.findIndex((c) => c.members.some((m) => selectedAt === m.at));
+  const navIds = clusters.map((_, i) => i);
   return (
     <div className="tl-join-markers">
-      {clusters.map((cluster) => (
+      {clusters.map((cluster, i) => (
         <button
           key={String(cluster.at)}
           type="button"
@@ -121,6 +128,11 @@ export const JoinMarkers: React.FC<Props> = ({ joins, sceneTransitions, pxPerFra
           title={clusterTitle(cluster)}
           data-join-at={cluster.at}
           data-join-count={cluster.members.length}
+          data-clip-nav=""
+          tabIndex={rovingTabIndex(i, navIds, selectedIndex >= 0 ? selectedIndex : null)}
+          onKeyDown={(e) => {
+            if (handleClipNavKey(e.key, e.currentTarget)) e.preventDefault();
+          }}
           onClick={() => onSelect(cluster.at)}
         >
           {cluster.members.length > 1 && (

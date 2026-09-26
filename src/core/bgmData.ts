@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type BgmClip } from './types';
 
@@ -6,13 +6,35 @@ import { ProjectFileError, type BgmClip } from './types';
 const STUBS: Record<string, Record<string, unknown>> = { './types': {}, './BgmSequence': {} };
 
 /** src/Bgm/bgmData.ts を読み取り BgmClip[] を返す。source が null（不在）なら空配列。 */
-export function parseBgmData(source: string | null): BgmClip[] {
+export function parseBgmData(source: string | null, options: { includeDerivedDucking?: boolean } = {}): BgmClip[] {
   if (source === null) return [];
   const m = evalDataModule(source, STUBS);
   if (!Array.isArray(m.bgmData)) {
     throw new ProjectFileError('bgmData.ts', 'bgmData 配列が見つかりません');
   }
-  return (m.bgmData as BgmClip[]).map(normalize);
+  assertNoNullOrNonFinite('bgmData.ts', 'bgmData', m.bgmData);
+  // Ordinary project loading recomputes ducking. Merging already projected output
+  // must retain that output's envelope instead of silently dropping it.
+  return (m.bgmData as BgmClip[]).map(c => ({ ...normalize(c),
+    ...(options.includeDerivedDucking && c.ducking ? { ducking: c.ducking } : {}),
+  }));
+}
+
+/**
+ * bgmData.ts に ducking が焼き込まれているか（評価済みモジュールで判定・整形に非依存）。
+ * normalize() が ducking を捨てる前の生オブジェクト配列を見て判定するため、
+ * インデント・改行・コメント等の整形差分に影響されない（正規表現の '^\s*ducking\s*:' より頑健）。
+ * source が null（不在）なら false。パース不能（配列でない・vm 評価失敗）は安全側（true = Remotion 経路）に倒す。
+ */
+export function bgmSourceHasDucking(source: string | null): boolean {
+  if (source === null) return false;
+  try {
+    const m = evalDataModule(source, STUBS);
+    if (!Array.isArray(m.bgmData)) return true; // 想定外の形は安全側
+    return (m.bgmData as Array<{ ducking?: unknown } | null | undefined>).some((c) => c?.ducking != null);
+  } catch {
+    return true; // 評価失敗（構文エラー等）も安全側
+  }
 }
 
 function clamp(v: number, lo: number, hi: number): number {

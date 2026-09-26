@@ -1,0 +1,84 @@
+/* Studio surfaces use the existing light/dark tokens; AI and export retain their actions and hierarchy. */
+.native-workspace .native-main { padding-top:8px; }
+.native-library,.native-right-dock,.native-timeline-panel { box-shadow:var(--panel-shadow); }
+.native-project-list .fb-item { width:calc(100% - 16px); margin:4px 8px; padding:10px 8px; border:1px solid transparent; border-radius:8px; }
+.native-project-list .fb-item.active { background:color-mix(in srgb,var(--accent) 12%,var(--bg-1)); border:1px solid color-mix(in srgb,var(--accent) 26%,var(--border)); box-shadow:none; }
+.native-project-list .fb-item-name { font-weight:600; }
+.native-project-list .fb-thumb { border-radius:5px; }
+.native-project-list .fb-item-meta, .native-project-list .fb-counts { font-size:var(--native-font-sub); }
+.native-preview-content { padding:0 8px; gap:8px; position:relative; }
+.native-preview-content .native-preview-box { min-width:0; margin:8px 0; background:var(--stage-bg); border-radius:7px; }
+.native-preview-stage { box-shadow:none; }
+.native-transport { border-top:1px solid var(--border); padding-top:3px; padding-bottom:3px; }
+.native-play { box-shadow:0 3px 9px color-mix(in srgb,var(--accent) 25%,transparent); }
+.native-play:hover:not(:disabled) { transform:scale(1.05); box-shadow:0 0 0 5px color-mix(in srgb,var(--accent) 11%,transparent); }
+.native-play:active:not(:disabled) { transform:scale(.95); }
+.native-add-bar:not(.is-vertical)>button,.native-add-bar:not(.is-vertical) .native-add-menu>button { display:inline-flex; align-items:center; gap:5px; }
+/* 縦工具列（F9/F13）: 面色＋1px の枠。押下中と開いたメニューだけ淡いアクセント。直書き色なし。
+   align-items:stretch は F13（.native-add-bar の横並び用 center を打ち消し、図形の包み div をセル高にする）。 */
+.native-add-bar.is-vertical { flex:0 0 54px; width:54px; align-self:center; height:min(282px,100%); display:grid; align-items:stretch; grid-template-columns:38px; grid-template-rows:repeat(6,minmax(0,38px)); align-content:center; gap:6px; padding:9px 7px; border:1px solid var(--border-strong); border-radius:calc(var(--radius-md) + 6px); background:var(--bg-1); box-shadow:var(--panel-shadow); z-index:12; }
+.native-add-bar.is-vertical>button,.native-add-bar.is-vertical .native-add-menu>button { position:relative; width:38px; height:100%; min-height:0; padding:0; display:grid; place-items:center; border:1px solid transparent; border-radius:calc(var(--radius-md) + 1px); background:transparent; color:var(--fg-1); box-shadow:none; transition:background var(--dur-hover) var(--ease-settle),color var(--dur-hover) var(--ease-settle),transform var(--dur-press) var(--ease-settle); }
+.native-add-bar.is-vertical .native-add-menu { display:block; min-height:0; }
+.native-add-bar.is-vertical svg { width:19px; height:19px; }
+.native-add-bar.is-vertical button:hover:not(:disabled),.native-add-bar.is-vertical button:focus-visible { color:var(--fg-0); background:var(--bg-2); box-shadow:none; transform:none; }
+.native-add-bar.is-vertical button:active:not(:disabled) { color:var(--accent); background:var(--accent-soft); transform:scale(.96); }
+.native-add-bar.is-vertical button[aria-expanded=true] { color:var(--accent); background:var(--accent-soft); }
+.native-add-bar.is-vertical .native-add-label { position:absolute; left:calc(100% + 15px); top:50%; transform:translate(-5px,-50%); opacity:0; pointer-events:none; white-space:nowrap; background:var(--fg-0); color:var(--bg-0); padding:6px 10px; border-radius:var(--radius-md); font-size:var(--native-font-sub); box-shadow:var(--panel-shadow); transition:opacity var(--dur-hover),transform var(--dur-hover) var(--ease-settle); }
+.native-add-bar.is-vertical button:hover>.native-add-label,.native-add-bar.is-vertical button:focus-visible>.native-add-label { opacity:1; transform:translate(0,-50%); }
+.native-add-bar.is-vertical .native-add-menu-list { left:calc(100% + 15px); top:0; z-index:20; min-width:145px; max-height:220px; overflow:auto; background:var(--bg-1); box-shadow:var(--panel-shadow); }
+.native-add-bar.is-vertical button[aria-expanded=true]>.native-add-label { opacity:0; }
+/* F6 / R2-F6 A: 舞台の内容域が 320px 未満（data-low）は工具列を横 1 列にして舞台の下段（トランスポートの上）へ。舞台は箱の全幅を使う。 */
+.native-preview-content[data-low] { flex-direction:column; align-items:stretch; }
+.native-preview-content[data-low] .native-add-bar { order:1; flex:none; flex-wrap:nowrap; overflow:visible; gap:4px; padding:4px 0 0; border:0; border-top:1px solid var(--border); background:transparent; }
+/* 横 1 列はアイコンだけ（6 × 34px でどの幅にも入る。overflow:auto にすると図形メニューが切れる）。名前は縦列と同じ吹き出し。 */
+.native-preview-content[data-low] .native-add-bar>button,.native-preview-content[data-low] .native-add-menu>button { position:relative; width:34px; min-height:30px; padding:0; display:grid; place-items:center; }
+.native-preview-content[data-low] .native-add-bar .native-add-label { position:absolute; left:50%; bottom:calc(100% + 6px); transform:translate(-50%,4px); opacity:0; pointer-events:none; white-space:nowrap; background:var(--fg-0); color:var(--bg-0); padding:5px 9px; border-radius:var(--radius-md); font-size:var(--native-font-sub); transition:opacity var(--dur-hover),transform var(--dur-hover) var(--ease-settle); }
+.native-preview-content[data-low] .native-add-bar button:hover>.native-add-label,.native-preview-content[data-low] .native-add-bar button:focus-visible>.native-add-label { opacity:1; transform:translate(-50%,0); }
+/* 図形メニューは下にトランスポートしか無いので上へ開く（パネルは overflow:hidden）。 */
+.native-preview-content[data-low] .native-add-menu-list { top:auto; bottom:calc(100% + 4px); left:0; }
+.native-preview-content[data-low] .native-preview-box { margin:8px 0 0; }
+.native-inspector fieldset { padding:12px 0; }   /* F14: 群が左右 15px を持つので fieldset の左右余白は 0（重複させるとスライダーが 92px に縮む） */
+.native-inspector fieldset>section, .native-inspector .native-inspector-section>div>section { padding:10px 0 8px; margin:0; border-top:1px solid var(--border); }
+.native-inspector .native-inspector-section>div>section:first-child { border-top:0; padding-top:4px; }
+.native-inspector h3 { font-size:13px; letter-spacing:.015em; margin:0 0 10px; }
+.native-number-field { display:grid; grid-template-columns:76px minmax(0,1fr) 52px; gap:7px; align-items:center; margin:10px 0; }
+.native-number-field>.native-property { display:contents; }
+.native-number-field>.native-property>span { grid-column:1; grid-row:1; font-size:var(--native-font-sub); color:var(--fg-2); line-height:1.5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.native-number-field>.native-property>input { grid-column:3; grid-row:1; width:100%; padding:6px 5px; text-align:right; }
+.native-number-field>.native-property-slider { grid-column:2; grid-row:1; width:100%; margin:0; }
+/* F17: 右カラムが 280px 未満（.native-inspector-host の container）はラベルを上、スライダーと数値を下の 2 行に。 */
+@container (max-width:280px) {
+  .native-number-field { grid-template-columns:minmax(0,1fr) 52px; }
+  .native-number-field>.native-property>span { grid-column:1/-1; grid-row:1; }
+  .native-number-field>.native-property-slider { grid-column:1; grid-row:2; }
+  .native-number-field>.native-property>input { grid-column:2; grid-row:2; }
+}
+.native-inspector-section>h3>button { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; padding:0; border:0; background:transparent; font-weight:700; text-align:left; }
+.native-inspector-section>h3>button svg { flex:none; margin-left:auto; transition:transform var(--dur-state) var(--ease-settle); }
+.native-inspector-section>h3>button[aria-expanded=false] svg { transform:rotate(-90deg); }
+.native-inspector-section>h3 { margin:0; }
+.native-inspector-section-summary { margin-left:auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:52%; font-family:var(--font-mono); font-size:var(--native-font-sub); font-weight:500; color:var(--fg-3); }
+.native-inspector-section>h3>button .native-inspector-section-summary + svg { margin-left:0; }   /* 要約が入ったら山形はその右隣（見出し側の margin-left:auto より強い指定で上書きする） */
+.native-inspector-section-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }   /* cssClassAudit 対策（定義の無いクラスを作らない） */
+.native-inspector-section>div[hidden] { display:none; }
+.native-timeline-toolbar button { min-height:30px; }
+/* Keep the actual filmstrip and waveform layers intact, including compact tracks. */
+.native-track:not(.native-track-audio):not(.native-track-with-cuts)>.native-clip { top:5px; height:calc(var(--native-visual-track-height,46px) - 11px); }
+.native-clip-name { padding-top:0; padding-bottom:0; }
+.native-mode-review .native-preview-content { padding:0; }
+/* 横 1 列（data-low）では .is-vertical が外れるので、その吹き出し・ボタンも名指しで止める（M-4）。 */
+@media(prefers-reduced-motion:reduce) { .native-add-bar.is-vertical button,.native-add-bar.is-vertical .native-add-label,.native-preview-content[data-low] .native-add-bar button,.native-preview-content[data-low] .native-add-label,.native-play,.native-inspector-section>h3>button svg { transition:none; animation:none; } }
+
+.native-inspector .native-inspector-section { margin:0 15px; padding:2px 0; border-bottom:1px solid var(--border); }
+/* Task 15: 動きのカタログは群「内容」の入れ子節。外枠の余白を潰して入れ子だと分かるようにする。 */
+.native-inspector .native-inspector-section .native-inspector-section { margin:0; padding:0; border-bottom:0; }
+.native-inspector .native-inspector-section .native-inspector-section>h3>button { min-height:30px; font-weight:600; }
+/* F14: 未選択のときの空状態カード。 */
+.native-inspector-empty { margin:12px 15px; padding:11px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg-2); }
+.native-inspector-empty p { margin:4px 0 0; }
+.native-inspector-foldall { margin-left:auto; min-height:24px; padding:0 8px; font-size:var(--native-font-sub); }
+.native-count { margin-left:6px; padding:0 6px; border-radius:999px; background:var(--bg-2); }
+
+/* AI 帯は単色の主操作（F9）。汎用 button:hover に負けないよう限定規則で色を固定する。 */
+.native-workspace .native-ai-band:not([aria-expanded="true"]):hover:not(:disabled) { background:var(--accent-strong); color:var(--accent-on); }
+.native-workspace .native-ai-band:not([aria-expanded="true"]):active:not(:disabled) { background:var(--accent); color:var(--accent-on); }

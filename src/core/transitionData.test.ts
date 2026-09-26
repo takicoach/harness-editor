@@ -19,6 +19,30 @@ describe('formatTransitionArray', () => {
     const out = formatTransitionArray([{ id: 1, at: 'tail', kind: 'fadeBlack', durationFrames: 20 }]);
     expect(out).not.toContain('color:');
   });
+
+  /**
+   * B-0（2026-09-02）: JoinSettings には方向 UI があるのに `direction` が書き出されず、
+   * 保存 → 再読込で方向が既定（left）へ戻っていた。
+   */
+  it('slide/wipe の direction を出力する（未指定なら書かない・他 kind でも書かない）', () => {
+    expect(formatTransitionArray([{ id: 1, at: 10, kind: 'slide', durationFrames: 8, direction: 'up' }]))
+      .toContain('direction: "up",');
+    expect(formatTransitionArray([{ id: 1, at: 10, kind: 'wipe', durationFrames: 8, direction: 'right' }]))
+      .toContain('direction: "right",');
+    // 未指定は書かない（既存ファイルの出力を 1 バイトも変えない＝バイト同値ゲートに影響しない）。
+    expect(formatTransitionArray([{ id: 1, at: 10, kind: 'wipe', durationFrames: 8 }]))
+      .not.toContain('direction');
+    // fade 系は direction を持たない（万一入っていても書かない）。
+    expect(formatTransitionArray([
+      { id: 1, at: 10, kind: 'fadeBlack', durationFrames: 8, direction: 'up' },
+    ])).not.toContain('direction');
+  });
+
+  it('direction 未指定の既存要素は出力が従来と 1 バイトも変わらない（バイト同値ゲート）', () => {
+    expect(formatTransitionArray([{ id: 1, at: 100, kind: 'fadeBlack', durationFrames: 20 }])).toBe(
+      '[\n  {\n    id: 1,\n    at: 100,\n    kind: "fadeBlack",\n    durationFrames: 20,\n  },\n]',
+    );
+  });
 });
 
 describe('serializeTransitionData', () => {
@@ -40,6 +64,16 @@ describe('parseTransitionData', () => {
     const items: SceneTransition[] = [
       { id: 1, at: 100, kind: 'fadeBlack', durationFrames: 20 },
       { id: 2, at: 'head', kind: 'fadeColor', durationFrames: 15, color: '#0A84FF' },
+    ];
+    const src = serializeTransitionData(null, items)!;
+    expect(parseTransitionData(src, 60)).toEqual(items);
+  });
+
+  it('往復: slide/wipe の direction が保存 → 再読込で保持される（B-0）', () => {
+    const items: SceneTransition[] = [
+      { id: 1, at: 100, kind: 'slide', durationFrames: 20, direction: 'up' },
+      { id: 2, at: 200, kind: 'wipe', durationFrames: 15, direction: 'down' },
+      { id: 3, at: 300, kind: 'wipe', durationFrames: 15 }, // 未指定は未指定のまま
     ];
     const src = serializeTransitionData(null, items)!;
     expect(parseTransitionData(src, 60)).toEqual(items);

@@ -3,6 +3,8 @@ import type { LayoutPreset } from '../layout/layoutPreset';
 interface LayoutSwitcherProps {
   value: LayoutPreset;
   onChange: (v: LayoutPreset) => void;
+  presets?: ReadonlyArray<{ key: LayoutPreset; label: string; title: string }>;
+  disabled?: boolean;
 }
 
 const PRESETS: Array<{ key: LayoutPreset; label: string; title: string }> = [
@@ -13,10 +15,10 @@ const PRESETS: Array<{ key: LayoutPreset; label: string; title: string }> = [
 ];
 
 /** ツールバーのレイアウト切替（3 プリセットのセグメント）。 */
-export function LayoutSwitcher({ value, onChange }: LayoutSwitcherProps) {
+export function LayoutSwitcher({ value, onChange, presets = PRESETS, disabled = false }: LayoutSwitcherProps) {
   return (
     <div className="layout-switcher" role="group" aria-label="レイアウト切替">
-      {PRESETS.map((p) => (
+      {presets.map((p) => (
         <button
           key={p.key}
           type="button"
@@ -24,6 +26,7 @@ export function LayoutSwitcher({ value, onChange }: LayoutSwitcherProps) {
           data-preset={p.key}
           title={p.title}
           aria-pressed={value === p.key}
+          disabled={disabled}
           onClick={() => onChange(p.key)}
         >
           {p.label}

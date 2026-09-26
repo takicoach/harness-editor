@@ -8,24 +8,35 @@ import {
 import { resolveSegmentLayout } from '../../../core/segmentLayout';
 import { NumberField, sliderToRate, rateToSlider } from './shared';
 import { MotionSettings } from './MotionSettings';
+import { mainClipTrimBounds, trimMainClip } from '../../edit/mainClipOps';
+import { FrameRangeFields } from '../FrameRangeFields';
 
 /** カット区間（個別）の速度設定タブ。selection.kind === 'cutSegment' のとき表示。 */
 export function CutSegmentSettingsTab({
   state,
   segmentId,
+  fps = 30,
   onEdit,
 }: {
   state: EditState;
   segmentId: number;
+  fps?: number;
   onEdit: (next: EditState) => void;
 }) {
   const override = state.segmentSpeeds[segmentId];
+  const trim = mainClipTrimBounds(state, segmentId);
   const effective = override ?? state.mainSpeed;
   const label = override === undefined
     ? `全体に従う（${Number.isInteger(state.mainSpeed) ? `${state.mainSpeed}x` : `${state.mainSpeed.toFixed(2)}x`}）`
     : (Number.isInteger(override) ? `${override}x` : `${override.toFixed(2)}x`);
   return (
     <div className="ins-pane" data-cutsegment>
+      {trim && <div className="ins-section">
+        <h3 className="ins-title">カット範囲の微調整</h3>
+        <p className="ins-hint">このクリップに使う原素材の範囲です。前後のカット済み部分も戻せます。</p>
+        <FrameRangeFields key={segmentId} start={trim.clip.originalStart} end={trim.clip.originalEnd}
+          fps={fps} min={trim.min} max={trim.max} onCommit={(start, end) => onEdit(trimMainClip(state, segmentId, start, end))} />
+      </div>}
       <h3 className="ins-title">この区間の速度</h3>
       <div className="ins-section">
         <div className="ins-label">
@@ -105,6 +116,7 @@ export function CutSegmentSettingsTab({
                 motion={state.segmentLayouts[segmentId]?.motion}
                 withRotation
                 withOpacity={false}
+                withKeyframes={false}
                 onChange={(m) => onEdit(setSegmentMotion(state, segmentId, m))}
               />
               {hasOverride && (

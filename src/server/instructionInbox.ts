@@ -10,6 +10,8 @@ import { acquireInboxLock, parseInboxFile, releaseInboxLock, serializeInbox } fr
 
 /** enqueue の入力（projectDir はサーバ側で解決済み）。 */
 export interface EnqueueInput {
+  requestId?: string;
+  requestCreatedAt?: number;
   projectId: string;
   projectDir: string;
   text: string;
@@ -18,6 +20,10 @@ export interface EnqueueInput {
 
 /** 専属在席（そのプロジェクト指定の poll/報告）の鮮度（ms）。既存 isAgentConnected の graceMs と同値。 */
 export const DEDICATED_GRACE_MS = 180_000;
+
+// The client abort and the matching Node socket close are not observed atomically. A short grace
+// before a signalled long-poll claims new work lets the close win without visible UI latency.
+const ABORT_PROPAGATION_GRACE_MS = 25;
 
 /** AI エージェント（MCP 消費者）の在席シグナル。 */
 export interface AgentStatus {
@@ -47,7 +53,7 @@ export interface InstructionInbox {
    * projectId 指定時は専属モード（在席は専属としてのみ記録・専属 waker として起床）、
    * 未指定はグローバルモード（従来通り・在席カウンタ waiting/lastPollAt を更新）。
    */
-  takeOrWait(waitMs: number, projectId?: string): Promise<InstructionRecord | null>;
+  takeOrWait(waitMs: number, projectId?: string, signal?: AbortSignal): Promise<InstructionRecord | null>;
   /** processing → done/failed のみ受理して更新する。それ以外の遷移は拒否して null。 */
   updateStatus(id: string, status: InstructionStatus, reply?: string | null): InstructionRecord | null;
   /** processing のレコードを手動で打ち切る（failed・reply「手動で打ち切られました」）。processing 以外は null。 */
@@ -193,9 +199,26 @@ export function createInstructionInbox(opts?: {
   const inbox: InstructionInbox = {
     enqueue(input) {
       const timestamp = now();
+      if (input.requestId !== undefined) {
+        const existing = [...records.values()].find(record => record.requestId === input.requestId);
+        if (existing) {
+          if (existing.projectId !== input.projectId || existing.text !== input.text
+            || existing.requestCreatedAt !== input.requestCreatedAt
+            || JSON.stringify(existing.context) !== JSON.stringify(input.context)) {
+            throw new HttpError(409, '同じ受付番号の依頼内容が異なります');
+          }
+          return existing;
+        }
+        if (!Number.isSafeInteger(input.requestCreatedAt)
+          || timestamp - input.requestCreatedAt! > 24 * 60 * 60 * 1000
+          || input.requestCreatedAt! - timestamp > 5 * 60 * 1000) {
+          throw new HttpError(409, 'この依頼の受付確認期限を過ぎています。履歴を確認してください');
+        }
+      }
       const id = `inst-${++seq}`;
       const record: InstructionRecord = {
         id,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId, requestCreatedAt: input.requestCreatedAt }),
         projectId: input.projectId,
         projectDir: input.projectDir,
         text: input.text,
@@ -240,7 +263,9 @@ export function createInstructionInbox(opts?: {
       return null;
     },
 
-    async takeOrWait(waitMs, projectId) {
+    async takeOrWait(waitMs, projectId, signal) {
+      // A request that is already gone must never claim an immediately available instruction.
+      if (signal?.aborted) return null;
       if (projectId !== undefined) {
         dedicatedSeenAt.set(projectId, now());
       } else {
@@ -254,6 +279,9 @@ export function createInstructionInbox(opts?: {
       if (projectId === undefined) globalWaiting++;
       return new Promise<InstructionRecord | null>((resolve) => {
         let settled = false;
+        let wakeScheduled = false;
+        let timedOut = false;
+        let claimTimer: ReturnType<typeof setTimeout> | null = null;
         const finish = (value: InstructionRecord | null) => {
           if (settled) return;
           settled = true;
@@ -265,18 +293,40 @@ export function createInstructionInbox(opts?: {
           }
           wakers.delete(waker);
           clearTimeout(timer);
+          if (claimTimer !== null) clearTimeout(claimTimer);
+          signal?.removeEventListener('abort', onAbort);
           resolve(value);
         };
+        const onAbort = () => finish(null);
         // enqueue / updateStatus(done|failed) 時に呼ばれる。pending を取れたら resolve。
         const waker: { projectId?: string; fn: () => void } = {
           projectId,
           fn: () => {
-            const next = inbox.takeNext(projectId !== undefined ? { projectId } : undefined);
-            if (next !== null) finish(next);
+            if (signal?.aborted) { finish(null); return; }
+            if (wakeScheduled) return;
+            wakeScheduled = true;
+            const claim = () => {
+              wakeScheduled = false;
+              if (settled) return;
+              if (signal?.aborted) { finish(null); return; }
+              const next = inbox.takeNext(projectId !== undefined ? { projectId } : undefined);
+              if (next !== null) finish(next);
+              else if (timedOut) finish(null);
+            };
+            if (signal === undefined) claim();
+            else claimTimer = setTimeout(claim, ABORT_PROPAGATION_GRACE_MS);
           },
         };
-        const timer = setTimeout(() => finish(null), waitMs);
+        const timer = setTimeout(() => {
+          timedOut = true;
+          // An instruction arrived before the deadline. Let its disconnect-grace claim finish,
+          // even though that can extend the response by at most the short grace interval.
+          if (!wakeScheduled) finish(null);
+        }, waitMs);
         wakers.add(waker);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        // Abort may have happened between the initial check and listener registration.
+        if (signal?.aborted) onAbort();
       });
     },
 
@@ -446,6 +496,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 /** POST /api/instructions の本文を構造検証する。クライアント由来の任意 JSON なので必ず通す。 */
 export function validateInstructionInput(body: unknown): InstructionInput {
   if (!isObject(body)) throw new HttpError(400, '指示リクエストの本文が不正です');
+  if ((body.requestId !== undefined || body.requestCreatedAt !== undefined)
+    && (typeof body.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,128}$/.test(body.requestId)
+      || !Number.isSafeInteger(body.requestCreatedAt))) {
+    throw new HttpError(400, '依頼の受付番号または送信日時が不正です');
+  }
   if (typeof body.projectId !== 'string' || body.projectId === '') {
     throw new HttpError(400, '指示リクエストの projectId が必要です');
   }
@@ -468,6 +523,7 @@ export function validateInstructionInput(body: unknown): InstructionInput {
     selection = { kind: kind as (typeof SELECTION_KINDS)[number], id };
   }
   return {
+    ...(body.requestId === undefined ? {} : { requestId: body.requestId as string, requestCreatedAt: body.requestCreatedAt as number }),
     projectId: body.projectId,
     text: body.text,
     context: { frame: ctx.frame, timeSec: ctx.timeSec, selection },

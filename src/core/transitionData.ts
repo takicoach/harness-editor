@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type SceneTransition } from './types';
 
@@ -15,6 +15,11 @@ export function parseTransitionData(source: string | null, _fps: number): SceneT
   if (!Array.isArray(m.transitionData)) {
     throw new ProjectFileError('transitionData.ts', 'transitionData 配列が見つかりません');
   }
+  // 配列をそのまま EditState.sceneTransitions へ通すため、ここで止めないと
+  // `durationFrames: NaN` が素通りする（formatTransitionArray は数値を素で埋めるので往復もする）。
+  // さらに保存側の NUMERIC_EDIT_FIELDS は 'sceneTransitions' を含むので、通してしまうと
+  // 「開けるのにテロップ 1 文字の修正すら 400 で保存できない」プロジェクトになる。
+  assertNoNullOrNonFinite('transitionData.ts', 'transitionData', m.transitionData);
   return m.transitionData as SceneTransition[];
 }
 
@@ -34,6 +39,11 @@ export function formatTransitionArray(items: SceneTransition[]): string {
       `    durationFrames: ${t.durationFrames},`,
     ];
     if (t.kind === 'fadeColor' && t.color !== undefined) lines.push(`    color: ${jsString(t.color)},`);
+    // B-0: slide/wipe の方向（UI にはあるのに書き出されず、保存→再読込で既定へ戻っていた）。
+    // 未指定なら書かない＝既存ファイル（direction を持たない）の出力は 1 バイトも変わらない。
+    if ((t.kind === 'slide' || t.kind === 'wipe') && t.direction !== undefined) {
+      lines.push(`    direction: ${jsString(t.direction)},`);
+    }
     return `  {\n${lines.join('\n')}\n  }`;
   });
   return `[\n${out.join(',\n')},\n]`;

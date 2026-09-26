@@ -1,0 +1,267 @@
+/* Restore the stable roles of the pre-native workspace around the native player. */
+.native-header-actions .native-auto-save {font-size:var(--native-font-sub);white-space:nowrap}
+.native-workspace {--native-rail:36px}
+.native-column-rail {min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px;padding:6px 0;background:var(--bg-1);border-inline:1px solid var(--border);overflow:visible}
+.native-column-rail-left {grid-column:1;grid-row:1}
+.native-column-rail-right {grid-column:5;grid-row:1}
+.native-workspace[data-panel-layout=tall-dock] .native-column-rail-right {grid-row:1/-1}
+.native-column-rail-open {width:24px;height:24px;min-width:24px;padding:0;display:grid;place-items:center;border-radius:6px;border:1px solid var(--border);background:var(--bg-2);color:var(--fg-1)}
+.native-column-rail-open:hover:not(:disabled) {background:var(--bg-3)}
+.native-column-rail-open:focus-visible {outline:2px solid var(--accent);outline-offset:1px}
+.native-column-rail-item {width:28px;height:28px;min-height:0;padding:0;display:grid;place-items:center;border-radius:var(--radius-md);border-color:transparent;color:var(--fg-2)}
+.native-column-rail-item:hover:not(:disabled) {background:var(--bg-2);color:var(--fg-0)}
+.native-column-head {display:flex;align-items:center;gap:4px;flex-shrink:0}
+.native-column-head>.native-seg-grow {flex:1;min-width:0}
+/* B（Task 7 レビュー修正）: 素材タブ 4 つ（動画・画像・BGM・効果音）が既定の左カラム幅 248px で折り返し、
+   「効果音 0」だけ 2 行目に落ちていた。パディングを詰めて 1 行に収める。 */
+.native-material-tabs {flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+.native-material-tabs::-webkit-scrollbar {display:none}
+.native-material-tabs>button {padding:4px 6px;flex:0 0 auto;white-space:nowrap;letter-spacing:-.1px}
+.native-column-collapse.native-header-icon {width:auto;height:var(--btn-h);min-width:0;padding:0 8px 0 6px;flex-shrink:0;align-self:center;display:inline-flex;align-items:center;gap:3px}
+.native-workspace[data-panel-layout=standard] .native-right-dock,
+.native-workspace[data-panel-layout=standard] .native-resizer-right {grid-row:1}
+.native-workspace[data-panel-layout=standard] .native-timeline-panel,
+.native-workspace[data-panel-layout=standard] .native-resizer-bottom {grid-column:1/-1}
+.native-workspace[data-panel-layout=tall-dock] .native-right-dock,
+.native-workspace[data-panel-layout=tall-dock] .native-resizer-right {grid-row:1/-1}
+.native-workspace[data-panel-layout=tall-dock] .native-timeline-panel,
+.native-workspace[data-panel-layout=tall-dock] .native-resizer-bottom {grid-column:1/4}
+.native-clip-pieces {position:absolute;top:5px;bottom:5px;pointer-events:none}
+.native-clip-pieces>.native-clip {top:0;bottom:0;height:100%;pointer-events:auto}
+.native-clip-pieces>.native-trim {pointer-events:auto;z-index:2}
+.native-unresolved-cuts {display:flex;align-items:center;gap:6px;padding-left:140px}
+.native-unresolved-cuts>button {position:static;flex-shrink:0}
+.native-track-with-cuts {height:var(--native-cut-track-height,58px)}
+.native-track-with-cuts>.native-clip {height:calc(var(--native-cut-track-height,58px) - 11px)}
+.native-track-with-cuts>.native-finish-cut-track {position:absolute!important;inset:0;z-index:5;pointer-events:none}
+.native-track-with-cuts>.native-track-label {z-index:6}
+.native-track-with-cuts .tl-track {height:100%;background:transparent}
+.native-track-with-cuts .tl-track-label,.native-track-with-cuts .tl-video-base,.native-track-with-cuts .tl-cut-hint {display:none}
+.native-track-with-cuts .tl-cut {pointer-events:auto}
+.native-finish-cut-track .tl-cut-selection {pointer-events:none}
+.native-finish-cut-track>p[role=alert] {position:absolute;top:0;left:140px;z-index:6;max-width:420px;background:var(--bg-1);color:var(--fg-1);pointer-events:auto}
+.native-project-list,.native-material-content {min-height:0;flex:1;overflow:auto}
+.native-project-list fieldset {padding:0;margin:0;border:0;min-width:0;height:100%}
+.native-project-list .fb {height:100%;width:100%;border:0;background:transparent}
+.native-project-list .fb-list {min-height:0;overflow:auto}
+.native-project-list .fb-item {width:100%;box-sizing:border-box}
+.native-project-list .fb-item[aria-disabled=true] {opacity:.55;cursor:wait}
+.native-project-list .fb-item:focus-visible {outline:2px solid var(--accent);outline-offset:-2px}
+.native-material-content[hidden],.native-right-content[hidden] {display:none}
+.native-right-content {min-height:0;flex:1;overflow:auto}
+.native-ai-panel {display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden}
+.native-ai-panel>.ct {flex:1;min-height:0}
+.native-workspace.native-mode-review .native-main {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.native-workspace.native-mode-review .native-preview {grid-column:1;grid-row:1}
+.native-workspace.native-mode-review .native-library,
+.native-workspace.native-mode-review .native-right-dock,
+.native-workspace.native-mode-review .native-resizer,
+.native-workspace.native-mode-review .native-timeline-panel {display:none}
+/* Task 12b: 「確認」モードでも「？」だけは見せる（判断事項 #11）。他の上部右側ボタン（元に戻す・
+   やり直す・AIの作業・通知・設定・保存・書き出し）は従来どおり非表示のまま。 */
+.native-workspace.native-mode-review .native-header-actions>:not([data-tutorial="help"]) {display:none}
+.native-review-speed {display:flex;align-items:center;gap:8px;color:var(--fg-2);font-size:12px}
+.native-review-speed select {max-width:110px;padding:6px 10px}
+.native-review-seek {padding:8px 24px 20px;flex-shrink:0}
+.native-review-seek input {display:block;width:100%;accent-color:var(--accent)}
+.native-mode-finish .native-right-content {padding-bottom:12px}
+.native-cut-source-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px}
+.native-cut-source-controls label{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
+.native-cut-source-controls select{min-width:0;max-width:260px;flex:1}
+.native-cut-source-controls button{white-space:nowrap}
+.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=audio]) .native-ducking-settings{display:none}
+.native-ducking-settings .tb-ducking{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.native-ducking-settings .tb-duck-strength{display:flex;gap:5px}
+.native-ducking-settings button{min-height:32px;min-width:40px}
+.native-ducking-settings button[aria-pressed=true]{background:var(--accent);color:var(--bg-0)}
+.native-inspector .color-wheel-values input[type=range]{max-width:none;width:100%}
+.native-inspector .color-wheel-values input[type=number]{max-width:80px;width:80px;flex-shrink:0}
+.native-clip-video .native-clip-name{position:relative;line-height:14px;z-index:1;width:fit-content;max-width:100%;background:color-mix(in srgb,var(--bg-1) 85%,transparent);border-radius:3px;padding:2px 5px;margin:3px}
+/* タイムラインのドラッグ中は、プレビュー側の当たり判定を全部止める。
+   実測（T6）: iframe は previewBridge.ts:23 で常時 pointer-events:none なので、
+   プレビューを横切ってもポインタキャプチャは失われない（越境は再現しなかった）。
+   同一ドキュメントのこのオーバーレイも、キャプチャ中のイベントは仕様上キャプチャ要素へ
+   直行するため現状の原因ではない。ここは「将来オーバーレイ側が原因になったとき」の保険で、
+   回帰を見張る本体は scripts/native-edge-scroll-audit.ts（実ブラウザ）の方。 */
+.native-workspace[data-native-drag] .native-manipulation,
+.native-workspace[data-native-drag] .native-manipulation polygon,
+.native-workspace[data-native-drag] .native-manipulation rect {pointer-events:none}
+/* 吸着ガイド線（中央と三分割）。ドラッグ中だけ出し、吸着した線を強調する。 */
+.native-manipulation .native-preview-guide {stroke:var(--fg-3);stroke-width:1;stroke-dasharray:3 4;opacity:.6;pointer-events:none;vector-effect:non-scaling-stroke}
+.native-manipulation .native-preview-guide.is-hit {stroke:var(--accent);stroke-dasharray:none;opacity:1}
+.native-speed-scale { display:flex; flex-direction:column; gap:6px; margin:6px 0; }
+.native-speed-slider { width:100%; }
+.native-speed-presets { display:flex; flex-wrap:wrap; gap:4px; }
+.native-speed-presets button { font-size:12px; min-height:28px; padding:0 8px; }
+.native-shape-colors { display:flex; gap:6px; margin:6px 0; }
+.native-shape-color { width:26px; height:26px; border-radius:50%; border:2px solid transparent; cursor:pointer; }
+.native-shape-color[aria-pressed=true] { border-color:var(--fg-1); }
+.native-style-inline { margin:8px 0; }
+.native-style-inline .native-style-tools { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px; }
+/* F15: スタイルは「現在の 1 行」だけを常設し、112 枚のカードはポップオーバーの中へ。 */
+.native-style-current { display:flex; align-items:center; gap:10px; padding:8px 0; }
+.native-style-current-name { display:grid; gap:2px; min-width:0; flex:1; }
+.native-style-current-name strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.native-style-inline-cards { margin:4px 0 10px; }
+.native-style-inline-cards .native-style-grid { grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px; }
+.native-style-picker { z-index:60; padding:10px; border:1px solid var(--border-strong); border-radius:var(--radius-lg); background:var(--bg-1); box-shadow:var(--panel-shadow); display:flex; flex-direction:column; gap:8px; }   /* 位置と幅は inline style（fixed・変更…の直下・640px） */
+.native-style-picker-grid { flex:1 1 auto; min-height:0; max-height:min(420px,60vh); overflow:auto; display:grid; gap:8px; }
+.native-style-picker .native-style-grid { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); }   /* native.css:251 の 170px 最小を 640px で 4 列にする */
+.native-style-picker .native-style-item { content-visibility:auto; contain-intrinsic-size:0 140px; }     /* セル単位（StyleCells が描く各セルの根要素） */
+.native-style-picker .native-style-tools { margin:0; flex-wrap:wrap; gap:6px; align-items:center; }
+.native-style-item { position:relative; display:flex; flex-direction:column; gap:2px; }
+.native-style-visibility { font-size:11px; min-height:24px; }
+.native-style-empty { margin-top:12px; color:var(--fg-3); font-size:13px; }
+.native-style-confirm { margin-top:8px; padding:8px; border:1px solid var(--accent); border-radius:6px; background:var(--bg-1); }
+.native-style-confirm button { margin-right:6px; }
+.native-folder-path { font-size:12px; color:var(--text-muted); overflow-wrap:anywhere; margin:6px 0; }
+.native-folder-list { display:flex; flex-direction:column; gap:2px; max-height:320px; overflow:auto; }
+.native-folder-list button { text-align:left; min-height:30px; }
+.native-telop-add { margin-top:8px; }
+.native-font-field { display:flex; flex-direction:column; gap:4px; }
+.native-font-sample { font-size:15px; padding:4px 6px; border:1px solid var(--border); border-radius:4px; background:var(--bg-2); }
+.native-position-presets { display:grid; grid-template-columns:repeat(3,28px); gap:3px; margin:6px 0; }
+.native-position-cell { width:28px; height:28px; padding:0; border:1px solid var(--border); border-radius:4px; background:var(--bg-2); cursor:pointer; display:grid; place-items:center; }
+.native-position-cell span { width:7px; height:7px; border-radius:2px; background:var(--fg-2); }
+.native-position-cell[aria-pressed=true] { border-color:var(--accent); }
+.native-position-cell[aria-pressed=true] span { background:var(--accent); }
+/* T18 図形ツールバーと描画中の下書き。.native-preview-box の position は native.css:121 で既に relative。 */
+.native-shape-toolbar {position:absolute;top:10px;left:10px;z-index:7;display:flex;align-items:center;gap:4px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg-1);box-shadow:0 2px 6px #0002}
+.native-shape-toolbar-label {color:var(--fg-2);font-size:var(--native-font-sub);padding-right:2px}
+.native-shape-tool {padding:4px 6px;min-width:30px;justify-content:center}
+.native-shape-default {font-size:var(--native-font-sub)}
+.native-preview-stage[data-native-drawing] {cursor:crosshair}
+.native-shape-draft {position:absolute;inset:0;width:100%;height:100%;pointer-events:none;color:var(--accent);overflow:visible}
+.native-shape-draft-chip {fill:var(--accent);font-size:16px;font-weight:600;paint-order:stroke;stroke:var(--bg-0);stroke-width:4px}
+/* T21 セーフエリア・全画面・再読み込み。 */
+/* T31 回帰の修正: 旧実装はプレビュー枠の内側に絶対配置していた（top:44px;right:10px）。
+   映像の上に重なるため、iframe のスクリーンショットと書き出しフレームを突き合わせる
+   native-image-manipulation-audit.ts が mismatch で落ちていた。見出し行の右端＝枠の外に
+   並べることで、再生バッジ（.native-rate-overlay）との重なりも同時に解消する。 */
+.native-preview-tools {display:flex;align-items:center;gap:4px}
+.native-preview .native-panel-heading {gap:8px}
+/* 解像度・fps の表示は右寄せのまま、その右にボタンを並べる（モニター名は左端に残る）。 */
+.native-preview .native-panel-heading > span + span {margin-left:auto}
+/* レビュー M7: z-index は .native-manipulation（native.css:123 で z-index:2、同じ祖先内の
+   スタッキングコンテキストを .native-preview-stage/.native-preview-box が作らないため直接比較される）
+   より下、かつ既定の合成面（z-index:auto=0 相当）より上にする。1 にすることで、
+   ガイド線は映像の手前・選択ハンドルの奥という意図した重なりになる。 */
+.native-safe-area {position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:1}
+.native-safe-area-frame {position:absolute;border:1px dashed color-mix(in srgb,var(--fg-0) 45%,transparent)}
+.native-safe-area-band {position:absolute;background:color-mix(in srgb,var(--fg-0) 12%,transparent);border-top:1px dashed color-mix(in srgb,var(--fg-0) 35%,transparent)}
+.native-preview-box:fullscreen {background:#000;display:flex;align-items:center;justify-content:center}
+/* T28: 素材の試聴・「案件から外す」・「ゴミ箱へ移す」。
+   .native-asset-place は native.css で position:absolute のホバー表示のまま残す。
+   試聴・案件から外すボタンは通常のフロー内に並べ、素材名の右で折り返す。 */
+.native-asset-row {display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.native-asset-audition,
+.native-asset-remove,
+.native-asset-trash {
+  min-height:0;
+  padding:4px 8px;
+  border-color:transparent;
+  font-size:var(--native-font-sub);
+  font-weight:700;
+  background:var(--bg-2);
+  border-radius:var(--radius-sm);
+}
+.native-asset-audition,
+.native-asset-remove {
+  color:var(--fg-0);
+}
+/* cf2034b9 の #d32f2f 直書きをトークンへ。--danger はテーマごとに定義済み
+   （ダーク #E5645C／ライト #D14B45）。白文字は両テーマとも面の上で読める濃さを選ぶ。 */
+.native-asset-trash {
+  color:#fff;
+  background:color-mix(in srgb,var(--danger) 88%,#000);
+}
+.native-asset-audition:hover:not(:disabled),
+.native-asset-remove:hover:not(:disabled) {
+  background:color-mix(in srgb,var(--bg-2) 24%,transparent);
+}
+.native-asset-trash:hover:not(:disabled) {
+  background:color-mix(in srgb,var(--danger) 70%,#000);
+}
+.native-asset-audition[aria-pressed=true] {background:var(--accent);color:var(--bg-0)}
+.native-asset-usage {color:var(--fg-2);font-size:var(--native-font-sub);margin-left:auto}
+/* M6: 素材一覧で音声補正済みの素材にバッジを出す。 */
+.native-asset-fixed {color:var(--accent);font-size:var(--native-font-sub)}
+.native-asset-removed {padding:0 8px 8px}
+.native-asset-removed .native-asset-row {margin:3px 0}
+
+/* T29: 音声の補正（案件全体）。BGMの自動音量調整と同じ帯に置き、同じ条件で出し分ける。 */
+/* M5: padding は native.css:186 の `.native-inspector fieldset`（specificity 上位）に常に負けるデッドルールだったため削除。border-bottom だけ残す。 */
+.native-audio-fix {border-bottom:1px solid var(--border)}
+.native-audio-fix-actions {display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=audio]) .native-audio-fix{display:none}
+
+/* T30: 設定/ショートカット一覧からヘルプへの導線。 */
+.native-shortcuts-help {padding:10px;border-top:1px solid var(--border);display:flex;justify-content:flex-end}
+
+/* D: ルーラーの補助目盛り（主目盛りの分割）。高さは既存のルーラー内に収める。 */
+.native-ruler-minor {position:absolute;top:22px;width:1px;height:8px;background:var(--border);pointer-events:none}
+.native-asset-luts {margin-top:6px;border-top:1px solid var(--border);padding-top:6px}
+.native-asset-luts>summary {cursor:pointer;color:var(--fg-2);font-size:var(--native-font-sub);padding:2px 0}
+.native-asset-place[data-native-highlight=on] {outline:2px solid var(--accent);outline-offset:1px}
+
+/* F: 右カラム最上段の AI 帯（#7 → Task 8b で帯ごと 1 つの押せるボタンへ）。閉じている間はグラデ＋立体感＋キラキラで押したくなる見た目、開いたら落ち着く。 */
+.native-ai-band {position:relative;display:flex;align-items:center;gap:8px;width:calc(100% - 16px);margin:8px 8px 4px;padding:10px 14px;border:0;border-radius:10px;background:var(--accent);color:var(--accent-on);box-shadow:var(--panel-shadow);transition:transform var(--dur-hover) var(--ease-settle),box-shadow var(--dur-hover) var(--ease-settle),background var(--dur-hover) var(--ease-settle)}
+.native-ai-band:hover:where(:not(:disabled)) {background:var(--accent-strong);transform:translateY(-1px)}
+.native-ai-band:active:where(:not(:disabled)) {background:var(--accent);transform:translateY(1px);box-shadow:none}
+/* レビュー指摘 Important 2: 基底 focus-visible の --accent 単色は帯のグラデと同系色で沈む。二重リングにする。
+   内輪郭は #fff 固定だとライトテーマの白い背景（--bg-1:#fff）に溶けて消える（実機確認で判明）ため、
+   背景と常に高コントラストな --fg-0（ライト#1B2320／ダーク#E8EDEB）に差し替え、外周は --accent のまま。 */
+.native-ai-band:focus-visible {outline:2px solid var(--fg-0);outline-offset:2px;box-shadow:0 0 0 4px var(--bg-1)}
+/* Task 8c: 「きらん」の sheen（::before）と、二重曲線の「[」型アクセント枠を廃止（ユーザー指示 2026-09-17）。
+   星は疑似要素2つでは足りないため、実DOMの .native-ai-band-stars 内に5つ描き、常時またたかせる。 */
+.native-ai-band-caption {opacity:.85;font-size:var(--native-font-sub);white-space:nowrap}
+.native-ai-band-main {font-weight:700;white-space:nowrap}
+.native-ai-band-arrow {margin-left:auto;font-weight:700}
+.native-ai-band-stars {position:absolute;inset:0;overflow:hidden;border-radius:inherit;pointer-events:none}
+.native-ai-band-star {position:absolute;background:#fff;clip-path:polygon(50% 0,61% 39%,100% 50%,61% 61%,50% 100%,39% 61%,0 50%,39% 39%);animation:native-ai-twinkle var(--dur-ai-cycle) ease-in-out infinite}
+.native-ai-band-star:nth-child(1) {top:4px;left:10%;width:8px;height:8px;animation-delay:calc(var(--dur-ai-cycle) * -0.2 * 0)}
+.native-ai-band-star:nth-child(2) {top:3px;left:48%;width:11px;height:11px;animation-delay:calc(var(--dur-ai-cycle) * -0.2 * 1)}
+.native-ai-band-star:nth-child(3) {top:5px;right:14%;width:8px;height:8px;animation-delay:calc(var(--dur-ai-cycle) * -0.2 * 2)}
+.native-ai-band-star:nth-child(4) {bottom:4px;left:8%;width:11px;height:11px;animation-delay:calc(var(--dur-ai-cycle) * -0.2 * 3)}
+.native-ai-band-star:nth-child(5) {bottom:5px;right:26%;width:8px;height:8px;animation-delay:calc(var(--dur-ai-cycle) * -0.2 * 4)}
+.native-ai-band[aria-expanded="true"] {background:var(--bg-2);color:var(--fg-1);border:1px solid var(--border);box-shadow:none;transform:none}
+.native-ai-band[aria-expanded="true"]:hover:where(:not(:disabled)),.native-ai-band[aria-expanded="true"]:active:where(:not(:disabled)) {background:var(--bg-2);box-shadow:none;transform:none}
+/* 開いた面の上では星を --accent・上限opacity .8 に落として「落ち着いた瞬き」にするが、止めない。 */
+.native-ai-band[aria-expanded="true"] .native-ai-band-star {background:var(--accent);animation-name:native-ai-twinkle-dim}
+.native-ai-band[aria-expanded="true"]:focus-visible {outline:2px solid var(--accent);outline-offset:2px;box-shadow:none}
+@keyframes native-ai-twinkle {0%,100% {opacity:.25;transform:scale(.6)} 50% {opacity:1;transform:scale(1.1)}}
+@keyframes native-ai-twinkle-dim {0%,100% {opacity:.25;transform:scale(.6)} 50% {opacity:.8;transform:scale(1.1)}}
+@media (prefers-reduced-motion: reduce) {
+  .native-ai-band {transition:none}
+  .native-ai-band-star {animation:none;opacity:.6}
+}
+
+/* C: シーケンス上の「追加」の段（#4）。トラックの追加（native-timeline-options）とは役割を分ける。 */
+.native-add-bar {display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 8px;border-bottom:1px solid var(--border);background:var(--bg-1)}
+.native-add-menu {position:relative;display:inline-flex}
+.native-add-menu-list {position:absolute;top:calc(100% + 4px);left:0;z-index:6;display:flex;flex-direction:column;min-width:120px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--bg-2);box-shadow:0 6px 18px #0006}
+.native-add-menu-item {padding:5px 8px;border:0;border-radius:4px;background:transparent;color:var(--fg-1);text-align:left;cursor:pointer;font-size:var(--native-font-base)}
+.native-add-menu-item:hover,.native-add-menu-item:focus-visible {background:var(--bg-3)}
+
+/* I-1: 動きが描けない部品へ移るときの 2 択 */
+.native-workspace .native-animation-guard { margin:8px 0; padding:10px; border:2px solid var(--accent); border-radius:6px; background:var(--bg-1); font-size:12px; }
+.native-workspace .native-animation-guard p { margin:0 0 8px; }
+.native-workspace .native-animation-guard-actions { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* I-1: アニメーション一覧 */
+.native-workspace .native-animation-list { margin-top:12px; }
+.native-workspace .native-animation-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; }
+.native-workspace .native-animation-item { border:2px solid var(--border); border-radius:5px; background:var(--bg-0); overflow:hidden; }
+.native-workspace .native-animation-card { display:block; width:100%; padding:8px; border:0; background:transparent; text-align:left; }
+.native-workspace .native-animation-card[aria-pressed=true] { background:var(--bg-1); box-shadow:inset 0 0 0 2px var(--accent); }
+.native-workspace .native-animation-name { display:block; font-size:12px; font-weight:700; }
+.native-workspace .native-animation-note { display:block; font-size:11px; color:var(--fg-2); }
+/* プレビューと同じ暗い地（両テーマ共通）にし、白い文字が読めるようにする。スタイル一覧の見本と同じ 4:3・幅いっぱい。 */
+.native-workspace .native-animation-stage { position:relative; display:block; width:100%; aspect-ratio:4/3; overflow:hidden; background:#16271f; }
+.native-workspace .native-animation-reason { margin:0; padding:6px 8px; font-size:11px; color:var(--fg-2); }
+
+/* I-2e: テロップ部品更新の導線（確認 → 適用 → 参照切替 → 更新前に戻す） */
+.native-telop-template-update { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.native-telop-template-update > p[role='alert'] { color: var(--danger); margin: 0; }
+.native-telop-template-applied { display: flex; flex-wrap: wrap; gap: 6px; }
+.native-style-confirm ul { margin: 6px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }

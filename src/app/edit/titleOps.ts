@@ -37,6 +37,7 @@ export function setTitleText(state: EditState, id: number, text: string): EditSt
 }
 
 export function setTitleTiming(state: EditState, id: number, originalStart: number, originalEnd: number): EditState {
+  if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd)) return state;
   const start = Math.max(0, Math.round(originalStart));
   const end = Math.max(0, Math.round(originalEnd));
   if (start >= end) return state;

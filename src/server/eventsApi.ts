@@ -45,9 +45,10 @@ import { HttpError } from './http';
 import { resolveProjectDir } from './projectRoot';
 import { watchProject } from './watchProject';
 import { watchAllProjectsStatus } from './projectsWatch';
-import { isSelfWriting, clearSelfWrite } from './selfWrite';
+import { isSelfWriting, isSelfWriteContent, selfWriteRemainingMs, clearSelfWrite } from './selfWrite';
+import { projectContentSignature } from './projectWatchPaths';
 import { instructionInbox } from './instructionInbox';
-import { renderJobs } from './renderApi';
+import { renderJobs,restoreRenderJobs } from './renderApi';
 import { denoiseJobs } from './denoiseApi';
 import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
@@ -55,10 +56,29 @@ import { transcribeJobs } from './transcribeApi';
 
 const HEARTBEAT_MS = 25_000;
 
+/**
+ * 診断ログ（既定 OFF・`SME_DEBUG_EVENTS=1` で ON）。
+ *
+ * 間欠赤の切り分けに必須の情報がこれまで**どこにも残っていなかった**: ライブ更新が
+ * 出ない失敗を見ても、「サーバが status を送らなかった」のか「送ったがクライアントが
+ * 落とした」のかを区別できず、原因未特定のまま閉じるしかなかった（E-2 差し戻し）。
+ * 送信側の事実だけでも記録が残れば、この二択は必ず割れる。
+ * 通常運用では黙る（e2e は playwright 設定が env で ON にする）。
+ */
+const DEBUG_EVENTS = process.env.SME_DEBUG_EVENTS === '1';
+
 /** ジョブ系チャネル（render/denoise/normalize/preview-proxy/transcribe）が共通で持つ形。 */
 interface JobLike {
   phase: string;
   error?: { code: string; message: string };
+  warning?: string;
+}
+
+function terminalMessage(job: JobLike): unknown {
+  return {
+    type: 'done', phase: job.phase, error: job.error,
+    ...(job.warning === undefined ? {} : { warning: job.warning }),
+  };
 }
 
 /** ジョブ系 Manager（RenderJobManager 等）が共通で持つ、SSE 配信に必要な最小インターフェース。 */
@@ -87,7 +107,7 @@ function jobChannelMessages<J extends JobLike>(
   if (!job) return [{ type: 'idle' }];
   const messages: unknown[] = [{ type: 'snapshot', job }];
   if (isTerminalPhase(job.phase)) {
-    messages.push({ type: 'done', phase: job.phase, error: job.error });
+    messages.push(terminalMessage(job));
   }
   return messages;
 }
@@ -118,14 +138,24 @@ function wireJobChannel<J extends JobLike, E extends JobLike>(
   projectId: string,
   manager: JobManagerLike<J, E>,
   send: (ch: string, msg: unknown) => void,
+  restore?:()=>Promise<unknown[]>,
 ): () => void {
+  if(restore){
+    let closed=false,received=false;
+    const stop=manager.subscribe(projectId,ev=>{received=true;send(ch,{type:'event',event:ev});if(isTerminalPhase(ev.phase)){send(ch,terminalMessage(ev));manager.discard(projectId);}});
+    // Subscribe before starting restoration; a newer live event wins over a delayed snapshot.
+    void restore().then(messages=>{if(!closed&&!received)for(const message of messages)send(ch,message);}).catch(error=>{
+      if(!closed&&!received)send(ch,terminalMessage({phase:'failed',error:{code:'restore-failed',message:String(error)}}));
+    });
+    return ()=>{closed=true;stop();};
+  }
   const job = manager.get(projectId);
   if (!job) {
     send(ch, { type: 'idle' });
   } else {
     send(ch, { type: 'snapshot', job });
     if (isTerminalPhase(job.phase)) {
-      send(ch, { type: 'done', phase: job.phase, error: job.error });
+      send(ch, terminalMessage(job));
       manager.discard(projectId);
     }
   }
@@ -133,7 +163,7 @@ function wireJobChannel<J extends JobLike, E extends JobLike>(
   return manager.subscribe(projectId, (ev) => {
     send(ch, { type: 'event', event: ev });
     if (isTerminalPhase(ev.phase)) {
-      send(ch, { type: 'done', phase: ev.phase, error: ev.error });
+      send(ch, terminalMessage(ev));
       manager.discard(projectId);
     }
   });
@@ -144,6 +174,11 @@ function wireProjectsChannel(root: string, send: (ch: string, msg: unknown) => v
   send('projects', { type: 'open' });
   try {
     return watchAllProjectsStatus(root, (event) => {
+      if (DEBUG_EVENTS) {
+        console.log(
+          `[sme] events: projects status id=${event.id} activity=${String(event.activityLabel)}`,
+        );
+      }
       send('projects', { type: 'status', ...event });
     });
   } catch (err) {
@@ -154,14 +189,25 @@ function wireProjectsChannel(root: string, send: (ch: string, msg: unknown) => v
 }
 
 /** watch チャネル（開いているプロジェクトの外部変更検知）を配線する。 */
-function wireWatchChannel(root: string, projectId: string, send: (ch: string, msg: unknown) => void): () => void {
+function wireWatchChannel(
+  root: string,
+  projectId: string,
+  send: (ch: string, msg: unknown) => void,
+  writerId?: string,
+): () => void {
   send('watch', { type: 'open' });
   try {
     const dir = resolveProjectDir(root, projectId);
     return watchProject(
       dir,
       () => send('watch', { type: 'change' }),
-      { isSelfWrite: () => isSelfWriting(projectId) },
+      {
+        isSelfWrite: () => isSelfWriting(projectId, writerId),
+        selfWriteRemainingMs: () => selfWriteRemainingMs(projectId, writerId),
+        // 窓明けの再評価は内容で判定する。ディスクが「この画面が保存した姿」のままなら
+        // 自分の書込＝通知しない。別画面の保存は writerId が違うのでここでも通らない。
+        isSelfContent: () => isSelfWriteContent(projectId, writerId, projectContentSignature(dir)),
+      },
     );
   } catch (err) {
     console.error('[sme] events: watch チャネル初期化失敗:', err);
@@ -186,9 +232,21 @@ function wireClaudeChannel(projectId: string, send: (ch: string, msg: unknown) =
 }
 
 /** sync 対象チャネル → スナップショット計算関数（すべて読み取り専用・discard しない）。 */
+const renderObservations = {
+  get: (id: string) => renderJobs.getSnapshot(id),
+  subscribe: (id:string,listener:Parameters<typeof renderJobs.subscribe>[1]) => renderJobs.subscribe(id,listener),
+  discard: (id: string) => renderJobs.discard(id),
+};
+/** Invalid/missing project IDs retain the existing idle-channel behavior. */
+export async function restoreRenderObservations(root:string,projectId:string):Promise<unknown[]> {
+  let directory:string;
+  try{directory=resolveProjectDir(root,projectId);}catch(error){if(error instanceof HttpError)return [{type:'idle'}];return [terminalMessage({phase:'failed',error:{code:'restore-failed',message:String(error)}})];}
+  try{await restoreRenderJobs(projectId,directory);return jobChannelMessages(projectId,renderObservations);}
+  catch(error){console.error('[sme] events: render 履歴の復元失敗:',error);return [terminalMessage({phase:'failed',error:{code:'restore-failed',message:'書き出し履歴を確認できません。保存先を確認して再接続してください。'}})];}
+}
 const SYNC_CHANNELS: Record<string, (projectId: string) => unknown[]> = {
   claude: claudeChannelSnapshot,
-  render: (id) => jobChannelMessages(id, renderJobs),
+  render: (id) => jobChannelMessages(id, renderObservations),
   denoise: (id) => jobChannelMessages(id, denoiseJobs),
   normalize: (id) => jobChannelMessages(id, normalizeJobs),
   'preview-proxy': (id) => jobChannelMessages(id, previewProxyJobs),
@@ -213,6 +271,10 @@ export function handleEventsSse(
   res: ServerResponse,
   root: string,
   projectId: string | null,
+  /** この接続を開いた画面の識別子（?w=…）。同じ画面の保存だけを suppress する（data-safety-5）。 */
+  writerId?: string,
+  /** Production restores persisted render state after the other channels are connected. */
+  restoreRender?:()=>Promise<unknown[]>,
 ): void {
   // projectId のバリデーション（パストラバーサル等）はここでは行わない。resolveProjectDir
   // を呼ぶのは wireWatchChannel だけで、そこは try/catch で HttpError を握って watch
@@ -236,9 +298,9 @@ export function handleEventsSse(
   stops.push(wireProjectsChannel(root, send));
 
   if (projectId !== null) {
-    stops.push(wireWatchChannel(root, projectId, send));
+    stops.push(wireWatchChannel(root, projectId, send, writerId));
     stops.push(wireClaudeChannel(projectId, send));
-    stops.push(wireJobChannel('render', projectId, renderJobs, send));
+    stops.push(wireJobChannel('render', projectId, renderObservations, send,restoreRender));
     stops.push(wireJobChannel('denoise', projectId, denoiseJobs, send));
     stops.push(wireJobChannel('normalize', projectId, normalizeJobs, send));
     stops.push(wireJobChannel('preview-proxy', projectId, previewProxyJobs, send));

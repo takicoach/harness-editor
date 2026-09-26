@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join, parse } from 'node:path';
+import { dirname, join, parse } from 'node:path';
 import {
   createPtySessionManager,
   ensureNodePtySpawnHelperExecutable,
@@ -10,6 +10,15 @@ import {
 } from './ptySession';
 import { AI_TOOLS } from './aiTools';
 import { codexRuntimeDir } from './codexHome';
+
+
+/**
+ * **タイムアウトは明示する**（M3 B-5・T5 レビュー I-4）。
+ * このファイルは**実 pty プロセス**を起動する（node-pty + 実シェル）ため、
+ * 既定の 5 秒だと他ファイルの負荷で押し出されて赤くなる（T5 の `test:gate` 1 回目で実際に発生）。
+ * 「遅いから伸ばす」ではなく「何秒までなら正常か」を数値で置く。
+ */
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 /**
  * このファイルは複数箇所で tool: 'codex' の実 ensure/switchTool を走らせる
@@ -112,6 +121,131 @@ describe('PtySessionManager（偽 claude で実 spawn）', () => {
     mgr.killAll();
     await new Promise((res) => setTimeout(res, 300));
     expect(mgr.state()).toBe('exited');
+  });
+
+  it('spawn する PATH に採用パスの親と node の bin が前置される（T26）', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-path-'));
+    mkdirSync(join(dir, 'projects-root'));
+    // .mjs 差し替え（他テストと同じ流儀）は node 経由で起動されるため、採用ファイル
+    // （loc.file）自体が常に process.execPath になり「node の bin」と「採用パスの親」が
+    // 区別できない。ここでは実行ファイルとして直接 spawn される非 .js/.mjs な偽 claude
+    // （シバン付きシェルスクリプト）を使い、resolveToolForPty の test-override 分岐で
+    // loc.file がこのスクリプト自身になるようにする（aiToolBin.test.ts の shim と同じ形）。
+    const fixtureBin = join(dir, 'fake-claude');
+    writeFileSync(fixtureBin, '#!/bin/sh\nprintf "%s" "$PATH"\n');
+    chmodSync(fixtureBin, 0o755);
+    const mgr = createPtySessionManager();
+    const chunks: string[] = [];
+    mgr.onData((c) => chunks.push(c));
+    const r = await mgr.ensure({
+      editorDir: dir,
+      projectRoot: join(dir, 'projects-root'),
+      env: { ...process.env, PATH: '/usr/bin', SME_CLAUDE_BIN: fixtureBin },
+    });
+    expect(r.ok).toBe(true);
+    await new Promise((res) => setTimeout(res, 500));
+    const path = chunks.join('').split(':');
+    expect(path[0]).toBe(dirname(fixtureBin));
+    expect(path[1]).toBe(dirname(process.execPath));
+    expect(path).toContain('/usr/bin');
+    mgr.killAll();
+    await new Promise((res) => setTimeout(res, 300));
+  });
+
+  it.each(['claude', 'codex'] as const)('%s の待機文を1回の貼付けと、その外側のEnterで送信する', async (tool) => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-waiting-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'paste-reader.mjs');
+    // Raw PTY receiver: preserve UTF-8 and chunk boundaries, and decode a complete
+    // paste event before accepting a separate submit key. The actual CLI acceptance
+    // is recorded in audit 303/ai-terminal-live-03 (a plain burst stalled Codex).
+    writeFileSync(fake, `
+      process.stdin.setRawMode(true);
+      process.stdin.setEncoding('utf8');
+      let buffer = '';
+      process.stdout.write('READY\\n');
+      process.stdin.on('data', data => {
+        buffer += data;
+        const start = '\\x1b[200~', end = '\\x1b[201~';
+        const finish = buffer.indexOf(end);
+        if (buffer.startsWith(start) && finish >= 0 && buffer.slice(finish + end.length) === '\\r') {
+          process.stdout.write('SUBMITTED:' + JSON.stringify(buffer.slice(start.length, finish)) + '\\n');
+          buffer = '';
+        }
+      });
+    `);
+    const mgr = createPtySessionManager();
+    try {
+      expect((await mgr.ensure({ editorDir: dir, projectRoot: join(dir, 'projects-root'), tool,
+        env: { ...process.env, SME_CLAUDE_BIN: fake, SME_CODEX_BIN: fake } })).ok).toBe(true);
+      await vi.waitFor(() => expect(mgr.scrollback()).toContain('READY'), { timeout: 5000 });
+      expect(mgr.startWaiting()).toEqual({ ok: true });
+      await vi.waitFor(() => expect(mgr.scrollback()).toContain('SUBMITTED:' + JSON.stringify(AI_TOOLS[tool].waitingPrompt)), { timeout: 5000 });
+      expect(mgr.scrollback().match(/SUBMITTED:/g)).toHaveLength(1);
+    } finally {
+      const running = mgr.state() === 'running';
+      mgr.killAll();
+      if (running) await vi.waitFor(() => expect(mgr.state()).toBe('exited'), { timeout: 5000 });
+    }
+  });
+
+  it('自然終了→再起動（スイッチ経由でない ensure 再呼び出し）でも旧セッションの scrollback を引き継がない', async () => {
+    // 根本原因（AAA G-1・claude-terminal.spec.ts:43 のフレーク）: ring は switchTool()
+    // だけがクリアしており、pty が自然終了して ensure() を再度呼ぶ「再起動」経路
+    // （AiTerminal.tsx の exited → restart ボタン）ではクリアされていなかった。
+    // その結果、新セッションの scrollback に旧セッションの出力（他テストの入力痕跡を
+    // 含む）が混入し、e2e が新セッションの実際の起動完了より前に旧データだけで
+    // 待機アサーションを満たしてしまい、フルスイート負荷下でのみ後続の入力操作が
+    // レースして落ちていた。
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-restart-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fakeA = join(dir, 'fake-a.mjs');
+    // stdin に "exit" が来たら自死する（fake-claude.mjs と同じ設計）。
+    writeFileSync(
+      fakeA,
+      [
+        "process.stdout.write('READY-A\\n');",
+        "let buf = '';",
+        'process.stdin.on("data", (b) => {',
+        '  process.stdout.write(b);',
+        '  buf = (buf + b.toString()).slice(-32);',
+        '  if (buf.includes("exit")) process.exit(0);',
+        '});',
+      ].join('\n'),
+    );
+    const fakeB = join(dir, 'fake-b.mjs');
+    writeFileSync(fakeB, "process.stdout.write('READY-B\\n');process.stdin.pipe(process.stdout);");
+
+    const mgr = createPtySessionManager();
+    const optsA = {
+      editorDir: dir,
+      projectRoot: join(dir, 'projects-root'),
+      env: { ...process.env, SME_CLAUDE_BIN: fakeA },
+    };
+    const rA = await mgr.ensure(optsA);
+    expect(rA.ok).toBe(true);
+    await new Promise((res) => setTimeout(res, 300));
+    expect(mgr.scrollback()).toContain('READY-A');
+
+    // 自然終了させる（SIGTERM/kill ではなく、テスト対象そのものの「exit 検出」経路）。
+    mgr.write('exit\r');
+    await new Promise((res) => setTimeout(res, 500));
+    expect(mgr.state()).toBe('exited');
+
+    // 再起動: switchTool ではなく ensure を再度呼ぶ（AiTerminal の restart ボタンと同じ経路）。
+    const optsB = {
+      editorDir: dir,
+      projectRoot: join(dir, 'projects-root'),
+      env: { ...process.env, SME_CLAUDE_BIN: fakeB },
+    };
+    const rB = await mgr.ensure(optsB);
+    expect(rB.ok).toBe(true);
+    await new Promise((res) => setTimeout(res, 300));
+
+    expect(mgr.scrollback()).toContain('READY-B');
+    expect(mgr.scrollback()).not.toContain('READY-A');
+    mgr.killAll();
+    await new Promise((res) => setTimeout(res, 300));
   });
 
   it('projectRoot がホーム直下なら spawn を拒否する', async () => {
@@ -476,8 +610,8 @@ describe('switchTool（原子的なツール切替）', () => {
     const b = join(dir, 'fake-b.mjs');
     writeFileSync(
       stubborn,
-      "process.stdout.write('PID:' + process.pid + '\\n');" +
-        "process.on('SIGTERM',()=>{});process.on('SIGHUP',()=>{});setInterval(()=>{},1000);",
+      "process.on('SIGTERM',()=>{});process.on('SIGHUP',()=>{});" +
+        "process.stdout.write('PID:' + process.pid + '\\n');setInterval(()=>{},1000);",
     );
     writeFileSync(b, 'process.stdout.write("BBB");setInterval(()=>{},1000);');
     const mgr = createPtySessionManager();
@@ -487,24 +621,32 @@ describe('switchTool（原子的なツール切替）', () => {
       editorDir: dir, projectRoot: join(dir, 'projects-root'),
       env: { ...process.env, SME_CLAUDE_BIN: stubborn, SME_CODEX_BIN: b },
     };
-    await mgr.ensure({ ...base, tool: 'claude' });
-    await new Promise((res) => setTimeout(res, 200));
-    const pidMatch = /PID:(\d+)/.exec(chunks.join(''));
-    expect(pidMatch).not.toBeNull();
-    const oldPid = Number(pidMatch![1]);
+    let oldPid: number | null = null;
+    try {
+      expect((await mgr.ensure({ ...base, tool: 'claude' })).ok).toBe(true);
+      // 全gateで起動が200msを超えても、trap登録とPID出力を実測してから切り替える。
+      await vi.waitFor(() => {
+        const pidMatch = /PID:(\d+)/.exec(chunks.join(''));
+        expect(pidMatch).not.toBeNull();
+        oldPid = Number(pidMatch![1]);
+      }, { timeout: 5000, interval: 25 });
 
-    const r = await mgr.switchTool({ ...base, tool: 'codex' });
-    expect(r.ok).toBe(true);
-    expect(mgr.currentTool()).toBe('codex');
+      const r = await mgr.switchTool({ ...base, tool: 'codex' });
+      expect(r.ok).toBe(true);
+      expect(mgr.currentTool()).toBe('codex');
 
-    // SIGKILL 送信直後は OS 側の回収がまだ済んでいないことがある（stopGracefully は
-    // SIGKILL 送信を待つだけで実終了確定までは待たない）ため、猶予（3秒の穏当終了枠 +
-    // 余裕）を置いてから存在確認する。シグナル 0 は送信せず存在確認のみ行う。
-    await new Promise((res) => setTimeout(res, 3300));
-    expect(() => process.kill(oldPid, 0)).toThrow(/ESRCH/);
-
-    mgr.killAll();
-    await new Promise((res) => setTimeout(res, 300));
+      // kill送信だけで合格にせず、OSによる実終了まで確認する。
+      await vi.waitFor(() => {
+        expect(() => process.kill(oldPid!, 0)).toThrow(/ESRCH/);
+      }, { timeout: 4000, interval: 25 });
+    } finally {
+      // 失敗時も、このテストが起動したtrapプロセスを孤児にしない。
+      if (oldPid !== null) {
+        try { process.kill(oldPid, 'SIGKILL'); } catch { /* already exited */ }
+      }
+      mgr.killAll();
+      await new Promise((res) => setTimeout(res, 300));
+    }
   }, 20_000);
 
   it('新ツールが見つからなければ失敗を返す（旧セッションは既に終了している）', async () => {
@@ -566,5 +708,120 @@ describe('ensure(codex) の prepare 配線（CODEX_HOME が spawn env に載る�
     expect(chunks.join('')).toContain(codexRuntimeDir(dir, { homeDir: () => ptyFakeHome }));
     mgr.killAll();
     await new Promise((res) => setTimeout(res, 300));
+  });
+});
+
+describe('X-1: 死んだ pty への resize/write でサーバが落ちない', () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  /**
+   * 根本原因（指揮が実測で特定）: 子プロセスが自然終了して fd が閉じてから、
+   * node-pty の onExit（非同期・libuv 経由）が発火するまでの数ミリ秒の窓が存在する。
+   * `pty !== null` はこの窓の間ずっと true のまま（onExit がまだ pty=null に
+   * 戻していないため）なので、`pty?.resize(...)` の optional chaining は
+   * この窓を一切防がない。窓の間に resize が届くと node-pty の native ioctl が
+   * 同期的に `ioctl(2) failed, EBADF` を throw し、呼び出し側（ptyApi.ts の
+   * WS message ハンドラ）は try/catch していないため、この throw がそのまま
+   * dev サーバーのプロセスを落とす（実測: `[WebServer] Error: ioctl(2) failed, EBADF`）。
+   * 実プロセスの自然終了で確実にこの窓を作るため、即終了する偽バイナリを spawn し、
+   * ensure() 直後（onExit がまだ発火し得ない同期区間）から高頻度で resize/write を
+   * 連打して窓を捉える。
+   */
+  it('自然終了直後の窓に resize が飛んでも例外を投げない（修正前は EBADF を throw していた）', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-deadresize-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'fake-instant-exit.mjs');
+    // 起動直後に自然終了する（SIGTERM/kill 経路ではなく「自然死」を再現する）。
+    writeFileSync(fake, 'process.exit(0);');
+    const mgr = createPtySessionManager();
+    const opts = {
+      editorDir: dir,
+      projectRoot: join(dir, 'projects-root'),
+      env: { ...process.env, SME_CLAUDE_BIN: fake },
+    };
+    const r = await mgr.ensure(opts);
+    expect(r.ok).toBe(true);
+
+    // onExit 確定前の窓を捉えるため、間隔を空けずに resize/write を連打する。
+    // 窓を外しても実害はない（次の呼び出しでまた窓を狙える）ので broad に回す。
+    let threw: unknown = null;
+    for (let i = 0; i < 500 && threw === null; i++) {
+      try {
+        mgr.resize(90, 30);
+        mgr.write('x');
+      } catch (err) {
+        threw = err;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((res) => setTimeout(res, 1));
+    }
+
+    expect(threw).toBeNull();
+
+    // onExit が確定した後の状態も正しく反映されること（実害の握り潰しではないことの確認）。
+    await new Promise((res) => setTimeout(res, 500));
+    expect(mgr.state()).toBe('exited');
+
+    mgr.killAll();
+  });
+  /**
+   * 前ラウンドのレビュー minor 指摘の回帰テスト。
+   * ptyDead を立てて no-op にするだけだと state() は 'running' のままで、
+   * 利用者から見て「動いているのに入力が無言で消える」状態になる
+   * （実測プローブ: 窓を捉えた瞬間の state() は 5 回中 4 回 'running' だった）。
+   * fd の死を検知した時点で終了を確定し、UI へ1回だけ通知することを検査する。
+   *
+   * 窓（fd 死亡〜onExit 確定）は数ミリ秒で、1回の spawn で必ず捉えられるとは限らない
+   * （実測の再現率は約 50%）。**アサーションを緩めるのではなく**、窓を捉えるまで
+   * spawn をやり直し、捉えた「その瞬間」に厳密なアサーションを当てる。
+   * 予算内に一度も再現できなかった場合は、検査が成立しなかったこととして fail させる
+   * （壊れたプローブを緑と区別できないため）。
+   */
+  it('fd の死を検知したら state() が running のままにならず、exit 通知が1回だけ出る', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-deadstate-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'fake-instant-exit.mjs');
+    writeFileSync(fake, 'process.exit(0);');
+
+    let observed = false;
+    for (let attempt = 0; attempt < 15 && !observed; attempt++) {
+      const mgr = createPtySessionManager();
+      const exits: number[] = [];
+      mgr.onExit((code) => exits.push(code));
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await mgr.ensure({
+          editorDir: dir,
+          projectRoot: join(dir, 'projects-root'),
+          env: { ...process.env, SME_CLAUDE_BIN: fake },
+        });
+        expect(r.ok).toBe(true);
+        for (let i = 0; i < 500 && !observed; i++) {
+          mgr.resize(90, 30);
+          mgr.write('x');
+          const died = errSpy.mock.calls.some((c) => String(c[0]).includes('pty resize が失敗'));
+          if (died) {
+            observed = true;
+            // 本題: 死を検知した瞬間に 'running' を返し続けてはいけない。
+            expect(mgr.state(), 'fd 死亡を検知したのに state() が running のまま').not.toBe('running');
+            expect(mgr.startWaiting().ok).toBe(false);
+            expect(exits.length, 'exit 通知が出ていない（無言の入力不能）').toBe(1);
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((res) => setTimeout(res, 1));
+        }
+        // 本物の onExit が後から届いても二重に通知しない。
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((res) => setTimeout(res, 500));
+        expect(mgr.state()).toBe('exited');
+        expect(exits.length, 'exit 通知が二重発火している').toBe(1);
+      } finally {
+        errSpy.mockRestore();
+        mgr.killAll();
+      }
+    }
+    expect(observed, 'fd 死亡の窓を一度も再現できず、検査が成立していない').toBe(true);
   });
 });

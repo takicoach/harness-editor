@@ -19,8 +19,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** テロップテンプレート番号を設定する（spec §9）。 */
+/**
+ * テロップテンプレート番号を設定する（spec §9）。
+ * 非有限値は無視する（telopData.ts へ `template: NaN` が書かれるとプロジェクトが壊れる）。
+ */
 export function setTelopTemplate(state: EditState, telopId: number, template: TelopTemplate): EditState {
+  if (!Number.isFinite(template)) return state;
   return patchTelop(state, telopId, (t) => ({ ...t, template }));
 }
 
@@ -90,6 +94,7 @@ export function setTelopTiming(
   originalStart: number,
   originalEnd: number,
 ): EditState {
+  if (!Number.isFinite(originalStart) || !Number.isFinite(originalEnd)) return state;
   const start0 = Math.max(0, Math.round(originalStart));
   const end0 = Math.max(0, Math.round(originalEnd));
   if (start0 >= end0) return state;
@@ -129,6 +134,8 @@ export function setTelopPosition(
   x: number,
   y: number,
 ): EditState {
+  // 非有限値は無視する（複数選択版 setTelopsPosition と同じ契約）。
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return state;
   return patchTelop(state, telopId, (t) => ({
     ...t,
     position: { x: clamp(x, -1, 1), y: clamp(y, -1, 0) },
@@ -137,6 +144,8 @@ export function setTelopPosition(
 
 /** テロップスケールを設定し 0.3..3.0 へクランプする（schema 契約の推奨範囲）。 */
 export function setTelopScale(state: EditState, telopId: number, scale: number): EditState {
+  // 非有限値は無視する（複数選択版 setTelopsScale と同じ契約）。
+  if (!Number.isFinite(scale)) return state;
   return patchTelop(state, telopId, (t) => ({ ...t, scale: clamp(scale, 0.3, 3.0) }));
 }
 
@@ -159,25 +168,6 @@ export function setAllTelopTemplates(state: EditState, template: TelopTemplate):
   return { ...state, telops: state.telops.map((t) => ({ ...t, template })) };
 }
 
-/** テロップスタイルの適用範囲（スタイルを選ぶ前に決める）。 */
-export type TelopStyleScope = 'one' | 'all';
-
-/**
- * スタイル選択の適用範囲を1か所に閉じる。
- * 「選んでから別ボタンで全体適用」だと押し忘れに気づけないため、
- * UI 側は範囲トグルを先に持ち、選択そのものをここへ流す。
- */
-export function applyTelopTemplateForScope(
-  state: EditState,
-  telopId: number,
-  template: TelopTemplate,
-  scope: TelopStyleScope,
-): EditState {
-  return scope === 'all'
-    ? setAllTelopTemplates(state, template)
-    : setTelopTemplate(state, telopId, template);
-}
-
 /**
  * 全テロップの位置・大きさ（position / scale）を一括設定する。
  * x は -1..1、y は -1..0（下端固定）、scale は 0.3..3.0 へクランプ（個別設定と同じ範囲）。
@@ -187,6 +177,7 @@ export function setAllTelopPositions(
   position: TelopPosition,
   scale: number,
 ): EditState {
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(scale)) return state;
   const x = clamp(position.x, -1, 1);
   const y = clamp(position.y, -1, 0);
   const s = clamp(scale, 0.3, 3.0);

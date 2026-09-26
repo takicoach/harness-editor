@@ -2,6 +2,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { exportedArrayEntriesState, telopEntriesState } from '../core/telopStatic';
 import type { ProjectSteps, TelopStepState } from '../shared/types';
+import { SequenceStore } from './sequence/store';
+import { hasSequenceDocument, sequenceSteps } from './sequence/summary';
 
 const TELOP_DIR = 'テロップテンプレート';
 /** cutData.ts の探索候補（loadProjectFiles.ts の CUT_DATA_CANDIDATES と同値）。 */
@@ -86,6 +88,11 @@ function hasTranscriptContent(path: string): boolean {
  * ときだけ生える）ので、有無判定で新規プロジェクトを誤判定することはない。
  */
 export function resolveProjectSteps(dir: string): ProjectSteps {
+  if (hasSequenceDocument(dir)) {
+    const saved = new SequenceStore(dir).load();
+    if (!saved) throw new Error('保存された編集内容を読み込めません');
+    return sequenceSteps(dir, saved);
+  }
   const telopSource = readCapped(join(dir, 'src', TELOP_DIR, 'telopData.ts'), MAX_TELOP_STATIC_BYTES);
   const telop: TelopStepState = telopSource === null ? 'invalid' : telopEntriesState(telopSource);
   return {

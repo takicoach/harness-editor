@@ -1,7 +1,8 @@
+import { AssetTimingSection, useAssetTimingDisplay } from './inspector/AssetTimingSection';
 import { useState, useEffect } from 'react';
 import { cutOrderingOf } from '../../core/cutOrder';
 import type { RefObject } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { EditorTitle } from '../../core/types';
 import type { EditState } from '../edit/editState';
 import { setTitleText, setTitleTiming, splitTitleAt, removeTitle } from '../edit/titleOps';
@@ -17,6 +18,7 @@ interface TitleSettingsTabProps {
 }
 
 export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: TitleSettingsTabProps) {
+  const timing = useAssetTimingDisplay();
   // 表示タイミングは再生（カット後）フレームでユーザーに見せる。
   const playbackStart = originalToPlayback(title.originalStart, state.cutRegions, cutOrderingOf(state));
   const playbackEnd = originalToPlayback(title.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
@@ -55,6 +57,7 @@ export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: Title
    *  範囲外の場合は reducer が no-op になる。 */
   function handleSplit(): void {
     const pf = Math.round(playerRef.current?.getCurrentFrame() ?? 0);
+    if (timing?.onSplit) { timing.onSplit(pf); return; }
     const atOriginalFrame = playbackToOriginal(pf, state.cutRegions, cutOrderingOf(state));
     onEdit(splitTitleAt(state, title.id, atOriginalFrame));
   }
@@ -65,6 +68,7 @@ export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: Title
         <div className="ins-label">
           <span>タイトル #{title.id}</span>
         </div>
+        {timing && <p className="ins-hint">{timing.label}</p>}
       </div>
 
       <div className="ins-section">
@@ -77,7 +81,7 @@ export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: Title
         />
       </div>
 
-      <div className="ins-section">
+<AssetTimingSection>
         <div className="ins-label"><span>表示する時間（秒）</span></div>
         {!timingEditable && (
           <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 6px' }}>
@@ -116,12 +120,12 @@ export function TitleSettingsTab({ title, state, fps, playerRef, onEdit }: Title
             />
           </div>
         </div>
-      </div>
+      </AssetTimingSection>
 
       <div className="ins-section ins-title-actions">
         {/* カット区間にかかっているタイトルは再生フレーム⇔原本フレームの対応が取れず
             分割位置を決められないため、タイミング編集と同じく分割も無効化する。 */}
-        <button type="button" className="tx-mini-btn" onClick={handleSplit} disabled={!timingEditable}>
+        <button type="button" className="tx-mini-btn" onClick={handleSplit} disabled={!timing && !timingEditable}>
           再生位置で分割
         </button>
         <button type="button" className="tx-mini-btn ins-title-del" onClick={() => onEdit(removeTitle(state, title.id))}>

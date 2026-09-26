@@ -10,6 +10,8 @@ import { Waveform } from './Waveform';
 import type { EditorSe } from '../../core/types';
 import { TrackHeader } from './TrackHeader';
 import { assetUrl, assetPathFor } from '../panels/materialList';
+import { clipHandleWidth, clipHandleStyle } from './clipHandles';
+import { clipAriaLabel, handleClipNavKey, isClipActivateKey, rovingTabIndex } from './clipAria';
 
 /** SE つまみ識別子。区間伸縮・本体移動・フェード長。 */
 export interface SeHandleId {
@@ -26,6 +28,11 @@ export interface SeOverride {
 }
 
 interface SeTrackProps {
+  /**
+   * クリップを **キーボードで** 選んだとき（Enter / Space）。監査 interaction-10。
+   * ポインタ経路（onHandleDown）と違い、ドラッグを始めずに選択だけを行う。
+   */
+  onActivate?: (handle: SeHandleId) => void;
   pxPerFrame: number;
   se: EditorSe[];
   /** asset URL 用のプロジェクト ID（音源の波形・長さデコード）。 */
@@ -66,6 +73,7 @@ export function SeTrack({
   selectedSeId,
   liveOverride,
   onHandleDown,
+  onActivate,
   onFinalize,
   map,
 }: SeTrackProps) {
@@ -79,7 +87,7 @@ export function SeTrack({
     se.forEach((s, i) => {
       if (s.autoLength !== true && s.autoVolume !== true) return;
       if (finalizedRef.current.has(s.id)) return;
-      const clip = audioClips[i];
+      const clip = audioClips[i]?.clip;
       if (!clip || clip.samples === null) return; // samples/durationSec は原子的に揃う
       const frames = clipFramesFromDuration(clip.durationSec ?? null, fps, DEFAULT_SE_DURATION_FRAMES);
       const volume = normalizedVolumeFromSamples(clip.samples, 'se');
@@ -92,16 +100,20 @@ export function SeTrack({
     () => assignLanes(se.map((s) => ({ start: s.originalStart, end: s.originalEnd }))),
     [se],
   );
+  // ロービング tabindex 用の並び（DOM の描画順と同じ）。タブ停止はこの中の 1 個だけ。
+  const clipIds = se.map((s) => s.id);
   const trackStyle = { ['--lane-count']: Math.max(1, laneCount) } as React.CSSProperties;
 
   return (
-    <div className="tl-track tl-track-se" style={trackStyle}>
+    <div className={'tl-track tl-track-se' + (se.length === 0 ? ' tl-track-empty' : '')} style={trackStyle}>
       <TrackHeader kind="se" label="効果音" />
       {se.map((s, i) => {
         const start = liveOverride?.seId === s.id ? liveOverride.originalStart : s.originalStart;
         const end = liveOverride?.seId === s.id ? liveOverride.originalEnd : s.originalEnd;
         const left = frameToXMapped(start, pxPerFrame, map);
         const width = Math.max(2, widthMapped(start, end, pxPerFrame, map));
+        // つまみ幅（極小クリップでは非表示）。監査 interaction-4。
+        const handleW = clipHandleWidth(width, 6);
         const lane = lanes[i] ?? 0;
         const top = `calc(${lane} * var(--lane-row-h) + var(--lane-inset))`;
         const selected = selectedSeId === s.id;
@@ -111,6 +123,27 @@ export function SeTrack({
         return (
           <div
             key={s.id}
+            data-testid={`clip-se-${s.id}`}
+            // キーボードから到達して選べるようにする（監査 interaction-10）。
+            // これが無いと selectedHandle が立たず、←/→ の 1 フレーム微調整に届かない。
+            // ただしタブ停止はトラックで 1 個だけ（ロービング tabindex・サイクル 4 レビュー
+            // Important）。全クリップを停止にすると 120 個超の Tab でしか抜けられない。
+            // 停止以外のクリップへは ↑/↓・Home/End で移る。
+            tabIndex={rovingTabIndex(s.id, clipIds, selectedSeId)}
+            data-clip-nav=""
+            role="button"
+            aria-label={clipAriaLabel('効果音', start, end, fps, s.file)}
+            onKeyDown={(e) => {
+              // ↑/↓・Home/End は同じトラック内のクリップ移動（←/→ は 1 フレーム微調整のまま）。
+              if (handleClipNavKey(e.key, e.currentTarget)) {
+                e.preventDefault();
+                return;
+              }
+              if (!isClipActivateKey(e.key)) return;
+              e.preventDefault();
+              onActivate?.({ kind: 'se', seId: s.id, edge: 'body' });
+            }}
+            data-id={s.id}
             className={'tl-se-clip' + (selected ? ' selected' : '') + (flagged ? ' flagged' : '')}
             style={{ left, width, top }}
             title={(flagged ? `${s.file}（カット区間内）` : s.file) + `（音量 ${Math.round((s.volume ?? 1) * 100)}%）`}
@@ -122,7 +155,7 @@ export function SeTrack({
             {/* コンテンツ（波形・ラベル）を overflow:hidden でクリップ。端つまみは clip 外へ出る。 */}
             <div className="tl-se-clip-content">
               <Waveform
-                samples={audioClips[i]?.samples ?? null}
+                samples={audioClips[i]?.clip?.samples ?? null}
                 width={width}
                 height={24}
                 className="tl-clip-waveform"
@@ -132,10 +165,12 @@ export function SeTrack({
             </div>
             <div
               className="tl-se-handle tl-se-handle-start"
+              style={clipHandleStyle(handleW, 'start')}
               onPointerDown={(e) => { e.stopPropagation(); onHandleDown({ kind: 'se', seId: s.id, edge: 'start' }, e); }}
             />
             <div
               className="tl-se-handle tl-se-handle-end"
+              style={clipHandleStyle(handleW, 'end')}
               onPointerDown={(e) => { e.stopPropagation(); onHandleDown({ kind: 'se', seId: s.id, edge: 'end' }, e); }}
             />
             {(s.fadeInFrames ?? 0) > 0 && (

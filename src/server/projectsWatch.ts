@@ -3,7 +3,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { resolveProjectStatus } from './projectStatus';
 import { resolveProjectSteps } from './projectSteps';
-import { isHarnessProject } from './scanProjects';
+import { isSuperMovieProject } from './scanProjects';
 import type { ProjectSummary } from '../shared/types';
 
 /** ホーム画面のライブ更新で配信する 1 プロジェクト分のステータス差分。 */
@@ -18,9 +18,11 @@ export type ProjectStatusEvent = Pick<
   | 'lastEditedAt'
   // out/video.mp4 の増減は工程ステッパーの rendered を変える。差分に載せないと
   // ホームのステッパーだけが古いまま残る（stageManual と同型の取りこぼし）。
-  // 既知の制限: watcher は .sme と out しか通さないため、live に変わるのは rendered だけで、
-  // transcribe/cut/telop/audio は次の refreshProjects まで更新されない。
+  // v2 は project.v2.json の保存で全工程を更新。旧TSX案件は rendered のみライブ更新。
   | 'steps'
+  // この差分がどの観測から来たか（単調増加）。クライアントが一覧の全置換と
+  // どちらが新しいかを到着順ではなく番号で決めるために必ず載せる。
+  | 'statusSeq'
 >;
 
 interface WatchAllProjectsStatusOptions {
@@ -31,7 +33,7 @@ interface WatchAllProjectsStatusOptions {
 }
 
 /**
- * `root/<projectId>/.sme/status.json` または `root/<projectId>/out/video.mp4` の変化から
+ * status.json、旧MP4、v2保存データ/書き出し記録の変化から
  * 変化したプロジェクト ID を取り出す純関数。root 直下の子ディレクトリ名が projectId（=id)。
  * ステータスに関係しないパス（プロジェクト内の他ファイル等）は null。
  */
@@ -43,11 +45,11 @@ export function projectIdFromWatchedPath(root: string, path: string): string | n
   if (id === undefined || id === '' || id.startsWith('.')) return null;
   // ステータス由来のパスのみ通す（.sme/status.json は dir 作成イベントも含めて拾う）。
   const sub = parts.slice(1).join('/');
-  if (sub !== '.sme' && sub !== '.sme/status.json' && sub !== 'out' && sub !== 'out/video.mp4') return null;
+  if (!['.sme', '.sme/status.json', 'out', 'out/video.mp4', '.harness', '.harness/project.v2.json', '.harness/last-export.json'].includes(sub)) return null;
   return id;
 }
 
-/** root 直下のハーネス形式プロジェクトディレクトリ名一覧。 */
+/** root 直下のハーネス形式の案件ディレクトリ名一覧。 */
 function listProjectIds(root: string): string[] {
   let entries: string[];
   try {
@@ -60,12 +62,47 @@ function listProjectIds(root: string): string[] {
     if (name.startsWith('.')) continue;
     const dir = join(root, name);
     try {
-      if (statSync(dir).isDirectory() && isHarnessProject(dir)) ids.push(name);
+      if (statSync(dir).isDirectory() && isSuperMovieProject(dir)) ids.push(name);
     } catch {
       continue;
     }
   }
   return ids;
+}
+
+/**
+ * 「変わったか」の比較用に 1 イベントを文字列化する。
+ * `statusSeq` は観測のたびに必ず変わる番号（＝プロジェクトの状態ではない）ので比較から外す。
+ * 外さないと baseline と常に食い違い、接続のたびに全プロジェクト分の無駄なイベントが流れる。
+ */
+export function serializeStatusForCompare(event: ProjectStatusEvent | null): string {
+  if (event === null) return 'null';
+  const { statusSeq: _ignored, ...rest } = event;
+  return JSON.stringify(rest);
+}
+
+/**
+ * 監視開始時のスナップショット（baseline）と現在値を比べ、**実際に変わったものだけ**を返す。
+ * chokidar の初回スキャン中（ignoreInitial の窓）に起きた変更はイベントとして出ないため、
+ * ready 時にこれを流して取りこぼしを埋める。変わっていないプロジェクトを返さないことで、
+ * 「無関係な変更ではイベントを出さない」という watcher の性質を保つ。
+ * baseline は返した分だけ現在値へ更新する（同じ取りこぼしを二度流さない）。
+ */
+export function startupMissedEvents(
+  ids: string[],
+  baseline: Map<string, string>,
+  resolveNow: (id: string) => ProjectStatusEvent | null,
+): ProjectStatusEvent[] {
+  const out: ProjectStatusEvent[] = [];
+  for (const id of ids) {
+    const event = resolveNow(id);
+    if (event === null) continue;
+    const serialized = serializeStatusForCompare(event);
+    if (serialized === baseline.get(id)) continue;
+    baseline.set(id, serialized);
+    out.push(event);
+  }
+  return out;
 }
 
 /**
@@ -93,7 +130,7 @@ export function watchAllProjectsStatus(
   const watcher: FSWatcher = chokidarWatch(patterns, {
     ignoreInitial: true,
     persistent: true,
-    // <project>/.sme/status.json（depth 1 のファイル）まで拾えれば十分。
+    // .sme と .harness の直下メタデータ（depth 1 のファイル）を拾う。
     // public/ の動画や src/ の編集ファイルは projectIdFromWatchedPath が弾く。
     depth: 1,
     // 大きい動画や node_modules を監視ツリーから除外して負荷を抑える。
@@ -101,10 +138,31 @@ export function watchAllProjectsStatus(
       const rel = path.startsWith(root + sep) ? path.slice(root.length + 1) : path;
       const parts = rel.split(sep);
       const sub = parts[1];
+      if (sub === '.harness') return parts.length > 2 && !['project.v2.json', 'last-export.json'].includes(parts[2]!);
       return sub !== undefined && sub !== '.sme' && sub !== 'out';
     },
   });
   const timers = new Map<string, NodeJS.Timeout>();
+  /** 現在のディスク状態から解決済みステータスを組み立てる（読めなければ null）。 */
+  const resolveNow = (id: string): ProjectStatusEvent | null => {
+    const dir = join(root, id);
+    try {
+      const steps = resolveProjectSteps(dir);
+      const status = resolveProjectStatus(dir, steps, now());
+      return { id, ...status, steps };
+    } catch (err) {
+      console.warn(`[sme] watchAllProjectsStatus: プロジェクト "${id}" の解決に失敗:`, err);
+      return null;
+    }
+  };
+  /** 現在のディスク状態から解決済みステータスを1件流す。 */
+  const emitNow = (id: string): void => {
+    const event = resolveNow(id);
+    if (event !== null) onEvent(event);
+  };
+  // 監視開始時点のスナップショット（下の 'ready' 参照）。watcher 生成より前に取る。
+  const baseline = new Map<string, string>();
+  for (const id of ids) baseline.set(id, serializeStatusForCompare(resolveNow(id)));
   const trigger = (path: string): void => {
     const id = projectIdFromWatchedPath(root, path);
     if (id === null) return;
@@ -114,17 +172,20 @@ export function watchAllProjectsStatus(
       id,
       setTimeout(() => {
         timers.delete(id);
-        const dir = join(root, id);
-        try {
-          const steps = resolveProjectSteps(dir);
-          const status = resolveProjectStatus(dir, steps, now());
-          onEvent({ id, ...status, steps });
-        } catch (err) {
-          console.warn(`[sme] watchAllProjectsStatus: プロジェクト "${id}" の解決に失敗:`, err);
-        }
+        emitNow(id);
       }, debounceMs),
     );
   };
+  // 初回スキャン完了時に「スキャン中に変わっていたもの」だけを流す。
+  // chokidar は ignoreInitial のため、スキャン中に起きた変更をイベントとして出さない。
+  // 監視対象が多い・ディスクが混んでいるほどスキャンは長引き、その間に書かれた
+  // `.sme/status.json` は**永久に届かない**（実測: フルスイート実行中、AI 作業中表示が
+  // 15 秒待っても出ないケースが再現した）。監視開始時のスナップショットと ready 時点の
+  // 実状態を比べ、**実際に変わったものだけ**を送る（無関係な変更で無駄なイベントを
+  // 出さない、という本 watcher の性質は保つ）。
+  watcher.on('ready', () => {
+    for (const event of startupMissedEvents(ids, baseline, resolveNow)) onEvent(event);
+  });
   watcher.on('change', (path) => trigger(path));
   watcher.on('add', (path) => trigger(path));
   watcher.on('unlink', (path) => trigger(path));
@@ -139,4 +200,3 @@ export function watchAllProjectsStatus(
     });
   };
 }
-

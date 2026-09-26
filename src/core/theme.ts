@@ -1,6 +1,9 @@
 /** UI テーマ。'dark' が既定（:root のデザイントークン）、'light' は [data-theme="light"] で上書き。 */
 export type Theme = 'dark' | 'light';
 
+/** 設定パネルの選択。'system' は保存値を持たず OS に追従する。 */
+export type ThemePreference = 'system' | Theme;
+
 /** localStorage キー。index.html の初期化スクリプトと共有するためリテラルも合わせること。 */
 export const THEME_STORAGE_KEY = 'sme-theme';
 

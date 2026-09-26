@@ -47,7 +47,7 @@ export interface CodexHomeDeps {
 /**
  * codex の隔離 home の置き場: `<ユーザーのホーム>/.supermovie/codex-home/<フォルダ名>-<ハッシュ>`。
  *
- * なぜエディタフォルダの外か: エディタフォルダはそのまま ZIP 圧縮して配布・共有されうる。
+ * なぜエディタフォルダの外か: この製品はエディタフォルダを手動 ZIP して受講生に配布する。
  * `zip -r` は既定で symlink をデリファレンスし、Finder の「圧縮」は hard link を実体化する。
  * 隔離 home がエディタフォルダの内側（旧: `<editorDir>/.codex-runtime`）にあると、そこに
  * 張った auth.json への symlink/hard link（＝オーナーの ChatGPT ログイン情報そのもの）が
@@ -334,8 +334,8 @@ export function prepareCodexHome(editorDir: string, deps: CodexHomeDeps = {}): P
   }
   const symlink = deps.symlink ?? ((t, p) => symlinkSync(t, p));
   const hardlink = deps.hardlink ?? ((t, p) => linkSync(t, p));
-  const stateHomeDir = join(home, '.supermovie');
-  const codexHomeParentDir = join(stateHomeDir, 'codex-home');
+  const supermovieDir = join(home, '.supermovie');
+  const codexHomeParentDir = join(supermovieDir, 'codex-home');
 
   let runtime: string;
   try {
@@ -370,7 +370,7 @@ export function prepareCodexHome(editorDir: string, deps: CodexHomeDeps = {}): P
   // 作るコードは本モジュールのみで実害は薄いが、資格情報の置き場に連なる階層であり
   // 是正コストがほぼ0のため、leaf と同じ chmod 補正を親2階層にも適用しておく。
   try { chmodSync(codexHomeParentDir, 0o700); } catch { /* 同上 */ }
-  try { chmodSync(stateHomeDir, 0o700); } catch { /* 同上 */ }
+  try { chmodSync(supermovieDir, 0o700); } catch { /* 同上 */ }
 
   cleanupStaleTmpFiles(runtime);
 

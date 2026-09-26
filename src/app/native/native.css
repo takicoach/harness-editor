@@ -1,0 +1,436 @@
+.native-home-app { height:100dvh; display:flex; flex-direction:column; color:var(--fg-0); background:var(--bg-0); font-family:var(--font-ui); }
+.native-home-app>.home { flex:1; min-height:0; }
+.native-home-icon { background:var(--bg-1); color:var(--fg-0); border:1px solid var(--border); border-radius:4px; padding:6px 9px; cursor:pointer; }
+/* F2: styles.css の @media(max-width:1480px){ :root{--topbar-h:96px} } は legacy の 2 段ヘッダー用。native は 1 段なので要素側で 52px に固定する。 */
+.native-workspace { --topbar-h:52px; }
+/* F7: トラック見出しとクリップの塗りの濃さ。ダークは地と同化しないよう +6%。 */
+.native-workspace { --track-head-mix:23%; --track-clip-mix:41%; }
+:root[data-theme="light"] .native-workspace { --track-head-mix:17%; --track-clip-mix:35%; }
+.native-workspace { height:100dvh; display:flex; flex-direction:column; overflow:hidden; background:var(--bg-0); color:var(--fg-0); font-family:var(--font-ui); font-size:var(--native-font-base); }
+.native-workspace * { box-sizing:border-box; }
+/* ボタン基底（UI 添削 F2/F3）: styles.css「ボタン共通系統」と同じ 4 状態を持つ。
+   詳細度の設計: 継承リセット(0,0,1) < 基底(0,0,1) < 変種 .btn-*(0,1,0) < 基底 hover/active(0,2,1) < 変種 hover(0,3,0)。
+   :where で詳細度を落とし、.btn-primary / .btn-tonal / .btn-secondary / .btn-ghost / .btn-danger が色を決められるようにする。
+   display は変えない（素材行やキャプション一覧の左寄せボタンを壊さないため）。 */
+:where(.native-workspace) button, :where(.native-workspace) input, :where(.native-workspace) select, :where(.native-workspace) textarea { font:inherit; color:inherit; }
+:where(.native-workspace) button:where(:not(.color-wheel-disc)) { cursor:pointer; min-height:var(--btn-h); padding:5px 10px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-1); color:var(--fg-0); font-weight:600; line-height:1.4; transition:background var(--dur-hover) var(--ease-settle),border-color var(--dur-hover) var(--ease-settle),color var(--dur-hover) var(--ease-settle),box-shadow var(--dur-hover) var(--ease-settle),transform var(--dur-press) var(--ease-settle); }
+:where(.native-workspace) button:where(:not(.color-wheel-disc)):hover:not(:disabled) { background:var(--bg-2); border-color:var(--border-strong); }
+:where(.native-workspace) button:where(:not(.color-wheel-disc)):active:not(:disabled) { transform:scale(0.96); }
+:where(.native-workspace) button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+:where(.native-workspace) button:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+.native-workspace :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+/* 一覧行などの aria-pressed（淡い塗り）。塗りトグルは .native-toggle（Task 8）が (0,2,0) で上書きする。 */
+:where(.native-workspace) button[aria-pressed=true] { color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,var(--bg-1)); }
+/* トグル（UI 添削 F5）: ON はアクセント塗り、OFF は枠。一覧行の aria-pressed（淡い塗り）とは分けるため .native-toggle 限定。 */
+.native-toggle[aria-pressed] { display:inline-flex; align-items:center; gap:5px; border-color:var(--border-strong); background:var(--bg-1); color:var(--fg-1); }
+.native-toggle[aria-pressed]:hover:not(:disabled) { background:var(--bg-2); }
+.native-toggle[aria-pressed=true] { background:var(--accent-soft); border-color:transparent; color:var(--accent); }
+.native-toggle[aria-pressed=true]:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 22%,var(--bg-1)); border-color:transparent; }
+.native-toggle[aria-pressed=true] .native-key { color:var(--accent); opacity:.75; }
+/* ON のチェック（決定 F5「ON は塗り＋チェック」）。SVG を足さずに CSS だけで描く。 */
+.native-toggle[aria-pressed=true]::before { content:""; width:8px; height:5px; margin-right:2px; border-left:2px solid currentColor; border-bottom:2px solid currentColor; transform:rotate(-45deg) translate(1px,-1px); flex:none; }
+/* スイッチ */
+.native-switch { position:relative; display:inline-flex; align-items:center; gap:7px; color:var(--fg-1); font-weight:600; font-size:var(--native-font-sub); cursor:pointer; user-select:none; white-space:nowrap; }
+.native-switch input { position:absolute; inset:0; margin:0; opacity:0; cursor:pointer; }
+.native-switch-track { position:relative; width:32px; height:18px; border-radius:999px; background:var(--border-strong); transition:background var(--dur-state) var(--ease-settle); flex:none; }
+.native-switch-knob { position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:transform var(--dur-state) var(--ease-spring); }
+.native-switch[data-checked=true] .native-switch-track { background:var(--accent); }
+.native-switch[data-checked=true] .native-switch-knob { transform:translateX(14px); }
+.native-switch-label { line-height:1; }
+.native-switch input:focus-visible + .native-switch-track { outline:2px solid var(--accent); outline-offset:2px; }
+.native-switch:has(input:disabled) { opacity:.45; cursor:not-allowed; }
+@media (prefers-reduced-motion: reduce) { .native-switch-track, .native-switch-knob { transition:none; } }
+@media (prefers-reduced-motion: reduce) { :where(.native-workspace) button { transition:none; } :where(.native-workspace) button:where(:not(.color-wheel-disc)):active:not(:disabled) { transform:none; } }
+.native-header svg,.native-library-actions svg { width:16px; height:16px; vertical-align:middle; }
+/* トップバー（UI 添削 F10 A 案）: 3 列グリッド。左＝場所、中央＝モード、右＝行動。 */
+.native-header { height:var(--topbar-h); min-height:var(--topbar-h); flex-shrink:0; display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:12px; padding:0 14px; border-bottom:1px solid var(--border); background:var(--bg-1); }
+.native-header-left { display:flex; align-items:center; gap:10px; min-width:0; }
+.native-header-center { justify-self:center; }
+.native-header-actions { display:flex; gap:6px; align-items:center; justify-self:end; }
+.native-header-icon { width:var(--btn-h); height:var(--btn-h); min-height:0; padding:0; display:inline-grid; place-items:center; }
+.native-btn-group { display:inline-flex; gap:2px; padding:2px; border-radius:calc(var(--radius-md) + 2px); background:var(--bg-2); }
+.native-btn-group > button { border-color:transparent; }
+.native-project-title { font-size:var(--native-font-base); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:28vw; }
+/* F2: 1200px 未満（data-compact）はブランド名 → AI の文字 → 自動保存の文字 の順に消す。AI は aria-label、自動保存は label の文字を視覚上だけ隠して名前を残す。 */
+.native-header[data-compact] .native-brand { display:none; }
+.native-header[data-compact] .native-project-title { max-width:20vw; }
+.native-header[data-compact] .native-ai-work { width:var(--btn-h); padding:0; justify-content:center; }
+.native-header[data-compact] .native-ai-work-label { display:none; }
+.native-header[data-compact] .native-auto-save .native-switch-label { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; } /* display:none だと checkbox のアクセシブル名（label の文字）が消える。見た目だけ隠す */
+.native-save-state { display:inline-flex; align-items:center; gap:5px; color:var(--fg-2); font-size:var(--native-font-sub); white-space:nowrap; }
+.native-save-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
+.native-save-dirty .native-save-dot { background:var(--warn-fg); }
+.native-export { position:relative; display:flex; gap:4px; }
+.native-export-panel { position:absolute; top:38px; right:0; width:340px; padding:16px; z-index:30; background:var(--bg-1); border:1px solid var(--border); border-radius:4px; box-shadow:0 6px 24px #0002; animation:native-dialog-in var(--dur-panel) var(--ease-spring); }
+.native-export-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.native-export-settings { min-width:0; border:0; padding:0; margin:16px 0 0; }
+.native-export-settings legend { padding:0; margin-bottom:12px; color:var(--fg-2); }
+.native-export-settings>label { display:flex; flex-direction:column; gap:6px; margin-top:14px; }
+.native-export-settings select { width:100%; min-width:0; }
+.native-export-settings>button { width:100%; min-height:38px; margin-top:6px; justify-content:center; background:var(--accent); border-color:var(--accent); color:var(--accent-on); font-weight:700; box-shadow:var(--shadow-chip); }
+.native-export-settings>button:hover:not(:disabled) { background:var(--accent-strong); border-color:var(--accent-strong); box-shadow:var(--shadow-fab); }
+.native-export-preflight{margin:12px 0;padding:12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg-2);font-size:12px;line-height:1.6}
+.native-export-preflight ul{padding-left:18px;margin:8px 0;max-height:180px;overflow:auto}
+.native-export-preflight li+li{margin-top:8px}.native-export-preflight li b,.native-export-preflight li span{display:block;overflow-wrap:anywhere}
+.native-export-preflight p{margin:8px 0 0;color:var(--fg-2)}
+.native-export-presets { display:grid; gap:6px; }
+.native-export-presets button { width:100%; text-align:left; line-height:1.5; }
+.native-export-panel progress { width:100%; accent-color:var(--accent); }
+.native-export-download { display:block; margin-top:16px; padding:10px; text-align:center; color:var(--bg-0); background:var(--accent); border-radius:4px; text-decoration:none; }
+.native-export-error { color:#bb5437; white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
+.native-export-panel { max-height:calc(100vh - 100px); overflow:auto; }
+.native-export-history { margin-top:16px; border-top:1px solid var(--border); padding-top:12px; }
+.native-export-history summary { cursor:pointer; }
+.native-export-history ul { list-style:none; padding:0; margin:8px 0; max-height:240px; overflow:auto; }
+.native-export-history li button { display:flex; flex-direction:column; align-items:flex-start; width:100%; padding:8px; text-align:left; gap:4px; }
+.native-export-history li button[aria-pressed="true"] { border-color:var(--accent); }
+.native-export-history time { font-size:var(--native-font-sub); color:var(--fg-2); }
+/* セグメント（UI 添削 F4）: 選択中は下線。指示器は transform でスライドする。 */
+.native-seg { position:relative; display:inline-flex; align-items:stretch; gap:2px; border-bottom:1px solid var(--border); }
+.native-seg > button { min-height:calc(var(--btn-h) - 2px); padding:4px 10px; border:0; border-radius:var(--radius-sm) var(--radius-sm) 0 0; background:transparent; color:var(--fg-2); display:inline-flex; align-items:center; gap:6px; }
+.native-seg > button:hover:not(:disabled) { background:var(--bg-2); color:var(--fg-0); }
+.native-seg > button:active:not(:disabled) { transform:none; }
+.native-seg > button[data-selected=true] { color:var(--fg-0); }
+.native-seg-indicator { position:absolute; left:0; bottom:-1px; height:2px; border-radius:2px; background:var(--accent); transition:transform var(--dur-state) var(--ease-spring); }
+.native-seg-grow { display:flex; } .native-seg-grow > button { flex:1; justify-content:center; }
+.native-key { font-family:var(--font-mono); font-size:var(--native-font-sub); font-weight:500; color:var(--fg-3); }
+/* .native-sr-only は native.css:208 に既存（読み上げだけに残す文字）。ここでは再定義しない。 */
+.native-toggle-icon { width:var(--btn-h); padding:0; justify-content:center; }
+.native-toggle-icon[aria-pressed=true]::before { display:none; }
+.native-view-menu { position:relative; margin-left:auto; }
+/* Codex P2: 位置(top/bottom/right)と高さは JS が起点ボタンの矩形から計算し、
+   position:fixed のインラインスタイルで渡す（.native-workspace へポータルするため祖先の overflow:hidden に切られない）。 */
+.native-view-menu-panel { z-index:30; min-width:280px; padding:10px; background:var(--bg-1); border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--panel-shadow); }
+.native-view-menu-panel .native-timeline-options { flex-direction:column; align-items:stretch; margin:0; gap:8px; }
+/* 吹き出し（R2-F2 / R2-F4）: data-tip の文字を ::after で出す。JS 無し。同じ要素に title は付けない（二重表示）。
+   既定は下向き、data-tip-side=right / left で横向き。400ms 後に表示。 */
+/* 祖先に overflow:hidden がある要素へは付けない（吹き出しが切れる）。付ける場合はその祖先を overflow:visible にする（レール・ツールバーは Task 4/8 で対応済み）。 */
+[data-tip] { position:relative; }
+[data-tip]::after { content:attr(data-tip) / ""; position:absolute; z-index:40; left:50%; top:calc(100% + 8px); transform:translate(-50%,-4px); padding:5px 9px; border-radius:var(--radius-md); background:var(--fg-0); color:var(--bg-0); font-size:var(--native-font-sub); font-weight:600; line-height:1.3; white-space:nowrap; pointer-events:none; opacity:0; transition:opacity var(--dur-hover) var(--ease-settle),transform var(--dur-hover) var(--ease-settle); }
+[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity:1; transform:translate(-50%,0); transition-delay:400ms; }
+[data-tip-side=right]::after { left:calc(100% + 8px); top:50%; transform:translate(-4px,-50%); }
+[data-tip-side=right]:hover::after, [data-tip-side=right]:focus-visible::after { transform:translate(0,-50%); }
+[data-tip-side=left]::after { left:auto; right:calc(100% + 8px); top:50%; transform:translate(4px,-50%); }
+[data-tip-side=left]:hover::after, [data-tip-side=left]:focus-visible::after { transform:translate(0,-50%); }
+@media (prefers-reduced-motion: reduce) { [data-tip]::after { transition:none; } }
+.native-library-tabs, .native-material-tabs { padding:6px 8px 0; flex-shrink:0; flex-wrap:wrap; }
+/* F5: 右カラムのタブは 1 段・等幅・折り返さない。畳むボタンは .native-dock-head（AI 帯の行）へ。 */
+.native-dock-tabs { padding:0 8px; flex-shrink:0; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+.native-dock-tabs::-webkit-scrollbar { display:none; }
+.native-dock-tabs > button { flex:1 1 0; min-width:0; padding:4px 6px; white-space:nowrap; justify-content:center; }
+.native-dock-head { display:flex; align-items:center; gap:4px; padding:8px 8px 4px; }
+.native-dock-head .native-ai-band { flex:1; width:auto; margin:0; }
+.native-dock-head .native-column-collapse.native-header-icon { width:var(--btn-h); padding:0; }
+/* 仕上げ工具は 6 項目で 1 行に収まらないため、下線ではなく塗りトグルの格子（排他）。 */
+.native-finish-tools { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:10px; border-bottom:1px solid var(--border); }
+.native-finish-tools .native-toggle { justify-content:center; padding:6px 4px; font-size:var(--native-font-sub); }
+@media (prefers-reduced-motion: reduce) { .native-seg-indicator { transition:none; } }
+.native-brand { font-weight:600; white-space:nowrap; font-size:14px; }.native-brand span { font-weight:400; color:var(--fg-2); }
+.native-hide-left .native-library,.native-hide-left .native-resizer-left,
+.native-hide-right .native-right-dock,.native-hide-right .native-resizer-right { display:none; }
+.native-hide-left .native-main { grid-template-columns:var(--native-rail) 0 minmax(260px,1fr) 5px var(--native-right,296px); }
+.native-hide-right .native-main { grid-template-columns:var(--native-left,248px) 5px minmax(260px,1fr) 0 var(--native-rail); }
+.native-hide-left.native-hide-right .native-main { grid-template-columns:var(--native-rail) 0 minmax(260px,1fr) 0 var(--native-rail); }
+.native-text-field { display:block; color:var(--fg-2); font-size:var(--native-font-sub); }.native-text-field textarea { display:block; width:100%; margin-top:8px; line-height:1.8; resize:vertical; }
+.native-empty-state { padding:28px 20px; line-height:1.9; color:var(--fg-2); }.native-empty-state strong { font-weight:500; color:var(--fg-1); }
+.native-notice { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; padding:8px 16px; background:var(--bg-2); border-bottom:1px solid var(--border); }
+.native-notice[role=alert] { color:#bb5437; }
+.native-main { flex:1; min-height:0; display:grid; grid-template-columns:var(--native-left,248px) 5px minmax(260px,1fr) 5px var(--native-right,296px); grid-template-rows:minmax(150px,1fr) 5px var(--native-bottom,280px); }
+.native-library { grid-column:1; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; background:var(--bg-1); }
+.native-preview { grid-column:3; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+.native-preview-message { align-items:center; justify-content:center; padding:24px; box-sizing:border-box; overflow:auto; color:var(--fg-1); background:var(--bg-1); }
+.native-preview-problem { width:min(100%,480px); max-height:100%; overflow:auto; text-align:left; line-height:1.6; }
+.native-preview-problem p { margin:10px 0 16px; color:var(--fg-2); }
+.native-preview-problem button { padding:8px 14px; border:1px solid var(--border); border-radius:4px; background:var(--bg-2); color:var(--fg-1); cursor:pointer; }
+.native-preview-problem details { margin-top:18px; font-size:12px; }
+.native-preview-problem summary { cursor:pointer; }
+.native-preview-problem pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
+.native-inspector { grid-column:5; grid-row:1; overflow:auto; min-height:0; min-width:0; background:var(--bg-1); }
+.native-timeline-panel { grid-column:1/-1; grid-row:3; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.native-mode-finish .native-inspector { grid-row:1/-1; }
+.native-mode-finish .native-resizer-right { grid-row:1/-1; }
+.native-mode-finish .native-timeline-panel,.native-mode-finish .native-resizer-bottom { grid-column:1/4; }
+.native-resizer { touch-action:none; background:var(--bg-3); transition:background var(--dur-hover) var(--ease-settle); }
+.native-resizer:hover,.native-resizer:focus-visible { background:var(--accent); }
+.native-resizer-left { grid-column:2; grid-row:1; cursor:col-resize; }
+.native-resizer-right { grid-column:4; grid-row:1; cursor:col-resize; }
+.native-resizer-bottom { grid-column:1/-1; grid-row:2; cursor:row-resize; }
+.native-panel-heading { height:34px; padding:0 12px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; border-bottom:1px solid var(--border); }
+.native-panel-heading span+span { color:var(--fg-2); font-size:var(--native-font-sub); }
+/* F3: 軽量版の案内は全幅のバナーではなく、見出しのチップ 22px。使ったらトーストで 1 回知らせる。 */
+.native-proxy-chips { display:inline-flex; gap:6px; margin-left:8px; min-width:0; overflow:hidden; }
+.native-proxy-chip { display:inline-flex; align-items:center; gap:6px; height:22px; padding:0 4px 0 9px; border-radius:999px; font-size:var(--native-font-sub); font-weight:600; white-space:nowrap; background:color-mix(in srgb,var(--warn-fg) 16%,transparent); color:var(--warn-fg); }
+.native-proxy-chip.is-ready { background:var(--accent-soft); color:var(--accent); }
+.native-proxy-chip.is-error { background:color-mix(in srgb,var(--danger) 14%,transparent); color:var(--danger); }
+.native-proxy-chip > button { min-height:18px; height:18px; padding:0 7px; font-size:var(--native-font-sub); border-radius:999px; }
+.native-preview-box { position:relative; flex:1; min-height:0; margin:14px 18px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.native-preview-stage { position:relative; flex-shrink:0; background:#000; box-shadow:0 2px 10px #0002; }
+.native-manipulation { position:absolute; inset:0; overflow:visible; pointer-events:none; z-index:2; }
+.native-manipulation polygon { fill:transparent; stroke:var(--accent); stroke-width:1.5; pointer-events:all; cursor:move; vector-effect:non-scaling-stroke; }
+.native-manipulation rect { fill:var(--bg-1); stroke:var(--accent); stroke-width:2; pointer-events:all; cursor:nwse-resize; }
+.native-manipulation .native-move-grip { cursor:move; }
+.native-manipulation .native-move-guide, .native-manipulation .native-move-symbol { fill:none; stroke:var(--accent); stroke-width:1.5; pointer-events:none; }
+.native-manipulation .native-move-guide { stroke-dasharray:2 3; }
+.native-manipulation .native-shape-handle { cursor:crosshair; }
+.native-manipulation .native-shape-guide { fill:none; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; pointer-events:none; }
+.native-manipulation [aria-disabled=true] { cursor:wait; }
+.native-manipulation-note { position:absolute; left:8px; right:8px; bottom:8px; z-index:3; width:fit-content; max-width:calc(100% - 16px); padding:5px 8px; border-radius:4px; background:var(--bg-1); color:var(--fg-1); box-shadow:0 1px 6px #0002; font-size:var(--native-font-sub); pointer-events:none; }
+.native-preview-status { position:absolute; max-width:90%; padding:12px 18px; background:var(--bg-1); color:var(--fg-1); border:1px solid var(--border); border-radius:4px; }
+/* トランスポート（UI 添削 F6 A 案）: 面を張らず、上に区切り線 1 本。左タイムコード・中央 7 ボタン・右速度バッジ。 */
+.native-transport { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px; min-height:44px; padding:3px 12px; flex-shrink:0; border-top:1px solid var(--border); background:var(--bg-1); }
+.native-timecode-group { justify-self:start; display:inline-flex; align-items:baseline; gap:8px; }
+.native-timecode { font-family:var(--font-mono); font-size:var(--native-font-tc,15.5px); font-weight:600; color:var(--fg-0); font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+.native-timecode-frames { font-size:.72em; font-weight:400; color:var(--fg-2); }
+.native-timecode-total { font-family:var(--font-mono); font-size:var(--native-font-sub,11.5px); color:var(--fg-2); font-variant-numeric:tabular-nums; }
+.native-transport-keys { display:flex; align-items:center; gap:2px; }
+.native-transport-icon { width:var(--btn-h); height:var(--btn-h); min-height:0; padding:0; display:inline-grid; place-items:center; }
+.native-play { position:relative; width:38px; height:38px; min-height:0; padding:0; margin:0 4px; border-radius:50%; background:var(--accent); border-color:var(--accent); color:var(--accent-on); display:inline-grid; place-items:center; box-shadow:var(--shadow-chip); }
+.native-play:hover:not(:disabled) { background:var(--accent-strong); border-color:var(--accent-strong); box-shadow:var(--shadow-fab); }
+.native-play-icon { grid-area:1 / 1; display:inline-grid; place-items:center; transition:opacity var(--dur-state) var(--ease-settle),transform var(--dur-state) var(--ease-spring); }
+.native-play-icon-pause { opacity:0; transform:scale(.6); }
+.native-play[data-playing=true] .native-play-icon-play { opacity:0; transform:scale(.6); }
+.native-play[data-playing=true] .native-play-icon-pause { opacity:1; transform:none; }
+.native-play::after { content:""; position:absolute; inset:-4px; border-radius:50%; border:2px solid var(--accent); opacity:0; pointer-events:none; }
+.native-play[data-playing=true]::after { animation:native-play-ring 1.6s ease-out infinite; }
+@keyframes native-play-ring { 0% { opacity:.5; transform:scale(.92); } 100% { opacity:0; transform:scale(1.18); } }
+.native-rate-badge { justify-self:end; min-width:64px; text-align:center; font-family:var(--font-mono); font-size:var(--native-font-sub,11.5px); font-weight:600; padding:3px 8px; border-radius:999px; background:var(--fg-0); color:var(--bg-0); visibility:hidden; }
+.native-rate-badge[data-direction] { visibility:visible; }
+.native-rate-badge[data-direction=reverse] { background:var(--warn-fg); color:var(--warn-on); }
+.native-rate-badge[data-direction=forward] { background:var(--accent); color:var(--accent-on); }
+.native-rate-overlay { position:absolute; right:10px; top:10px; z-index:3; font-family:var(--font-mono); font-size:var(--native-font-sub,11.5px); font-weight:600; padding:3px 8px; border-radius:999px; background:rgba(16,20,18,.72); color:#fff; pointer-events:none; }
+.native-seek { height:20px; display:flex; align-items:center; padding:0 12px 4px; background:var(--bg-1); flex-shrink:0; }
+.native-seek input { width:100%; margin:0; accent-color:var(--accent); }
+@media (prefers-reduced-motion: reduce) { .native-play[data-playing=true]::after { animation:none; } .native-play-icon { transition:none; } }
+.native-library-actions { display:flex; flex-wrap:wrap; gap:6px; padding:12px; }
+.native-asset-list,.native-caption-list { overflow:auto; flex:1; padding:0 8px; }
+/* 素材行（UI 添削 F12）: 種別バッジ・名前・尺。行のホバー／フォーカスで兄弟の「再生位置に置く」が現れる。 */
+.native-asset-row { position:relative; margin:3px 7px; }
+.native-asset { display:grid; grid-template-columns:auto 1fr; gap:10px; align-items:center; width:100%; padding:6px 8px; text-align:left; border-radius:calc(var(--radius-md) + 2px); }
+.native-asset-row.is-selected .native-asset { border-color:var(--accent); background:var(--accent-tint); }
+.native-asset-type { width:40px; height:28px; border-radius:var(--radius-sm); display:grid; place-items:center; font-family:var(--font-mono); font-size:var(--native-font-sub); font-weight:700; background:var(--bg-2); color:var(--fg-2); }
+.native-asset-body { min-width:0; display:grid; }
+.native-asset-body strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.native-asset-meta { font-family:var(--font-mono); font-size:var(--native-font-sub); color:var(--fg-3); font-variant-numeric:tabular-nums; }
+.native-asset-place { position:absolute; right:8px; top:50%; transform:translate(4px,-50%); opacity:0; pointer-events:none; min-height:0; padding:4px 8px; border-color:transparent; font-size:var(--native-font-sub); font-weight:700; color:var(--accent); background:var(--accent-soft); border-radius:var(--radius-sm); white-space:nowrap; transition:opacity var(--dur-hover) var(--ease-settle),transform var(--dur-hover) var(--ease-settle); }
+/* T28 レビュー M: 試聴・案件から外すボタンが行へ増えたぶん、絶対配置の本ボタンが非表示中でも
+   クリックを奪わないよう pointer-events は表示時だけ有効にする。 */
+.native-asset-row:hover .native-asset-place, .native-asset-row:focus-within .native-asset-place, .native-asset-row.is-selected .native-asset-place { opacity:1; pointer-events:auto; transform:translate(0,-50%); }
+.native-asset-place:hover:not(:disabled) { background:color-mix(in srgb,var(--accent) 24%,transparent); }
+.native-library-make { font-size:var(--native-font-sub); color:var(--fg-3); margin-left:4px; }
+.native-library-actions { align-items:center; }
+.native-sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+@media (prefers-reduced-motion: reduce) { .native-asset-place { transition:none; } }
+.native-library-hint { color:var(--fg-2); font-size:var(--native-font-sub); line-height:1.7; padding:8px 12px; margin:0; border-top:1px solid var(--border); }
+.native-source-preview { padding:8px 12px; }
+.native-source-preview video { width:100%; max-height:140px; background:#000; }
+.native-source-preview button { width:100%; font-size:var(--native-font-sub); }
+.native-caption-list button { display:flex; gap:12px; text-align:left; width:100%; margin:6px 0; }
+.native-caption-list small { color:var(--fg-2); white-space:nowrap; }
+.native-transcript { padding:12px; overflow:auto; }
+.native-transcript select { display:block; width:100%; margin:8px 0 18px; }
+.native-words { display:flex; flex-wrap:wrap; gap:3px; line-height:1.8; }
+.native-words button { border:0; padding:2px 3px; user-select:none; }
+.native-words button:hover { color:var(--accent); }
+.native-inspector fieldset { border:0; padding:12px 16px; margin:0; min-width:0; }
+.native-inspector fieldset fieldset { padding:0; }
+.native-scene-fade-settings section { display:flex; flex-direction:column; gap:10px; }
+.native-scene-fade-settings .native-property { flex-direction:column; align-items:stretch; gap:6px; }
+.native-scene-fade-settings .native-property select { width:100%; max-width:none; }
+.native-scene-fade-colors { display:flex; flex-wrap:wrap; gap:8px; }
+.native-scene-fade-colors button { width:24px; height:24px; border:1px solid var(--fg-2); }
+.native-scene-fade-colors button[aria-pressed=true] { outline:2px solid var(--accent); outline-offset:2px; }
+.native-scene-fade-edge,.native-scene-fade-join { position:absolute; z-index:4; padding:0 3px!important; font-size:var(--native-font-sub)!important; line-height:16px; color:var(--accent)!important;
+  /* フェードの印は分割点＝トリムハンドルと同じ座標に置かれる。素の button の min-height（--btn-h:30px）
+     のままだと当たり判定がクリップの上 3/4 を覆い、`stopPropagation` で端ドラッグの pointerdown を
+     奪う（実測）。見える印はそのままに、当たり判定をトラック上端の細い帯へ限る。既定の行高
+     （46px）では 18px（従来値と同じ）。I-1: 帯を固定 18px のままにすると、行の高さを最小の
+     28px まで下げたときハンドルの縦中央を覆ってしまう（2113 の実測: join top 855.3 / bottom
+     873.3 に対しハンドル中央 867.8 → 5.5px 覆う）。行の高さから帯の高さを一次式で導き、
+     どの行高でも「帯の下端 < ハンドルの縦中央」を保つ（sceneFadeMarkerHitBand.test.ts が
+     28px と 46px の両方を CSS から機械検査する）。11px 未満にはしない。
+     不変条件は sceneFadeMarkerHitBand.test.ts が CSS から機械検査する。 */
+  min-height:0; height:calc((var(--native-visual-track-height,46px) + 8px) / 3); }
+.native-scene-fade-edge { top:0; }
+.native-scene-fade-join { top:1px; transform:translateX(-50%); }
+.native-inspector details { margin:10px 0; }
+.native-inspector summary { cursor:pointer; margin-bottom:8px; }
+.native-style-overlay { position:fixed; inset:0; z-index:5000; background:#0006; display:grid; place-items:center; padding:24px; }
+.native-style-dialog { width:min(900px,100%); max-height:85vh; min-height:300px; display:flex; flex-direction:column; background:var(--bg-1); color:var(--fg-0); border:1px solid var(--border); border-radius:8px; box-shadow:0 16px 60px #0004; padding:24px; }
+.native-style-dialog>header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+.native-style-dialog h2 { font-size:19px; margin:0 0 6px; }.native-style-dialog p { color:var(--fg-2); margin:0 0 12px; }
+.native-style-tools { display:flex; gap:12px; margin:12px 0; }.native-style-tools input { flex:1; min-width:0; padding:8px; border:1px solid var(--border); border-radius:4px; background:var(--bg-0); color:var(--fg-0); }
+.native-style-results { overflow:auto; min-height:0; padding:2px; }.native-style-group h3 { font-size:13px; font-weight:500; margin:18px 0 10px; }
+.native-style-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; }
+.native-workspace .native-style-card { padding:0; overflow:hidden; border:2px solid var(--border); border-radius:5px; background:var(--bg-0); text-align:left; }
+.native-workspace .native-style-card[aria-pressed=true] { border-color:var(--accent); }.native-style-card>span { display:block; padding:8px; font-size:12px; }
+.native-style-stage { position:relative; width:100%; aspect-ratio:4/3; overflow:hidden; background:#16271f; }
+.native-inspector section { border-top:1px solid var(--border); padding:10px 0; margin-top:12px; }
+.native-inspector h3 { margin:0 0 14px; font-size:var(--native-font-sub); font-weight:600; color:var(--fg-1); }
+.native-property { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:10px 0; }
+.native-property>span { color:var(--fg-2); font-size:var(--native-font-sub); flex-shrink:0; }
+.native-property input { width:84px; text-align:right; }
+.native-property select { max-width:150px; }
+.native-property:has(textarea) { display:block; }
+.native-property textarea { display:block; width:100%; margin-top:8px; resize:vertical; min-height:66px; line-height:1.8; }
+.native-workspace input,.native-workspace select,.native-workspace textarea { border:1px solid var(--border); border-radius:3px; background:var(--bg-0); padding:5px 7px; }
+.native-workspace input[type=range] { padding:0; accent-color:var(--accent); }
+.native-check { display:flex; gap:8px; align-items:center; margin:12px 0; color:var(--fg-2); }
+.native-check input { accent-color:var(--accent); }
+.native-property-actions { display:flex; gap:6px; margin-top:16px; }
+.native-subtle { color:var(--fg-2); font-size:var(--native-font-sub); line-height:1.8; }
+.native-text-button { color:var(--accent)!important; border:0!important; padding-left:0!important; background:none!important; }
+.native-timeline-toolbar { display:flex; flex-wrap:nowrap; overflow:visible; gap:10px; align-items:center; padding:4px 12px; min-height:40px; flex-shrink:0; border-bottom:1px solid var(--border); }
+.native-timeline-toolbar strong { font-size:var(--native-font-sub); white-space:nowrap; }
+.native-timeline-options { display:flex; flex-wrap:wrap; gap:6px; margin-left:auto; align-items:center; }
+.native-timeline-options button { font-size:var(--native-font-sub); }
+.native-timeline-options label { display:flex; gap:8px; align-items:center; font-size:var(--native-font-sub); color:var(--fg-2); }
+.native-zoom-value { font-family:var(--font-mono); font-size:var(--native-font-sub); color:var(--fg-2); min-width:34px; font-variant-numeric:tabular-nums; }
+.native-timeline-options input { width:80px; }
+/* M-11: 全トラックの高さスライダー（NativeWorkspace.tsx の timelineOptions）。cssClassAudit の
+   既知赤の解消。見た目は .native-timeline-options input の 80px を明示するだけで変えない。 */
+.native-track-height-control input { width:80px; }
+.native-timeline { flex:1; overflow:auto; min-height:0; position:relative; overscroll-behavior:contain; user-select:none; }
+.native-timeline-content { position:relative; min-height:100%; padding-bottom:20px; }
+.native-ruler { height:36px; position:relative; border-bottom:1px solid var(--border); touch-action:none; }
+.native-ruler>span { position:absolute; top:9px; font-variant-numeric:tabular-nums; font-size:var(--native-font-sub); color:var(--fg-2); border-left:1px solid var(--border); padding-left:5px; height:26px; }
+.native-track { position:relative; height:var(--native-visual-track-height,46px); border-bottom:1px solid var(--border); background:var(--bg-1); }
+.native-track-audio { background:var(--bg-0); }
+.native-track-audio { height:var(--native-audio-track-height,58px); }
+.native-track-audio .native-clip { height:calc(var(--native-audio-track-height,58px) - 11px); }
+.native-track-audio .native-clip-name { padding-top:1px; line-height:16px; }
+.native-waveform { position:absolute; bottom:3px; pointer-events:none; }
+.native-waveform canvas { display:block; }
+.native-waveform-status { position:absolute; left:9px; bottom:1px; color:var(--fg-2); font-size:var(--native-font-sub); white-space:nowrap; }
+button.native-waveform-status { pointer-events:auto; padding:0 3px; border:0; background:var(--bg-1); color:var(--accent); cursor:pointer; }
+/* トラックヘッダー（UI 添削 F9 C 案）: 左に正方トグル、名前は右、種別色で 9% 染める。幅 132px は NativeTimeline.tsx の左オフセット定数と一致させる。 */
+.native-timeline { --native-track-label-w:132px; } /* NativeTimeline.tsx の TRACK_LABEL_WIDTH と同じ値 */
+.native-track-label { position:sticky; left:0; top:0; z-index:5; width:var(--native-track-label-w); height:100%; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:5px; padding:0 4px; border-right:1px solid var(--border); background:color-mix(in srgb, var(--track-accent, var(--track-video)) var(--track-head-mix), var(--bg-1)); }
+.native-track-actions { display:inline-flex; gap:2px; }
+.native-track-toggle { width:22px; height:22px; min-height:0; padding:0; border-radius:var(--radius-sm); display:inline-grid; place-items:center; font-family:var(--font-mono); font-size:var(--native-font-sub); font-weight:600; color:var(--fg-3); background:var(--bg-1); border-color:var(--border); }
+.native-track-toggle[aria-pressed=true] { background:var(--fg-0); border-color:var(--fg-0); color:var(--bg-0); }
+.native-track-toggle[data-kind=mute][aria-pressed=true] { background:var(--warn-fg); border-color:var(--warn-fg); color:var(--warn-on); }
+.native-track-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:700; font-size:var(--native-font-sub); }
+.native-track-tools { display:none; gap:1px; }
+.native-track:hover .native-track-tools, .native-track:focus-within .native-track-tools { display:inline-flex; }
+.native-track-tool { width:20px; height:20px; min-height:0; padding:0; border-color:transparent; background:transparent; color:var(--fg-3); display:inline-grid; place-items:center; }
+.native-track-tool:hover:not(:disabled) { background:var(--bg-2); color:var(--fg-0); }
+.native-track-tool.btn-danger { color:var(--danger); }
+.native-track-tool.native-track-color { color:inherit; }
+.native-track-color-dot { width:12px; height:12px; border-radius:50%; background:var(--track-accent,var(--accent)); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg-0) 25%,transparent); }
+.native-track-color-menu { position:absolute; left:calc(var(--native-track-label-w) - 8px); top:4px; z-index:8; display:grid; grid-template-columns:repeat(5,22px); gap:5px; padding:8px; background:var(--bg-1); border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--panel-shadow); }
+.native-track-color-menu [role=menuitemradio] { width:22px; height:22px; min-height:0; padding:0; border-radius:50%; border:2px solid transparent; background:var(--c); }
+.native-track-color-menu [role=menuitemradio][aria-checked=true] { border-color:var(--fg-0); }
+.native-track-color-menu [role=menuitem] { grid-column:1/-1; min-height:26px; font-size:var(--native-font-sub); }
+/* 下端のトラックでは上へ開く（M-7: absolute + top:4px 固定だとタイムラインの overflow:auto に切られる）。 */
+.native-track-color-menu[data-drop=up] { top:auto; bottom:4px; }
+.native-ruler-label { font-size:var(--native-font-sub); color:var(--fg-2); }
+/* F10: 密度帯。トラック色で目盛を描き、件数を右上に。 */
+.native-density-lane { position:absolute; top:0; display:flex; align-items:center; pointer-events:none; padding-right:44px; }   /* 表示専用。シーク・範囲選択はトラック本体へ。右 padding は件数チップ（sticky right:8px）ぶんの予約。box-sizing は content-box のまま（padding は inline style の width の外側に足す） */
+.native-density-lane svg { display:block; flex-shrink:0; color:var(--track-accent,var(--accent)); fill:color-mix(in srgb,currentColor 65%,transparent); }
+.native-density-count { position:sticky; right:8px; margin-left:auto; padding:0 5px; border-radius:3px; background:var(--bg-1); color:var(--fg-3); font-size:var(--native-font-sub); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.native-clip { position:absolute; top:5px; height:calc(var(--native-visual-track-height,46px) - 11px); border:1px solid color-mix(in srgb,var(--track-accent,var(--accent)) 45%,var(--border)); border-radius:3px; background:color-mix(in srgb,var(--track-accent,var(--accent)) var(--track-clip-mix),var(--bg-1)); overflow:hidden; cursor:grab; touch-action:none; transition:box-shadow var(--dur-hover) var(--ease-settle),outline-color var(--dur-hover) var(--ease-settle); }
+.native-clip.is-selected { outline:2px solid var(--accent); outline-offset:-2px; }
+.native-clip.is-muted { opacity:.4; }
+.native-clip-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 9px; line-height:calc(var(--native-visual-track-height,46px) - 13px); font-size:var(--native-font-sub); }
+.native-clip-link { display:inline-flex; vertical-align:-2px; margin-right:3px; color:var(--fg-2); }
+.native-clip[data-narrow] .native-clip-link { display:none; }
+.native-scene-fade-edge svg, .native-scene-fade-join svg { display:block; color:var(--accent); }
+.native-timeline[data-dense] .native-scene-fade-join { display:none; }   /* 細いクリップの接合部には出さない（端の設定ボタンは残す） */
+.native-trim { position:absolute; top:0; bottom:0; width:7px; cursor:ew-resize; z-index:2; }
+.native-trim:hover { background:var(--accent); }
+.native-trim-start { left:0; }.native-trim-end { right:0; }
+.native-tool-razor .native-clip { cursor:crosshair; }.native-tool-range .native-clip { cursor:col-resize; }
+.native-playhead { position:absolute; top:0; bottom:0; width:1px; background:var(--accent); z-index:4; pointer-events:none; }
+.native-playhead>span { position:absolute; top:0; left:-4px; border:4px solid transparent; border-top:8px solid var(--accent); }
+.native-range { position:absolute; top:36px; bottom:0; pointer-events:none; background:color-mix(in srgb,var(--accent) 12%,transparent); border-inline:1px solid var(--accent); z-index:6; }
+.native-range-cut-host { position:absolute; top:-33px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:8px; white-space:nowrap; }
+.native-range-cut { pointer-events:auto; position:static; white-space:nowrap; background:var(--accent); color:var(--bg-0); border:0; height:28px; box-shadow:0 2px 5px #0002; }
+/* T31: !important（設計の Global Constraints で禁止）ではなく詳細度で決める。素の状態は
+   共通の button 規則（:where(.native-workspace) button… ＝ 0,0,1）に (0,1,0) で勝つ。
+   共通ホバー（…:hover:not(:disabled) ＝ 0,2,1）だけが強いので、そこへ (0,3,0) の同値指定を
+   並べて色を据え置く（見た目は !important 版と同じ＝ホバーしても変わらない）。 */
+.native-range-cut:hover:not(:disabled) { background:var(--accent); color:var(--bg-0); border:0; }
+.native-range-cut span { opacity:.75; margin-left:8px; font-size:var(--native-font-sub); }
+.native-range-hint { pointer-events:none; font-size:11px; color:var(--fg-2); background:var(--bg-1); padding:2px 6px; border-radius:4px; }
+.native-timeline-footer { display:flex; justify-content:space-between; align-items:center; min-height:29px; padding:7px 10px; color:var(--fg-2); font-size:var(--native-font-sub); border-top:1px solid var(--border); gap:12px; }
+.native-timeline-empty { padding:30px 160px; color:var(--fg-2); }
+.native-start { margin:auto; max-width:600px; text-align:center; padding:40px; }
+.native-start-label { color:var(--accent); font-size:var(--native-font-sub); }
+.native-start h1 { font-size:22px; font-weight:500; overflow-wrap:anywhere; }
+.native-start p { color:var(--fg-2); margin:24px 0; }
+.native-start small { display:block; margin-top:16px; color:var(--fg-2); }
+.native-script-source { display:flex; flex-direction:column; gap:8px; margin-top:20px; }
+.native-script-source .native-preview { flex:none; height:210px; min-height:0; }
+.native-script-source .native-transport { gap:4px; font-size:var(--native-font-sub); white-space:nowrap; }
+.native-script-source .native-transport output { min-width:68px; }
+.native-transcription { padding-block:12px; border-bottom:1px solid var(--border); font-size:12px; overflow-wrap:anywhere; }
+.native-transcription p { margin-block:8px; }
+.native-transcription-result { margin-top:12px; }
+.native-transcription-result textarea { box-sizing:border-box; width:100%; margin-top:6px; padding:8px; resize:vertical; font:inherit; color:var(--fg-0); background:var(--bg-0); border:1px solid var(--border); }
+
+.native-speed-settings .native-property { flex-direction:column; align-items:stretch; gap:6px; }
+.native-speed-settings .native-property input,.native-speed-settings .native-property select { width:100%; max-width:none; box-sizing:border-box; }
+.native-speed-settings .native-property input { text-align:left; }
+.native-speed-settings .native-subtle { overflow-wrap:anywhere; }
+.native-speed-options { max-height:280px; overflow:auto; margin:10px 0; }
+.native-speed-options>div { padding:8px 0; border-bottom:1px solid var(--border); }
+.native-speed-options .native-check { align-items:flex-start; }
+.native-speed-options .native-check span { min-width:0; overflow-wrap:anywhere; }
+.native-speed-options small { display:block; margin-top:3px; color:var(--fg-2); }
+.native-speed-options .native-subtle { margin:4px 0 0 22px; }
+.native-validated-field input[aria-invalid="true"] { outline:1px solid var(--accent); }
+
+/* 通知（UI 添削 F16）: 一時的なお知らせは下中央のトースト。対応が要る通知は .native-notice のバー。 */
+.native-toast { position:fixed; left:50%; bottom:24px; transform:translate(-50%,0); z-index:40; display:inline-flex; align-items:center; gap:10px; padding:8px 12px; border-radius:calc(var(--radius-md) + 2px); background:var(--fg-0); color:var(--bg-0); font-size:var(--native-font-sub); font-weight:600; box-shadow:var(--shadow-pop); animation:native-toast-in var(--dur-panel) var(--ease-spring); }
+@keyframes native-toast-in { from { opacity:0; transform:translate(-50%,12px); } to { opacity:1; transform:translate(-50%,0); } }
+.native-toast button { min-height:24px; padding:0 8px; border-color:color-mix(in srgb,var(--bg-0) 40%,transparent); background:transparent; color:var(--bg-0); font-size:var(--native-font-sub); }
+.native-toast button:hover:not(:disabled) { background:color-mix(in srgb,var(--bg-0) 16%,transparent); }
+/* フッターの文脈ヒント */
+.native-hints { display:flex; gap:12px; align-items:center; flex-wrap:wrap; min-width:0; }
+.native-hint { display:inline-flex; gap:3px; align-items:center; color:var(--fg-3); white-space:nowrap; }
+.native-hint-range { color:var(--fg-1); font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.native-hint-all { min-height:22px; padding:0 6px; gap:4px; }
+/* ダイアログ（ショートカット一覧・設定） */
+.native-dialog-backdrop { position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.35); display:grid; place-items:center; }
+.native-dialog { width:min(560px,calc(100vw - 32px)); max-height:calc(100vh - 64px); overflow:auto; background:var(--bg-1); border:1px solid var(--border-strong); border-radius:var(--radius-lg); box-shadow:var(--shadow-pop); padding:16px 20px; animation:native-dialog-in var(--dur-panel) var(--ease-spring); }
+@keyframes native-dialog-in { from { opacity:0; transform:scale(.96); } to { opacity:1; transform:none; } }
+.native-dialog-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.native-shortcuts h3 { font-size:var(--native-font-sub); color:var(--fg-3); margin:12px 0 4px; }
+.native-shortcuts dl { margin:0; display:grid; gap:4px; }
+.native-shortcuts dl > div { display:grid; grid-template-columns:160px 1fr; gap:10px; align-items:center; }
+.native-shortcuts dt { display:inline-flex; gap:3px; }
+.native-shortcuts dd { margin:0; }
+.native-shortcuts .native-key { border:1px solid var(--border-strong); border-radius:4px; padding:1px 5px; background:var(--bg-2); color:var(--fg-2); }
+@media (prefers-reduced-motion: reduce) { .native-toast, .native-dialog { animation:none; } .native-clip, .native-resizer, .native-export-panel { transition:none; animation:none; } }
+
+/* 設定パネル */
+.native-settings-backdrop { place-items:start end; padding:calc(var(--topbar-h) + 6px) 12px 0 0; }
+.native-settings { width:min(400px,calc(100vw - 24px)); }
+.native-settings-note { font-size:var(--native-font-sub); color:var(--fg-3); margin-right:auto; margin-left:10px; }
+.native-settings section { padding-top:8px; border-top:1px solid var(--border); margin-top:8px; }
+.native-settings h3 { font-size:var(--native-font-sub); color:var(--fg-3); margin:0 0 4px; }
+.native-setting-row { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:30px; font-size:var(--native-font-base); }
+/* 密度（設定「コンパクト」）: ボタン高さと基本文字を一段小さく */
+.native-workspace[data-density=compact] { --btn-h:26px; --native-font-base:11.5px; }
+.native-cut-playback-toggle {flex-shrink:0;margin:0 4px;}
+
+/* アニメーションを減らす（設定）: OS の prefers-reduced-motion と同じ効果。詳細度の同点は後勝ちに任せるため末尾に置く。 */
+html[data-reduce-motion] .native-workspace *, html[data-reduce-motion] .native-workspace *::before, html[data-reduce-motion] .native-workspace *::after,
+html[data-reduce-motion] .native-toast, html[data-reduce-motion] .native-dialog { transition:none; animation:none; }
+html[data-reduce-motion] .native-workspace button:active:not(:disabled) { transform:none; }  /* (0,4,2) で基底の縮小 (0,2,1) に勝つ */
+
+.native-notification-button {position:relative;}
+.native-notification-count {position:absolute;top:-4px;right:-5px;min-width:15px;padding:1px 3px;border-radius:9px;background:var(--danger,#b42318);color:#fff;font-size:11px;line-height:13px;font-weight:700;}
+
+/* Only the track header boundary resizes a row; clips retain their editing gestures. */
+.native-track-resizer { position:absolute; left:0; right:0; bottom:0; height:4px; cursor:row-resize; touch-action:none; z-index:8; }
+.native-track-resizer::after { content:""; position:absolute; left:4px; right:4px; bottom:0; height:2px; background:var(--border); }
+.native-track-resizer:hover::after,.native-track-resizer:focus-visible::after { background:var(--accent); height:3px; }
+.native-track-resizer:focus-visible { outline:1px solid var(--accent); outline-offset:-1px; }
+
+.native-preview-content { display:flex; flex:1; min-height:0; min-width:0; }
+
+/* Archived media remains visible beneath the existing interactive cut hatching. */
+.native-track-with-cuts .native-finish-cut-track .tl-cut { background-color:transparent; }
+.native-archived-audio { background:color-mix(in srgb,var(--danger) 7%,transparent); outline:1px dashed color-mix(in srgb,var(--danger) 35%,transparent); }
+.native-archived-media * { pointer-events:none!important; }

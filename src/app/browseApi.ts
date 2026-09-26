@@ -18,17 +18,10 @@ export interface BrowseListing {
 }
 
 /** フォルダの中身を取得する。path 省略で起点一覧。 */
-export async function browseFolder(path?: string): Promise<BrowseListing> {
-  const query = path === undefined ? '' : `?path=${encodeURIComponent(path)}`;
+export async function browseFolder(path?: string,media?:'all'): Promise<BrowseListing> {
+  const params=new URLSearchParams({...path?{path}:{},...media?{media}:{}});
+  const query=params.size?'?'+params:'';
   return fetchJson<BrowseListing>(`/api/browse${query}`);
-}
-
-/** 外部実体へのリンクで新規プロジェクトを作る（実体はコピーしない）。 */
-export async function createProjectLinkRequest(name: string, path: string): Promise<{ id: string }> {
-  return putJsonPost<{ id: string }>(
-    `/api/create-project-link?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`,
-    {},
-  );
 }
 
 /** 切れた（食い違った）リンクの接続先を選び直す。warnings が返ったら未適用。 */

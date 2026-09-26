@@ -5,19 +5,24 @@
  *
  * jsdom の getBoundingClientRect は既定で全ゼロ＝実測ゼロなので、**フォールバック経路**は
  * そのまま検証できる（設計 §4）。**実測経路**は getBoundingClientRect を差し替えて
- * 「目印つき DOM が同一 stage 内にある」状況を作って検証する（本物の Remotion 描画の
- * 一致は e2e「選択枠実測」が担う）。
+ * 「目印つき DOM が同一 stage 内にある」状況を作って検証する（実ブラウザの
+ * 画素・座標一致は e2e「選択枠実測」が担う）。
  */
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
 import { render, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from './editorPlayback';
 import type { EditorImage, EditorTelop } from '../../core/types';
 import { initialEditState, type EditState } from '../edit/editState';
 import { PreviewOverlay } from './PreviewOverlay';
 import { fitContentRect, telopBoxRect } from './overlayGeometry';
+import { NativeSceneRenderer } from '../../preview/native/sceneRenderer';
+import { ScenePlan } from '../../core/sequence/scenePlan';
+import { DEFAULT_TEXT_APPEARANCE, type SequenceDocument } from '../../core/sequence/model';
+import { rational as r } from '../../core/sequence/time';
+
+// This case renders only text; GPU startup is unrelated to DOM ownership.
+vi.mock('../../preview/native/compositor', () => ({ NativeCompositor: class { dispose() {} } }));
 
 const COMP_W = 1080;
 const COMP_H = 1920;
@@ -320,18 +325,32 @@ describe('実測経路（目印つき DOM が同一 stage にある）', () => {
   });
 });
 
-describe('目印（data-sme-*）の綴り契約', () => {
-  it('EditorComposition が測定ルートと 3 種のラッパー目印を出す', () => {
-    // 測定側（measureBox の query）と描画側の綴りが食い違うと、実測は黙って
-    // フォールバックへ落ちる（枠は出るので気づけない）。綴りだけをここで固定する。
-    const src = readFileSync(
-      resolve(import.meta.dirname, '../../preview/EditorComposition.tsx'),
-      'utf8',
-    );
-    expect(src).toContain('data-sme-root');
-    expect(src).toContain('data-sme-kind="telop"');
-    expect(src).toContain('data-sme-kind="image"');
-    expect(src).toContain('data-sme-kind="videoInsert"');
-    expect(src).toContain('data-sme-id');
+describe('現用 native DOM と legacy 選択枠測定の契約', () => {
+  it('実描画の所有 marker を通じて字幕の矩形を測り、marker 喪失を無測定として検出する', async () => {
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: Promise.resolve() } });
+    const doc: SequenceDocument = { schemaVersion: 2, id: 'measurement-doc', name: 'measurement', revision: 4,
+      fps: r(30), resolution: { width: 640, height: 360 }, sequenceEndFrame: 100, background: '#000000',
+      assets: [], tracks: [{ id: 'text', name: 'text', kind: 'visual', enabled: true }], transitions: [], transcripts: [],
+      ducking: { enabled: false, strength: 'mid' }, clips: [{ id: 'caption-owner', name: 'caption', trackId: 'text',
+        startFrame: 0, durationFrames: 100, clock: { offset: r(0), rate: r(1), duration: r(100) },
+        content: { kind: 'telop', textMode: 'free', legacyId: 7, data: { text: '現用の字幕' }, appearance: structuredClone(DEFAULT_TEXT_APPEARANCE) } }] };
+    const container = document.createElement('div'); document.body.append(container);
+    const renderer = new NativeSceneRenderer(container, 'measurement-project');
+    try {
+      await renderer.render(new ScenePlan(doc), 20);
+      const mount = container.firstElementChild!, root = mount.shadowRoot!;
+      const owner = root.querySelector<HTMLElement>('[data-native-clip="caption-owner"]');
+      expect(owner).not.toBeNull();
+      const telop = owner!.querySelector('[data-sme-kind="telop"][data-sme-id="7"]');
+      expect(telop).not.toBeNull();
+      const text = telop!.querySelector('[data-native-text-box]')!;
+      expect(text.textContent).toBe('現用の字幕');
+      rects.set(mount, { left: 20, top: 40, width: 320, height: 180 });
+      rects.set(text, { left: 35, top: 140, width: 100, height: 20 });
+      const request = { documentId: doc.id, revision: doc.revision, frame: 20, kind: 'telop' as const, id: 7 };
+      expect(renderer.measureLegacy(request)?.items).toEqual([{ kind: 'telop', id: 7, rect: { x: 30, y: 200, w: 200, h: 40 } }]);
+      owner!.removeAttribute('data-native-clip');
+      expect(renderer.measureLegacy(request)?.items).toEqual([]);
+    } finally { renderer.dispose(); container.remove(); }
   });
 });

@@ -19,8 +19,7 @@ interface MultiTelopSettingsTabProps {
  *
  * 表示している数値はプライマリ（`selection`）の値で、**混在していても `—` は出さない**。
  * 代わりに「値を変えると選択中の全テロップに適用されます」を常設し、確定した値だけを
- * 全員へ書き込む（＝揃える）。非エンジニア向けに表示を複雑化しないための裁定
- * （非エンジニア向けに表示を複雑化しない、という裁定）。
+ * 全員へ書き込む（＝揃える）。非エンジニア向けに表示を複雑化しないための裁定。
  */
 export function MultiTelopSettingsTab({ state, onEdit }: MultiTelopSettingsTabProps) {
   const ids = state.multiTelopIds;

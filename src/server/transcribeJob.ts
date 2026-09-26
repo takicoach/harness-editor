@@ -31,6 +31,7 @@ export interface TranscribeJob {
 /** テスト容易性のため、必要なメソッド/プロパティだけを subset したインターフェース。 */
 export interface FakeProcess extends EventEmitter {
   stdout: Readable;
+  stderr: Readable;
   kill(signal: NodeJS.Signals | number): boolean;
 }
 
@@ -48,7 +49,7 @@ export interface JobsManagerDeps {
 const defaultDeps: JobsManagerDeps = {
   spawn: ({ scriptPath, args, cwd }) =>
     // whisper が入っている Python を解決して使う（python3 固定だと別バージョンに
-    // 入った whisper を見落とす。HARNESS_PYTHON（旧 SUPERMOVIE_PYTHON）で明示指定も可能）。
+    // 入った whisper を見落とす。SUPERMOVIE_PYTHON で明示指定も可能）。
     nodeSpawn(resolvePythonBin(), [scriptPath, ...args], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -60,6 +61,8 @@ export class TranscribeJobManager {
   private procs = new Map<string, FakeProcess>();
   private subs = new Map<string, Set<(ev: TranscribeJobEvent) => void>>();
   private buffers = new Map<string, string>();
+  /** ffmpeg/whisper 系と同じ回帰対策: 失敗診断用に stderr の末尾 500 文字のみ保持。 */
+  private stderrTails = new Map<string, string>();
 
   constructor(private deps: JobsManagerDeps = defaultDeps) {}
 
@@ -91,12 +94,25 @@ export class TranscribeJobManager {
     };
     this.jobs.set(projectId, job);
     const spawnOpts = opts.spawnOpts ?? { scriptPath: '', args: [] };
-    const proc = this.deps.spawn(spawnOpts);
+    let proc:FakeProcess;
+    try { proc=this.deps.spawn(spawnOpts); }
+    catch(error) {
+      // Interpreter resolution may fail before a child exists. Preserve the same
+      // terminal snapshot as asynchronous spawn errors; subscribers may retry.
+      this.onSpawnError(projectId,error instanceof Error?error:new Error(String(error)));
+      return job;
+    }
     this.procs.set(projectId, proc);
     this.buffers.set(projectId, '');
+    this.stderrTails.set(projectId, '');
     proc.stdout.on('data', (chunk: Buffer) => this.onStdout(projectId, chunk));
+    // stderr は drain 必須（denoiseJob/normalizeJob/renderJob と同じ規約）。
+    // mlx-whisper / openai-whisper はモデルロード進捗・tqdm バー・警告を大量に stderr へ
+    // 出すため、listener が無いと OS のパイプバッファが満杯になり子プロセスの write が
+    // ブロックし、SSE 進捗のまま無音でハングする。末尾 500 文字は失敗診断用に保持する。
+    proc.stderr.on('data', (chunk: Buffer | string) => this.onStderr(projectId, chunk));
     proc.on('exit', (code: number | null) => this.onExit(projectId, code));
-    // spawn 失敗（Python 実行ファイルが無い／非実行＝stale な HARNESS_PYTHON / SUPERMOVIE_PYTHON や
+    // spawn 失敗（Python 実行ファイルが無い／非実行＝stale な SUPERMOVIE_PYTHON や
     // .supermovie-python 等）は exit ではなく error として非同期に飛ぶ。listener が
     // 無いと unhandled error で Vite サーバごと落ちるため、failed ジョブへ変換する。
     proc.on('error', (err: Error) => this.onSpawnError(projectId, err));
@@ -154,6 +170,11 @@ export class TranscribeJobManager {
     }
   }
 
+  private onStderr(projectId: string, chunk: Buffer | string): void {
+    const tail = (this.stderrTails.get(projectId) ?? '') + chunk.toString();
+    this.stderrTails.set(projectId, tail.slice(-500));
+  }
+
   private onSpawnError(projectId: string, err: Error): void {
     const job = this.jobs.get(projectId);
     if (!job) return;
@@ -163,7 +184,7 @@ export class TranscribeJobManager {
         code: 'python-spawn-failed',
         message:
           `Python を起動できませんでした（${err.message}）。` +
-          'HARNESS_PYTHON（旧 SUPERMOVIE_PYTHON）/ .supermovie-python の指す Python が存在するか確認してください。',
+          'SUPERMOVIE_PYTHON / .supermovie-python の指す Python が存在するか確認してください。',
       },
     };
     job.phase = 'failed';
@@ -183,9 +204,10 @@ export class TranscribeJobManager {
     const job = this.jobs.get(projectId);
     if (!job) return;
     if (job.phase !== 'completed' && job.phase !== 'failed' && job.phase !== 'cancelled') {
+      const tail = this.stderrTails.get(projectId) ?? '';
       const ev: TranscribeJobEvent = {
         phase: 'failed',
-        error: { code: 'unknown', message: `subprocess exit ${code}` },
+        error: { code: 'unknown', message: `subprocess exit ${code}${tail ? `: ${tail}` : ''}` },
       };
       job.phase = 'failed';
       job.error = ev.error;
@@ -210,5 +232,6 @@ export class TranscribeJobManager {
     this.jobs.delete(projectId);
     this.procs.delete(projectId);
     this.buffers.delete(projectId);
+    this.stderrTails.delete(projectId);
   }
 }

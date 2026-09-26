@@ -212,4 +212,19 @@ describe('HelpModal の NEW バッジ', () => {
     expect(dialog.querySelector('.help-detail-pane .help-cap')?.textContent).toBe(second.title);
     expect(localStorage.getItem(featureSeenKey('help', second.id))).not.toBeNull();
   });
+
+  it('現行画面のヘルプには旧画面の案内を出さない', () => {
+    const view = render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} hideTutorialRestart />);
+    expect(view.queryByText(/この説明は旧画面/)).toBeNull();
+  });
+
+  it('既定では帯を出さない（legacy の見た目を変えない）', () => {
+    const view = render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} />);
+    expect(view.queryByRole('status')).toBeNull();
+  });
+
+  it('hideTutorialRestart のときは再開ボタンを隠す（再開の仕組みを持たない画面向け）', () => {
+    const view = render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} hideTutorialRestart />);
+    expect(view.queryByText('▶ もう一度最初から見る')).toBeNull();
+  });
 });

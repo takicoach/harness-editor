@@ -22,11 +22,13 @@
  * 足すのではなく、この接続のチャネルを増やす（接続数はブラウザの同一オリジン上限を食う）。
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { getWriterId } from './writerId';
 
 type ChannelHandler = (msg: unknown) => void;
+type BusListener = (msg: unknown, sourceProjectId: string) => void;
 
 interface EventBusContextValue {
-  subscribe(ch: string, handler: ChannelHandler): () => void;
+  subscribe(ch: string, handler: ChannelHandler, projectId?: string): () => void;
   setProjectId(projectId: string): void;
 }
 
@@ -46,23 +48,33 @@ interface EventBusProviderProps {
 
 export function EventBusProvider({ projectId: initialProjectId = '', children }: EventBusProviderProps) {
   const [projectId, setProjectId] = useState(initialProjectId);
-  const listenersRef = useRef<Map<string, Set<ChannelHandler>>>(new Map());
+  const listenersRef = useRef<Map<string, Set<BusListener>>>(new Map());
 
-  const subscribe = useCallback((ch: string, handler: ChannelHandler): (() => void) => {
+  const subscribe = useCallback((ch: string, handler: ChannelHandler, expectedProjectId?: string): (() => void) => {
     let set = listenersRef.current.get(ch);
     if (!set) {
       set = new Set();
       listenersRef.current.set(ch, set);
     }
-    set.add(handler);
+    const listener: BusListener = (msg, sourceProjectId) => {
+      if (expectedProjectId === undefined || sourceProjectId === expectedProjectId) handler(msg);
+    };
+    set.add(listener);
     const ref = set;
-    return () => ref.delete(handler);
+    return () => ref.delete(listener);
   }, []);
 
   useEffect(() => {
-    const url = projectId === '' ? '/api/events' : `/api/events?id=${encodeURIComponent(projectId)}`;
+    // ?w= はこの画面の識別子。サーバは「同じ画面の保存」だけを外部変更から除くので、
+    // 別画面（別タブ・AI）の保存はこちらへバナーとして届く（data-safety-5）。
+    const url =
+      projectId === ''
+        ? '/api/events'
+        : `/api/events?id=${encodeURIComponent(projectId)}&w=${encodeURIComponent(getWriterId())}`;
     const es = new EventSource(url);
+    let active = true;
     es.onmessage = (e: MessageEvent<string>) => {
+      if (!active) return;
       try {
         const data: unknown = JSON.parse(e.data);
         if (typeof data !== 'object' || data === null) return;
@@ -70,7 +82,8 @@ export function EventBusProvider({ projectId: initialProjectId = '', children }:
         if (typeof ch !== 'string') return;
         const set = listenersRef.current.get(ch);
         if (!set) return;
-        for (const fn of set) fn(msg);
+        // Scope comes from this connection, not the project's latest UI state.
+        for (const fn of set) fn(msg, projectId);
       } catch {
         // 不正な JSON は無視する。
       }
@@ -80,6 +93,7 @@ export function EventBusProvider({ projectId: initialProjectId = '', children }:
       // （既知の学び: feedback-sse-eventsource-no-reconnect）。
     };
     return () => {
+      active = false;
       es.close();
     };
   }, [projectId]);
@@ -105,7 +119,7 @@ export function useEventBusProjectId(projectId: string): void {
  * 呼ばれた場合は何もしない（テストで Provider を省略しても安全に no-op）。
  * handler は ref 経由で最新を呼ぶ（stale capture 防止）。
  */
-export function useEventChannel(ch: string, handler: ChannelHandler): void {
+export function useEventChannel(ch: string, handler: ChannelHandler, projectId?: string): void {
   const ctx = useContext(EventBusContext);
   const handlerRef = useRef(handler);
   useEffect(() => {
@@ -113,8 +127,8 @@ export function useEventChannel(ch: string, handler: ChannelHandler): void {
   }, [handler]);
   useEffect(() => {
     if (!ctx) return;
-    return ctx.subscribe(ch, (msg) => handlerRef.current(msg));
-  }, [ctx, ch]);
+    return ctx.subscribe(ch, (msg) => handlerRef.current(msg), projectId);
+  }, [ctx, ch, projectId]);
 }
 
 /**
@@ -132,17 +146,10 @@ export function useEventChannel(ch: string, handler: ChannelHandler): void {
  * 取得失敗（ネットワーク断・非対応チャネル等）は静かに諦める（空配列）— 以降のライブ
  * 更新はバス購読に委ねられるため致命的ではない。
  *
- * **terminal 取り逃し防止の前提（レビュー指摘 M-3）**: sync 取得中〜完了までの間に、
- * 同じジョブが terminal（done/failed/cancelled/completed）へ遷移してライブメッセージが
- * バスから届いても、`useEventChannelWithSync` は `useEventChannel`（下記）を sync effect と
- * 同時に配線するため取りこぼさない設計を意図している。ただしこれは React の effect
- * 実行順（子コンポーネントの effect は親〔EventBusProvider〕の effect より先に走る）に
- * 依存した前提であり、保証は「同一コミット内であれば子が先」という React の一般則までで、
- * projectId 変更が `useEventBusProjectId` の effect 経由（＝別コミット）で Provider へ伝播する
- * 都合上、Provider の EventSource 張り替えとコンシューマの新規マウントが必ず同一コミットに
- * 揃う保証は無い。sync とライブイベントの順序レース自体は「最後に処理された方が正」で
- * 許容しているため実害は限定的だが、この前提が崩れた場合の症状は「ごく短い窓で稀に
- * 古い状態が一瞬だけ表示される」程度に留まる設計であることに留意する。
+ * 接続張替えとコンシューマの案件切替は別のcommitになることがあるため、ライブ通知は
+ * EventSourceを作った時のprojectIdと購読先の一致を検査する。閉じた接続の遅延通知も捨てる。
+ * syncはeffectのcleanupで旧案件の応答を捨てる。同じ案件内でのsyncとライブ通知の前後は
+ * 従来どおり到着順で処理するため、同一案件の複数ジョブ世代を識別する保証とは区別する。
  */
 export async function fetchEventsSync(projectId: string, ch: string): Promise<unknown[]> {
   if (!projectId) return [];
@@ -175,7 +182,7 @@ export function useEventChannelWithSync(ch: string, projectId: string, apply: Ch
     applyRef.current = apply;
   }, [apply]);
 
-  useEventChannel(ch, (msg) => applyRef.current(msg));
+  useEventChannel(ch, (msg) => applyRef.current(msg), projectId);
 
   useEffect(() => {
     if (!projectId) return;

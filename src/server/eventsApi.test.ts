@@ -20,7 +20,7 @@ import { denoiseJobs } from './denoiseApi';
 import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
 import { transcribeJobs } from './transcribeApi';
-import type { RenderJob, RenderJobEvent } from './renderJob';
+import type { RenderJob, RenderJobEvent } from './renderJobTypes';
 
 /** SSE 用の fake ServerResponse。writeHead/write/end を記録する。 */
 function makeSseRes(): { res: ServerResponse; messages(): Array<{ ch: string; msg: unknown }>; ended(): boolean } {
@@ -64,6 +64,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it('connects other channels immediately and isolates a failed delayed render restore',async()=>{
+  const {res,messages,ended}=makeSseRes(),{req,close}=makeSseReq();
+  let reject!:(error:Error)=>void;const restore=()=>new Promise<unknown[]>((_resolve,fail)=>{reject=fail;});
+  handleEventsSse(req,res,'/root','p',undefined,restore);
+  expect(messages().some(item=>item.ch==='projects')).toBe(true);expect(messages().some(item=>item.ch==='denoise')).toBe(true);
+  expect(messages().some(item=>item.ch==='render')).toBe(false);expect(ended()).toBe(false);
+  reject(new Error('corrupted history'));await vi.waitFor(()=>expect(messages()).toContainEqual({ch:'render',msg:{type:'done',phase:'failed',error:{code:'restore-failed',message:'Error: corrupted history'}}}));
+  expect(ended()).toBe(false);close();
+});
+
+it('does not overwrite a newer render event with a delayed restored snapshot',async()=>{
+  const {res,messages}=makeSseRes(),{req,close}=makeSseReq();let listener!:(event:RenderJobEvent)=>void,resolve!:(messages:unknown[])=>void;
+  vi.spyOn(renderJobs,'subscribe').mockImplementation((_id,fn)=>{listener=fn;return ()=>{};});
+  handleEventsSse(req,res,'/root','p',undefined,()=>new Promise(done=>{resolve=done;}));
+  listener({phase:'preparing'} as RenderJobEvent);resolve([{type:'idle'}]);await Promise.resolve();
+  expect(messages().filter(item=>item.ch==='render')).toEqual([{ch:'render',msg:{type:'event',event:{phase:'preparing'}}}]);close();
+});
+
 describe('handleEventsSse — id 無し（ホーム画面）', () => {
   it('projects チャネルのみ配線する（watch/claude/job 系は張らない）', () => {
     const { res, messages } = makeSseRes();
@@ -81,7 +99,7 @@ describe('handleEventsSse — id 無し（ホーム画面）', () => {
 
 describe('handleEventsSse — id 有り（エディタ画面）', () => {
   it('全チャネル（projects/watch/claude/render/denoise/normalize/preview-proxy/transcribe）を配線する', () => {
-    vi.spyOn(renderJobs, 'get').mockReturnValue(undefined);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(undefined);
     vi.spyOn(renderJobs, 'subscribe').mockReturnValue(vi.fn());
     vi.spyOn(denoiseJobs, 'get').mockReturnValue(undefined);
     vi.spyOn(denoiseJobs, 'subscribe').mockReturnValue(vi.fn());
@@ -113,7 +131,7 @@ describe('handleEventsSse — id 有り（エディタ画面）', () => {
     vi.spyOn(instructionInbox, 'list').mockReturnValue([
       { id: 'i1', projectId: 'p1', projectDir: '/root/p1', text: 'hi', context: { frame: 0, timeSec: 0, selection: null }, status: 'pending', reply: null, createdAt: 1, updatedAt: 1 },
     ]);
-    vi.spyOn(renderJobs, 'get').mockReturnValue(undefined);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(undefined);
     vi.spyOn(renderJobs, 'subscribe').mockReturnValue(vi.fn());
     vi.spyOn(denoiseJobs, 'get').mockReturnValue(undefined);
     vi.spyOn(denoiseJobs, 'subscribe').mockReturnValue(vi.fn());
@@ -138,7 +156,7 @@ describe('handleEventsSse — id 有り（エディタ画面）', () => {
       capturedFn = fn as (record: unknown) => void;
       return vi.fn();
     });
-    vi.spyOn(renderJobs, 'get').mockReturnValue(undefined);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(undefined);
     vi.spyOn(renderJobs, 'subscribe').mockReturnValue(vi.fn());
     vi.spyOn(denoiseJobs, 'get').mockReturnValue(undefined);
     vi.spyOn(denoiseJobs, 'subscribe').mockReturnValue(vi.fn());
@@ -163,7 +181,7 @@ describe('handleEventsSse — id 有り（エディタ画面）', () => {
 
   it('render ジョブが既に走っていれば snapshot を送る', () => {
     const job: RenderJob = { projectId: 'p1', startedAt: 100, phase: 'rendering' };
-    vi.spyOn(renderJobs, 'get').mockReturnValue(job);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(job);
     vi.spyOn(renderJobs, 'subscribe').mockReturnValue(vi.fn());
     vi.spyOn(denoiseJobs, 'get').mockReturnValue(undefined);
     vi.spyOn(denoiseJobs, 'subscribe').mockReturnValue(vi.fn());
@@ -183,7 +201,7 @@ describe('handleEventsSse — id 有り（エディタ画面）', () => {
 
   it('terminal（failed）イベント観測で discard するが、再 subscribe はしない（I-1 修正後は 1 回の subscribe で足りる）', () => {
     const preparingJob: RenderJob = { projectId: 'p1', startedAt: 1, phase: 'preparing' };
-    vi.spyOn(renderJobs, 'get').mockReturnValue(preparingJob);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(preparingJob);
     const subscribeSpy = vi.spyOn(renderJobs, 'subscribe');
     let capturedFn: ((ev: RenderJobEvent) => void) | undefined;
     subscribeSpy.mockImplementation((_id, fn) => {
@@ -221,18 +239,13 @@ describe('handleEventsSse — id 有り（エディタ画面）', () => {
 });
 
 describe('handleEventsSse — I-1 回帰: 同一プロジェクトへの複数接続', () => {
-  /**
-   * 実バグの再現条件は「discard を mockImplementation で潰さないこと」（コードレビュー
-   * 指摘）。discard を潰すと Manager.cleanup() の subs.delete(projectId) が実行されず
-   * バグが再現しない。ここでは renderJobs の subscribe/discard を一切モックせず、
-   * 実装をそのまま呼ぶ（get だけ「今の job 状態」を差し替えるためスパイする）。
-   * jobs マップへの直接書き込みは、実 spawn/subprocess を起動せずに
-   * 「ジョブが terminal を迎えた」状態を作るためのテスト専用の踏み込み
-   * （RenderJobManager は spawn 経由でしか状態遷移できないため、他に到達手段が無い）。
-   */
+  // Channel wiring across repeated terminal events. The actual native facade's
+  // discard/subscription lifecycle is covered separately in legacyNativeRenderJobs.test.ts.
   it('2接続 subscribe → job1 done（片方が discard）→ job2 start/done → 両接続が受信する', () => {
     vi.restoreAllMocks();
-    const jobs = (renderJobs as unknown as { jobs: Map<string, RenderJob> }).jobs;
+    const listeners=new Set<(event:RenderJobEvent)=>void>();
+    vi.spyOn(renderJobs,'getSnapshot').mockReturnValue(undefined);
+    vi.spyOn(renderJobs,'subscribe').mockImplementation((_id,listener)=>{listeners.add(listener);return ()=>{listeners.delete(listener);};});
     vi.spyOn(denoiseJobs, 'get').mockReturnValue(undefined);
     vi.spyOn(denoiseJobs, 'subscribe').mockReturnValue(vi.fn());
     vi.spyOn(normalizeJobs, 'get').mockReturnValue(undefined);
@@ -258,18 +271,14 @@ describe('handleEventsSse — I-1 回帰: 同一プロジェクトへの複数�
       expect(messages1()).toContainEqual({ ch: 'render', msg: { type: 'idle' } });
       expect(messages2()).toContainEqual({ ch: 'render', msg: { type: 'idle' } });
 
-      // job1: cancel() は emit(real)→cleanup(real) の実コードパスを踏む公開 API
-      // （spawn を経由しないため subprocess を起動せず terminal 状態を作れる）。
-      jobs.set(projectId, { projectId, startedAt: 1, phase: 'rendering' });
-      expect(renderJobs.cancel(projectId)).toBe(true);
+      for(const listener of listeners)listener({phase:'cancelled'});
 
       const done1 = { ch: 'render', msg: { type: 'done', phase: 'cancelled', error: undefined } };
       expect(messages1()).toContainEqual(done1);
       expect(messages2()).toContainEqual(done1);
 
       // job2: 同じ2接続が job1 の discard 後も生きていることを確認する（本バグの核心）。
-      jobs.set(projectId, { projectId, startedAt: 2, phase: 'rendering' });
-      expect(renderJobs.cancel(projectId)).toBe(true);
+      for(const listener of listeners)listener({phase:'cancelled'});
 
       const done2 = { ch: 'render', msg: { type: 'done', phase: 'cancelled', error: undefined } };
       // toContainEqual は「含む」判定なので、2回目の done も両方の接続に届いたことを
@@ -279,7 +288,7 @@ describe('handleEventsSse — I-1 回帰: 同一プロジェクトへの複数�
       expect(messages1()).toContainEqual(done2);
       expect(messages2()).toContainEqual(done2);
     } finally {
-      jobs.delete(projectId);
+      listeners.clear();
     }
   });
 });
@@ -291,7 +300,7 @@ describe('handleEventsSse — close', () => {
     const stopProjects = vi.fn();
     vi.mocked(watchAllProjectsStatus).mockReturnValue(stopProjects);
 
-    vi.spyOn(renderJobs, 'get').mockReturnValue(undefined);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(undefined);
     const renderUnsub = vi.fn();
     vi.spyOn(renderJobs, 'subscribe').mockReturnValue(renderUnsub);
     vi.spyOn(denoiseJobs, 'get').mockReturnValue(undefined);
@@ -317,14 +326,23 @@ describe('handleEventsSse — close', () => {
 });
 
 describe('handleEventsSync', () => {
+  it('preserves a completed render warning in both reconnect messages', () => {
+    const job: RenderJob = { projectId: 'completed-output', startedAt: 1, phase: 'done', outputFile: 'video-720p.mp4', warning: 'frame count differs' };
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(job);
+    expect(handleEventsSync('completed-output', 'render')).toEqual({ messages: [
+      { type: 'snapshot', job },
+      { type: 'done', phase: 'done', error: undefined, warning: 'frame count differs' },
+    ] });
+  });
+
   it('ジョブ無し（idle）は { messages: [{type:"idle"}] } を返す', () => {
-    vi.spyOn(renderJobs, 'get').mockReturnValue(undefined);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(undefined);
     expect(handleEventsSync('p1', 'render')).toEqual({ messages: [{ type: 'idle' }] });
   });
 
   it('running 中ジョブは snapshot のみ返し discard しない', () => {
     const job: RenderJob = { projectId: 'p1', startedAt: 1, phase: 'rendering' };
-    vi.spyOn(renderJobs, 'get').mockReturnValue(job);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(job);
     const discardSpy = vi.spyOn(renderJobs, 'discard').mockImplementation(() => {});
     expect(handleEventsSync('p1', 'render')).toEqual({ messages: [{ type: 'snapshot', job }] });
     expect(discardSpy).not.toHaveBeenCalled();
@@ -332,7 +350,7 @@ describe('handleEventsSync', () => {
 
   it('terminal（failed）ジョブは snapshot+done を返すが discard しない（M-1: sync は読み取り専用）', () => {
     const job: RenderJob = { projectId: 'p1', startedAt: 1, phase: 'failed', error: { code: 'x', message: 'boom' } };
-    vi.spyOn(renderJobs, 'get').mockReturnValue(job);
+    vi.spyOn(renderJobs, 'getSnapshot').mockReturnValue(job);
     const discardSpy = vi.spyOn(renderJobs, 'discard').mockImplementation(() => {});
     expect(handleEventsSync('p1', 'render')).toEqual({
       messages: [

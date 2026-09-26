@@ -1,15 +1,18 @@
 import { useRef } from 'react';
-import { frameToXMapped, widthMapped, CLICK_MOVE_THRESHOLD_PX } from './timelineGeometry';
+import { frameToXMapped, widthMapped, CLICK_MOVE_THRESHOLD_PX, TRACK_LABEL_GUTTER_PX } from './timelineGeometry';
 import { regionKey } from './cutPulse';
 import { Waveform } from './Waveform';
 import type { CutOrdering, CutRegion } from '../../core/types';
 import type { DisplayMap } from '../../core/timelineDisplayMap';
 import { TrackHeader } from './TrackHeader';
+import { formatClock } from '../../shared/format';
 import { useFilmstrip, STRIP_THUMB_PX } from './useFilmstrip';
 import { KeyframeMarkers } from '../panels/KeyframeMarkers';
 import { playbackToOriginal } from '../../core/segmentLayout';
 import type { LayoutKeyframe } from '../../core/layoutKeyframes';
+import { useWaveformSamples } from '../audio/useWaveformSamples';
 import { waveformCanvasHeight, waveformGain, waveformTrackHeight, type WaveformPref } from '../layout/waveformPref';
+import { clipHandleWidth, clipHandleStyle } from './clipHandles';
 
 /** つまみ識別子。動画トラックではカット区間の片端を表す。 */
 export interface CutHandleId {
@@ -31,9 +34,7 @@ interface CutTrackProps {
   onHandleDown: (handle: CutHandleId, e: React.PointerEvent) => void;
   /** パルス表示するカット区間のキー集合（regionKey 形式）。 */
   pulseKeys: Set<string>;
-  /** 動画トラック背面に描く波形サンプル（null なら波形なし）。 */
-  samples: Float32Array | null;
-  /** サムネ抽出用の動画 URL（= /api/video?…）。空ならサムネなし。 */
+  /** サムネ抽出・波形デコード用の動画 URL（= /api/video?…）。空ならサムネも波形もなし。 */
   videoUrl: string;
   /** カットブロックの hover 開始/終了を親へ通知する（双方向ハイライト用）。 */
   onRegionHover?: (region: CutRegion | null) => void;
@@ -69,6 +70,13 @@ interface CutTrackProps {
   onRegionClick?: (region: CutRegion) => void;
   /** 波形の高さ設定（standard/large）。未指定時は 'standard' 扱い。 */
   waveformPref?: WaveformPref;
+  /** Alternate host gutter; legacy callers retain the original 88px geometry. */
+  gutterPx?: number;
+  /** Native adapter accessibility/events on the existing handle DOM. Tiny
+   * handles remain keyboard reachable without covering the cut's pointer area. */
+  getHandleProps?: (handle: CutHandleId) => React.HTMLAttributes<HTMLDivElement>;
+  regionHint?: (region: CutRegion) => string;
+  emptyHint?: string | null;
 }
 
 /** 2 つの CutHandleId が同じつまみを指すか。 */
@@ -79,6 +87,17 @@ function sameHandle(a: CutHandleId, b: CutHandleId | null): boolean {
     a.region.start === b.region.start &&
     a.region.end === b.region.end
   );
+}
+
+/**
+ * カット区間ホバーの説明文（ベースライン §カット区間ホバー）。
+ * 「何が起きているか（カット済み・その時刻）」と「どう戻すか（クリック→Delete）」を 1 行で言う。
+ * クリックすると onRegionClick がその区間を範囲選択にし、選択中のカット帯に対する
+ * Delete は「カットを開ける」（cutButtonMode が 'open' を返す）になる。
+ */
+function cutRegionHint(region: CutRegion, fps: number | undefined): string {
+  const f = fps !== undefined && fps > 0 ? fps : 30;
+  return `カット済み ${formatClock(region.start / f)}〜${formatClock(region.end / f)}（クリックで選択 → Delete で元に戻す）`;
 }
 
 /**
@@ -94,7 +113,6 @@ export function CutTrack({
   selectedHandle,
   onHandleDown,
   pulseKeys,
-  samples,
   videoUrl,
   onRegionHover,
   onTrackPointerDown,
@@ -113,7 +131,14 @@ export function CutTrack({
   map,
   onRegionClick,
   waveformPref = 'standard',
+  gutterPx = TRACK_LABEL_GUTTER_PX,
+  getHandleProps,
+  regionHint,
+  emptyHint = 'カットすると区間ごとに速度を設定できます。',
 }: CutTrackProps) {
+  const xAt = (frame: number) => frameToXMapped(frame,pxPerFrame,map) + gutterPx - TRACK_LABEL_GUTTER_PX;
+  const handleStyle = (width: number | null,edge: 'start'|'end'): React.CSSProperties =>
+    width === null && getHandleProps ? {...clipHandleStyle(1,edge),pointerEvents:'none'} : clipHandleStyle(width,edge);
   const regions = liveRegions ?? cutRegions;
   // 帯・波形の CSS 幅は「距離」（ガター無し）。frameToXMapped は「位置」用でガター(88px)を
   // 含むため、これを width に使うと帯・波形の左端がガター内(x=0)から始まってしまい、
@@ -129,10 +154,13 @@ export function CutTrack({
   // 動画コンテンツ幅（ガター除く）に応じた疎なサムネ枚数。
   const thumbCount = Math.floor(contentWidth / STRIP_THUMB_PX);
   const filmstrip = useFilmstrip(videoUrl === '' ? null : videoUrl, totalFrames, thumbCount);
+  // 波形サンプル（URL ごとに 1 回デコード）。読み込み中は failed=false のままなので、
+  // 失敗ヒントは failed=true のときだけ出せる（X-2(b)）。
+  const { samples, failed: waveformFailed } = useWaveformSamples(videoUrl === '' ? null : videoUrl);
   return (
     <div
       className="tl-track tl-track-cut"
-      style={{ ['--tl-track-cut-h' as string]: `${waveformTrackHeight(waveformPref)}px` }}
+      style={{ ['--tl-track-cut-h' as string]: `${waveformTrackHeight(waveformPref)}px`,['--track-label-w' as string]:`${gutterPx}px` }}
       onPointerDown={(e) => {
         const el = e.target as HTMLElement;
         // つまみ（.tl-handle）は自前で stopPropagation 済み。既存カット帯（.tl-cut）の上は
@@ -163,7 +191,7 @@ export function CutTrack({
             key={f.frame}
             className="tl-filmstrip-thumb"
             src={f.url}
-            style={{ left: frameToXMapped(f.frame, pxPerFrame, map), width: STRIP_THUMB_PX }}
+            style={{ left: xAt(f.frame), width: STRIP_THUMB_PX }}
             alt=""
           />
         ))}
@@ -174,16 +202,25 @@ export function CutTrack({
         height={waveformCanvasHeight(waveformPref)}
         gain={waveformGain(waveformPref)}
       />
-      {cutRegions.length === 0 && (
-        <p className="tl-cut-hint">カットすると区間ごとに速度を設定できます。</p>
+      {waveformFailed && (
+        // デコード失敗（音声トラックなし・破損・非対応形式）を無言で消さず理由を出す（G-3）。
+        // 読み込み中は failed=false なのでここは出ない（X-2(b): 嘘の失敗表示の防止）。
+        <p className="tl-waveform-hint" title="音声を読み込めませんでした（音声トラックなし・破損・非対応形式の可能性）">
+          波形なし（音声を読み込めません）
+        </p>
+      )}
+      {cutRegions.length === 0 && emptyHint && (
+        <p className="tl-cut-hint">{emptyHint}</p>
       )}
       {cutRegions.length > 0 && keptSegments?.map((seg) => {
-        const left = frameToXMapped(seg.originalStart, pxPerFrame, map);
+        const left = xAt(seg.originalStart);
         const width = Math.max(2, widthMapped(seg.originalStart, seg.originalEnd, pxPerFrame, map));
         const rate = segmentSpeeds?.[seg.id];
         return (
           <div
             key={`kept-${seg.id}`}
+            data-testid={`clip-segment-${seg.id}`}
+            data-id={seg.id}
             className={'tl-kept-segment' + (selectedSegmentId === seg.id ? ' selected' : '')}
             style={{ left, width }}
             onPointerDown={(e) => {
@@ -219,21 +256,32 @@ export function CutTrack({
           cutRegions={cutRegions}
           ordering={ordering}
           fps={fps ?? 30}
-          frameToX={(playbackFrame) => frameToXMapped(playbackToOriginal(playbackFrame, cutRegions, ordering), pxPerFrame, map)}
+          frameToX={(playbackFrame) => xAt(playbackToOriginal(playbackFrame, cutRegions, ordering))}
           onSeek={onSeekPlayback}
         />
       )}
       {regions.map((region, i) => {
-        const left = frameToXMapped(region.start, pxPerFrame, map);
+        const left = xAt(region.start);
         const width = Math.max(2, widthMapped(region.start, region.end, pxPerFrame, map));
+        // つまみ幅（極小クリップでは非表示）。監査 interaction-4。
+        const handleW = clipHandleWidth(width, 10);
         const startHandle: CutHandleId = { kind: 'cut', region, edge: 'start' };
         const endHandle: CutHandleId = { kind: 'cut', region, edge: 'end' };
         const pulsing = pulseKeys.has(regionKey(region));
         return (
           <div
             key={i}
+            // カット区間は id を持たないので原本フレーム範囲を名前にする。
+            data-testid={`clip-cut-${region.start}-${region.end}`}
+            data-start={region.start}
+            data-end={region.end}
             className={'tl-cut' + (pulsing ? ' pulse' : '')}
             style={{ left, width }}
+            // ホバーで「これは何で、押すとどうなるか」を出す（ベースライン §カット区間ホバー）。
+            // 以前は赤い斜線の帯にカーソルを乗せても無反応で、消えている理由も戻し方も
+            // 画面上のどこにも書かれていなかった。
+            title={regionHint?.(region) ?? cutRegionHint(region, fps)}
+            aria-label={regionHint?.(region) ?? cutRegionHint(region, fps)}
             // enter/leave（非バブリング）なので、内側の .tl-handle へ移っても leave は発火しない
             // ＝つまみ hover 中もハイライトが消えない。onPointerOver/Out に変えると壊れるので注意。
             onPointerEnter={() => onRegionHover?.(region)}
@@ -251,13 +299,17 @@ export function CutTrack({
           >
             <div
               className={'tl-handle start' + (sameHandle(startHandle, selectedHandle) ? ' selected' : '')}
+              style={handleStyle(handleW, 'start')}
               title="カット開始をドラッグして調整"
               onPointerDown={(e) => { e.stopPropagation(); onHandleDown(startHandle, e); }}
+              {...getHandleProps?.(startHandle)}
             />
             <div
               className={'tl-handle end' + (sameHandle(endHandle, selectedHandle) ? ' selected' : '')}
+              style={handleStyle(handleW, 'end')}
               title="カット終了をドラッグして調整"
               onPointerDown={(e) => { e.stopPropagation(); onHandleDown(endHandle, e); }}
+              {...getHandleProps?.(endHandle)}
             />
           </div>
         );

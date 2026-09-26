@@ -8,7 +8,6 @@ import {
   setTelopScale,
   setTelopManual,
   setAllTelopTemplates,
-  applyTelopTemplateForScope,
   setAllTelopPositions,
   removeTelop,
   moveTelop,
@@ -126,30 +125,6 @@ describe('setAllTelopTemplates', () => {
   it('全テロップの template を設定する', () => {
     const next = setAllTelopTemplates(st(), 7);
     expect(next.telops.map((t) => t.template)).toEqual([7, 7]);
-  });
-});
-
-// スタイル選択のスコープ（このテロップ / 全テロップ）は「選ぶ前」に決める。
-// 適用先を選択の後に別ボタンで指定する形だと、押し忘れに気づけないため。
-describe('applyTelopTemplateForScope', () => {
-  it("scope='one' は指定テロップだけを変える", () => {
-    const next = applyTelopTemplateForScope(st(), 2, 3, 'one');
-    expect(next.telops.map((t) => t.template)).toEqual([1, 3]);
-  });
-
-  it("scope='all' は全テロップを変える", () => {
-    const next = applyTelopTemplateForScope(st(), 2, 3, 'all');
-    expect(next.telops.map((t) => t.template)).toEqual([3, 3]);
-  });
-
-  it("scope='all' は選択中でないテロップ id を渡しても全件に効く", () => {
-    const next = applyTelopTemplateForScope(st(), 999, 2, 'all');
-    expect(next.telops.map((t) => t.template)).toEqual([2, 2]);
-  });
-
-  it("scope='one' で不在 id なら何も変えない", () => {
-    const next = applyTelopTemplateForScope(st(), 999, 2, 'one');
-    expect(next.telops.map((t) => t.template)).toEqual([1, undefined]);
   });
 });
 

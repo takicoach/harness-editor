@@ -1,0 +1,7 @@
+# Historical template launcher
+
+Eight non-executable originals (3,435 bytes) from Git `c11b2656785971b3cc31cf4747a827e7c6a66a4f` are recorded in `provenance.json`. `legacyTemplateProject.ts` independently pins the manifest SHA, verifies the complete inventory and every source SHA before returning or copying any source. Intended archive corrections require comparison with `git show <sourceCommit>:<sourcePath>`; never regenerate hashes from the current renderer to silence a failure.
+
+The helper copies the **current** component/data catalog and restores only `src/MainVideo.tsx`, `src/Root.tsx`, `src/index.ts` and `src/index.css` into a private fixture. This mixed fixture preserves legacy JSX recognition while continuing to exercise current components. It is not an immutable whole historical project, a supported standalone launcher or a reproduction of a historical rendering environment. Package, CLI, lint and TypeScript configs are archived only; they are not materialized, executed or installed.
+
+MainVideo/Root remain source inputs for main-audio capability and persistence tests. MainVideo's original OffthreadVideo import is also an unsupported-API negative control. Current animation/number/image oracles and live component candidates remain separate. The helper rejects an existing target/src and validates all eight originals even when only one source is requested. Failed fixture creation is not atomic; use a fresh private directory and dispose only of the test's own directory.

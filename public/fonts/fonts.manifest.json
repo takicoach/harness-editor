@@ -1,0 +1,375 @@
+{
+  "version": 1,
+  "baseRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+  "extraChars": "※↔⇔∈≈≒≤≥≦≫⊂⊆①②◯✓✕＋🟢",
+  "coverageInput": {
+    "file": "tools/fonts/coverage-input.txt",
+    "chars": 1028,
+    "sha256": "691197ec6934a41a10c0a37c8f7aa036f2c0d050a2bc0d6f840b1618cab74e47"
+  },
+  "fonts": [
+    {
+      "id": "noto-sans-jp",
+      "family": "Noto Sans JP",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt",
+      "upstreamSha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+      "sha256": "7f6dc59f9145ad675a71580c8cf3f6aa18da537faa78d7c1f0e2d4f5bc0a9b0d",
+      "bytes": 4193616,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "noto-sans-jp-400.woff2",
+          "upstreamSha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+          "sha256": "7f6dc59f9145ad675a71580c8cf3f6aa18da537faa78d7c1f0e2d4f5bc0a9b0d",
+          "bytes": 2073624
+        },
+        {
+          "weight": 700,
+          "file": "noto-sans-jp-700.woff2",
+          "upstreamSha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+          "sha256": "ef6d90da1754a65699e1776f571d14349471458c722da64c7feb07c2dc59a909",
+          "bytes": 2119992
+        }
+      ],
+      "builtAt": "2026-09-16T02:04:43+00:00"
+    },
+    {
+      "id": "zen-kaku-gothic-new",
+      "family": "Zen Kaku Gothic New",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/zenkakugothicnew/ZenKakuGothicNew-Regular.ttf\", \"700\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/zenkakugothicnew/ZenKakuGothicNew-Bold.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/zenkakugothicnew/OFL.txt",
+      "upstreamSha256": "b840cd07a67d89cacca44249ae49aa99ee7640eb5ce623be8d8983d6aabac801",
+      "sha256": "df8eb7f4a0aa097ea78c86b70f727f993cf77c68ce58da1e88e59ed514e41eb0",
+      "bytes": 2033160,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "zen-kaku-gothic-new-400.woff2",
+          "upstreamSha256": "b840cd07a67d89cacca44249ae49aa99ee7640eb5ce623be8d8983d6aabac801",
+          "sha256": "df8eb7f4a0aa097ea78c86b70f727f993cf77c68ce58da1e88e59ed514e41eb0",
+          "bytes": 1000904
+        },
+        {
+          "weight": 700,
+          "file": "zen-kaku-gothic-new-700.woff2",
+          "upstreamSha256": "0081cedabc4921982fcd061f845a005664ac7fb642af2dd34b4007bc63ccd235",
+          "sha256": "7728255ef3d7dfd5de9431fd7bb95c310fc96a3c4a02fd57655d1a16179112f9",
+          "bytes": 1032256
+        }
+      ],
+      "builtAt": "2026-09-16T02:04:51+00:00"
+    },
+    {
+      "id": "biz-udpgothic",
+      "family": "BIZ UDPGothic",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/bizudpgothic/BIZUDPGothic-Regular.ttf\", \"700\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/bizudpgothic/BIZUDPGothic-Bold.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/bizudpgothic/OFL.txt",
+      "upstreamSha256": "258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01",
+      "sha256": "9ca37cb397730ed848af3c45b7c0c099f58fca10623b3c1e0f09271e8dd308e6",
+      "bytes": 3203620,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "biz-udpgothic-400.woff2",
+          "upstreamSha256": "258d7156c165f2ff774b6efee637c22c3b950de0d8a10e501137061bc8085d01",
+          "sha256": "9ca37cb397730ed848af3c45b7c0c099f58fca10623b3c1e0f09271e8dd308e6",
+          "bytes": 1583700
+        },
+        {
+          "weight": 700,
+          "file": "biz-udpgothic-700.woff2",
+          "upstreamSha256": "30eba52fc837e8b62c97d4b82e6706583149fb7294e3712dd71a655eaea80a90",
+          "sha256": "221cac17002df6928a4d39ed26020f5bcb94080b3d26b57354238dfe38980ae9",
+          "bytes": 1619920
+        }
+      ],
+      "builtAt": "2026-09-16T02:05:01+00:00"
+    },
+    {
+      "id": "m-plus-rounded-1c",
+      "family": "M PLUS Rounded 1c",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/mplusrounded1c/MPLUSRounded1c-Regular.ttf\", \"700\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/mplusrounded1c/MPLUSRounded1c-Bold.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/mplus1p/OFL.txt",
+      "upstreamSha256": "b75708b53e45b06d17d470aeeca5b766e3d1b3999f03f13ec4eb863ca846c14c",
+      "sha256": "24eaa0fce8490eeecd7672ede1dc92bbc488196f24f6d5d77a3be6dae4891c06",
+      "bytes": 1880328,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "m-plus-rounded-1c-400.woff2",
+          "upstreamSha256": "b75708b53e45b06d17d470aeeca5b766e3d1b3999f03f13ec4eb863ca846c14c",
+          "sha256": "24eaa0fce8490eeecd7672ede1dc92bbc488196f24f6d5d77a3be6dae4891c06",
+          "bytes": 895124
+        },
+        {
+          "weight": 700,
+          "file": "m-plus-rounded-1c-700.woff2",
+          "upstreamSha256": "c358630584e8e2d8fbd6121d0f4693255ffef6d1e6d4f3441fd6e5a963a11f9e",
+          "sha256": "548b637953602c435c91bc1f5bbda2646d0e10e0b254f8128bf21c3a408ffba3",
+          "bytes": 985204
+        }
+      ],
+      "builtAt": "2026-09-16T02:05:10+00:00"
+    },
+    {
+      "id": "noto-serif-jp",
+      "family": "Noto Serif JP",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserifjp/NotoSerifJP%5Bwght%5D.ttf",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserifjp/OFL.txt",
+      "upstreamSha256": "2fd527ba12b6a44ec30d796d633360da0aeba6c5d4af1304ce12bb4dc15a7dfc",
+      "sha256": "e8b223891c5274bbd0e9ba258079d30d74aabdf27a29026169f634c6da79d097",
+      "bytes": 5643260,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "noto-serif-jp-400.woff2",
+          "upstreamSha256": "2fd527ba12b6a44ec30d796d633360da0aeba6c5d4af1304ce12bb4dc15a7dfc",
+          "sha256": "e8b223891c5274bbd0e9ba258079d30d74aabdf27a29026169f634c6da79d097",
+          "bytes": 2782716
+        },
+        {
+          "weight": 700,
+          "file": "noto-serif-jp-700.woff2",
+          "upstreamSha256": "2fd527ba12b6a44ec30d796d633360da0aeba6c5d4af1304ce12bb4dc15a7dfc",
+          "sha256": "86569265d72565558a195e2960df917ce6877e623e668e1290feddf3f0a697a9",
+          "bytes": 2860544
+        }
+      ],
+      "builtAt": "2026-09-16T02:05:44+00:00"
+    },
+    {
+      "id": "dela-gothic-one",
+      "family": "Dela Gothic One",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/delagothicone/DelaGothicOne-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/delagothicone/OFL.txt",
+      "upstreamSha256": "4ff87a0965f1b0505e5a2c58424bc6ad3cff27e56a82f21c2fc9d6b0e3857ee2",
+      "sha256": "c4d8091f694550745b9db8677c8cd909f12f45b6f09e959a3317b335e509d782",
+      "bytes": 1106760,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "dela-gothic-one.woff2",
+          "upstreamSha256": "4ff87a0965f1b0505e5a2c58424bc6ad3cff27e56a82f21c2fc9d6b0e3857ee2",
+          "sha256": "c4d8091f694550745b9db8677c8cd909f12f45b6f09e959a3317b335e509d782",
+          "bytes": 1106760
+        }
+      ],
+      "builtAt": "2026-09-16T02:05:48+00:00"
+    },
+    {
+      "id": "mochiy-pop-one",
+      "family": "Mochiy Pop One",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/mochiypopone/MochiyPopOne-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/mochiypopone/OFL.txt",
+      "upstreamSha256": "9e009430e1316c271a5f34759c6b65fc343c4e806f193042528887e7235a92c6",
+      "sha256": "cfa81ecce5d0ccfed8040e768fc3f4577a882a3ac67b0fa4b0769527abf69919",
+      "bytes": 1951288,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "mochiy-pop-one.woff2",
+          "upstreamSha256": "9e009430e1316c271a5f34759c6b65fc343c4e806f193042528887e7235a92c6",
+          "sha256": "cfa81ecce5d0ccfed8040e768fc3f4577a882a3ac67b0fa4b0769527abf69919",
+          "bytes": 1951288
+        }
+      ],
+      "builtAt": "2026-09-16T02:05:55+00:00"
+    },
+    {
+      "id": "yusei-magic",
+      "family": "Yusei Magic",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/yuseimagic/YuseiMagic-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/yuseimagic/OFL.txt",
+      "upstreamSha256": "82098615f39ed9da6a8ccc674b9006e49c70dd5b775a7a1697f6bedd22ce25a2",
+      "sha256": "88bacd5e73e2a747b2d38ea67b415cf75421d0b0b1ebbfa5b0d27a3ae33885c8",
+      "bytes": 920292,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "yusei-magic.woff2",
+          "upstreamSha256": "82098615f39ed9da6a8ccc674b9006e49c70dd5b775a7a1697f6bedd22ce25a2",
+          "sha256": "88bacd5e73e2a747b2d38ea67b415cf75421d0b0b1ebbfa5b0d27a3ae33885c8",
+          "bytes": 920292
+        }
+      ],
+      "builtAt": "2026-09-16T02:06:00+00:00"
+    },
+    {
+      "id": "zen-maru-gothic",
+      "family": "Zen Maru Gothic",
+      "source": "{\"700\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/zenmarugothic/ZenMaruGothic-Bold.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/zenmarugothic/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "fe24426b9c8b5523a0146a8235c8674eccf0493af354a53ec895c3596d9eb745",
+      "sha256": "9162958ebcda2073ebd5ec8f9afc4e89966f6db501fa6631c3ae2b41e50c8ff3",
+      "bytes": 1552864,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 700,
+          "file": "zen-maru-gothic.woff2",
+          "upstreamSha256": "fe24426b9c8b5523a0146a8235c8674eccf0493af354a53ec895c3596d9eb745",
+          "sha256": "9162958ebcda2073ebd5ec8f9afc4e89966f6db501fa6631c3ae2b41e50c8ff3",
+          "bytes": 1552864
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:10+00:00"
+    },
+    {
+      "id": "kosugi-maru",
+      "family": "Kosugi Maru",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/apache/kosugimaru/KosugiMaru-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/apache/kosugimaru/LICENSE.txt",
+      "licenseType": "Apache-2.0",
+      "upstreamSha256": "4b8d0022c8dadd090ef67cd1f71f130714767af7806cba2eb4ebe4b0271c1d68",
+      "sha256": "14f4f733f8627fd12969dbfb9c4584c32f0c0fdff22c7911c060cdd75ca16648",
+      "bytes": 1497668,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "kosugi-maru.woff2",
+          "upstreamSha256": "4b8d0022c8dadd090ef67cd1f71f130714767af7806cba2eb4ebe4b0271c1d68",
+          "sha256": "14f4f733f8627fd12969dbfb9c4584c32f0c0fdff22c7911c060cdd75ca16648",
+          "bytes": 1497668
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:16+00:00"
+    },
+    {
+      "id": "hachi-maru-pop",
+      "family": "Hachi Maru Pop",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/hachimarupop/HachiMaruPop-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/hachimarupop/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "78408910c8f1a2f174a279cbc1484b48b71780039eba3fe1be2bfcc5d4df3f98",
+      "sha256": "517c6669e8bae3a95feaaa041d256b09e5937f5725042c8bf7325ab3cb973ccf",
+      "bytes": 2045552,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "hachi-maru-pop.woff2",
+          "upstreamSha256": "78408910c8f1a2f174a279cbc1484b48b71780039eba3fe1be2bfcc5d4df3f98",
+          "sha256": "517c6669e8bae3a95feaaa041d256b09e5937f5725042c8bf7325ab3cb973ccf",
+          "bytes": 2045552
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:23+00:00"
+    },
+    {
+      "id": "zen-kurenaido",
+      "family": "Zen Kurenaido",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/zenkurenaido/ZenKurenaido-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/zenkurenaido/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "58b8d930d9fc10c8a5810c085bae378dacb98d0779073ee6d53d919f19ee6a4f",
+      "sha256": "99d15161ce4a43db32a803fbe550fbe02ee30fdd24e755049f217b4db080d517",
+      "bytes": 1401568,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "zen-kurenaido.woff2",
+          "upstreamSha256": "58b8d930d9fc10c8a5810c085bae378dacb98d0779073ee6d53d919f19ee6a4f",
+          "sha256": "99d15161ce4a43db32a803fbe550fbe02ee30fdd24e755049f217b4db080d517",
+          "bytes": 1401568
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:28+00:00"
+    },
+    {
+      "id": "rocknroll-one",
+      "family": "RocknRoll One",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/rocknrollone/RocknRollOne-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/rocknrollone/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "dc0f5ff975851827f63f2c6bfed128ffbca14b6399a10fb5e1711215c0108526",
+      "sha256": "0b737af3239855e49ad2dc65f32e664ccf6f4f838ceee23f37ecc58a0881139d",
+      "bytes": 1001740,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "rocknroll-one.woff2",
+          "upstreamSha256": "dc0f5ff975851827f63f2c6bfed128ffbca14b6399a10fb5e1711215c0108526",
+          "sha256": "0b737af3239855e49ad2dc65f32e664ccf6f4f838ceee23f37ecc58a0881139d",
+          "bytes": 1001740
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:32+00:00"
+    },
+    {
+      "id": "reggae-one",
+      "family": "Reggae One",
+      "source": "{\"400\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/reggaeone/ReggaeOne-Regular.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/reggaeone/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "aebe62598732d76036f30ec11bb0ec5f68938e373a06d1b4ceb6b9cf1abf3db2",
+      "sha256": "cf02f02a67d3f3898cb44919edd4450396293313d9d020e0d52fe954f59dd3b9",
+      "bytes": 900684,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 400,
+          "file": "reggae-one.woff2",
+          "upstreamSha256": "aebe62598732d76036f30ec11bb0ec5f68938e373a06d1b4ceb6b9cf1abf3db2",
+          "sha256": "cf02f02a67d3f3898cb44919edd4450396293313d9d020e0d52fe954f59dd3b9",
+          "bytes": 900684
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:35+00:00"
+    },
+    {
+      "id": "shippori-mincho",
+      "family": "Shippori Mincho",
+      "source": "{\"600\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/shipporimincho/ShipporiMincho-SemiBold.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/shipporimincho/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "bc7925544894a91466449adb73c6d943f50c3e53eb1c74d0673fe2dbafcd4d2d",
+      "sha256": "2d62ff9533d511abf75f292a21e032c159149aafcd3671b89a8f1ac4831a126b",
+      "bytes": 2975488,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 600,
+          "file": "shippori-mincho.woff2",
+          "upstreamSha256": "bc7925544894a91466449adb73c6d943f50c3e53eb1c74d0673fe2dbafcd4d2d",
+          "sha256": "2d62ff9533d511abf75f292a21e032c159149aafcd3671b89a8f1ac4831a126b",
+          "bytes": 2975488
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:47+00:00"
+    },
+    {
+      "id": "zen-old-mincho",
+      "family": "Zen Old Mincho",
+      "source": "{\"600\": \"https://raw.githubusercontent.com/google/fonts/main/ofl/zenoldmincho/ZenOldMincho-SemiBold.ttf\"}",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/zenoldmincho/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "d98b9783652081f7f9e662b0568bddeaf6462962dd39edf68781268eb60ea3a0",
+      "sha256": "48ef8680ff812a063cae8e67f744bb0947dee3d7c892ccaaa99e90d196e58ed9",
+      "bytes": 2113320,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 600,
+          "file": "zen-old-mincho.woff2",
+          "upstreamSha256": "d98b9783652081f7f9e662b0568bddeaf6462962dd39edf68781268eb60ea3a0",
+          "sha256": "48ef8680ff812a063cae8e67f744bb0947dee3d7c892ccaaa99e90d196e58ed9",
+          "bytes": 2113320
+        }
+      ],
+      "builtAt": "2026-09-16T09:11:55+00:00"
+    }
+  ]
+}

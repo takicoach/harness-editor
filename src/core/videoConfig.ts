@@ -32,12 +32,18 @@ function readTitleStyle(
 
 /**
  * TELOP_CONFIG からテロップ下端オフセット（px）を取り出す。
- * プリセットによって値が異なる（標準テンプレート short=200 / golf-short-gold=540）。
+ * プリセットによって値が異なる（ハーネス形式標準 short=200 / golf-short-gold=540）。
  * TELOP_CONFIG 不在・bottomOffset が有限数でない場合は null を返し、呼び出し側で
  * 標準値（`preview/telopLayout.ts` の telopBottomFrac）へフォールバックさせる。
  * **負値も null 扱い**（画面下端より下のアンカーは実描画にあり得ず、枠が画面外へ出るだけ）。
  * 0 は有効値（下端ぴったり）。
  */
+function readTelopFontSize(telopConfig: unknown): number | null {
+  if (typeof telopConfig !== 'object' || telopConfig === null) return null;
+  const v = (telopConfig as Record<string, unknown>).fontSize;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
 function readTelopBottomOffset(telopConfig: unknown): number | null {
   if (typeof telopConfig !== 'object' || telopConfig === null) return null;
   const v = (telopConfig as Record<string, unknown>).bottomOffset;
@@ -70,6 +76,7 @@ function buildVideoConfig(m: Record<string, unknown>): VideoConfig {
     orientation: orientationOf(resolution.width, resolution.height),
     titleStyle: readTitleStyle(m.TELOP_CONFIG, resolution),
     telopBottomOffset: readTelopBottomOffset(m.TELOP_CONFIG),
+    telopFontSize: readTelopFontSize(m.TELOP_CONFIG),
   };
 }
 

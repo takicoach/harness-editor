@@ -1,12 +1,13 @@
 /** 左サイドバー（プロジェクト/素材）の開閉状態の永続化。既定は開。 */
 const KEY = 'sme-folder-open';
 
-/** localStorage から開閉状態を読む。未設定・読めない場合は開（true）。 */
-export function loadFolderOpen(): boolean {
+/** 保存した選択を優先。未設定・読めない場合だけ画面幅に応じた既定を使う。 */
+export function loadFolderOpen(defaultOpen = true): boolean {
   try {
-    return localStorage.getItem(KEY) !== 'closed';
+    const stored = localStorage.getItem(KEY);
+    return stored === 'closed' ? false : stored === 'open' ? true : defaultOpen;
   } catch {
-    return true;
+    return defaultOpen;
   }
 }
 

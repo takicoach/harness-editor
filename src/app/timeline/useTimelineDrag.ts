@@ -76,6 +76,7 @@ interface UseTimelineDragResult<H> {
    * @param originFrame 掴んだつまみの元の原本フレーム。デルタ方式の基準に使う。
    */
   beginDrag: (handle: H, e: React.PointerEvent, originFrame: number) => void;
+  cancelDrag: () => void;
 }
 
 /**
@@ -99,6 +100,12 @@ export function useTimelineDrag<H>({
   // ドラッグ中の最新フレームを ref に保持（pointerup でコミットに使う）。
   const dragRef = useRef<DragState<H> | null>(null);
   dragRef.current = drag;
+  const cancelDrag = useCallback(() => {
+    const current = dragRef.current;
+    dragRef.current = null;
+    if (current !== null) stateRef.current.onCancel?.(current.handle);
+    setDrag(null);
+  }, []);
   // デルタ方式用: 掴んだ時点の「ポインタフレーム」「つまみの元フレーム」「画面 X」
   // 「トラック原点の画面 X」を保持。
   const grabRef = useRef<{ grabPointerFrame: number; originFrame: number; grabClientX: number } | null>(null);
@@ -191,5 +198,5 @@ export function useTimelineDrag<H>({
     // drag が null↔非null に変わったときだけリスナを貼り直す。
   }, [drag === null]);
 
-  return { drag, beginDrag };
+  return { drag, beginDrag, cancelDrag };
 }

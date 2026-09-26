@@ -91,6 +91,70 @@ describe('takeOrWait（ロングポーリング）', () => {
       vi.useRealTimers();
     }
   });
+
+  it('切断済み waiter だけを解除し、同時に待つ consumer へ後続指示を渡す', async () => {
+    vi.useFakeTimers();
+    try {
+      const inbox = createInstructionInbox();
+      const disconnected = new AbortController();
+      const connected = new AbortController();
+      const abandoned = inbox.takeOrWait(5_000, undefined, disconnected.signal);
+      const active = inbox.takeOrWait(5_000, undefined, connected.signal);
+      expect(inbox.agentStatus().waiting).toBe(2);
+
+      disconnected.abort();
+      expect(await abandoned).toBeNull();
+      expect(inbox.agentStatus().waiting).toBe(1);
+
+      inbox.enqueue(input('接続中だけが取る'));
+      await vi.advanceTimersByTimeAsync(25);
+      expect((await active)?.text).toBe('接続中だけが取る');
+      expect(inbox.agentStatus().waiting).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('enqueue 直後の切断を配送前に検知して指示を pending に保つ', async () => {
+    vi.useFakeTimers();
+    try {
+      const inbox = createInstructionInbox();
+      const controller = new AbortController();
+      const abandoned = inbox.takeOrWait(5_000, undefined, controller.signal);
+      inbox.enqueue(input('次の接続へ残す'));
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(await abandoned).toBeNull();
+      expect(inbox.list('projA')[0]?.status).toBe('pending');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('期限直前に届いた指示を切断猶予のために取りこぼさない', async () => {
+    vi.useFakeTimers();
+    try {
+      const inbox = createInstructionInbox();
+      const controller = new AbortController();
+      const pending = inbox.takeOrWait(10, undefined, controller.signal);
+      await vi.advanceTimersByTimeAsync(9);
+      inbox.enqueue(input('期限直前'));
+      await vi.advanceTimersByTimeAsync(25);
+      expect((await pending)?.text).toBe('期限直前');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('即時取得済みの指示は後続 abort で pending に戻さない', async () => {
+    const inbox = createInstructionInbox();
+    const controller = new AbortController();
+    const queued = inbox.enqueue(input('処理開始済み'));
+    expect((await inbox.takeOrWait(5_000, undefined, controller.signal))?.id).toBe(queued.id);
+    controller.abort();
+    expect(inbox.list('projA')[0]?.status).toBe('processing');
+  });
 });
 
 import { validateInstructionInput } from './instructionInbox';

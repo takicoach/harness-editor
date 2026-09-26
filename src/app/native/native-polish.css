@@ -1,0 +1,56 @@
+/* 色・文字・寸法のトークンは src/app/styles.css が正本（UI 添削 F1 で統合）。ここは native 固有の配置だけを書く。 */
+.native-main{padding:0 12px 12px;gap:0;grid-template-columns:var(--native-left,248px) 10px minmax(260px,1fr) 10px var(--native-right,296px);grid-template-rows:minmax(200px,1fr) 10px var(--native-bottom,280px)}
+.native-library,.native-preview,.native-right-dock,.native-timeline-panel{background:var(--bg-1);border:1px solid var(--border);border-radius:12px;box-shadow:var(--panel-shadow);overflow:hidden}
+.native-library-symbol{font-size:15px;line-height:1}
+.native-library-actions{padding:12px;gap:7px;flex-wrap:wrap}.native-library-hint{line-height:1.7;padding:8px 12px;margin:0;font-size:var(--native-font-sub)}
+.native-caption-list{padding:8px}.native-caption-list>button{border-radius:8px;margin-bottom:6px;text-align:left;overflow-wrap:anywhere}
+.native-panel-heading{height:32px;flex:0 0 32px;padding:0 14px;border-bottom:1px solid var(--border);font-size:var(--native-font-sub);letter-spacing:.1px}
+.native-preview-box{margin:10px;border-radius:9px;background:var(--bg-2);min-height:0}.native-preview-stage{box-shadow:none}.native-preview-status{max-width:calc(100% - 24px);border-radius:9px;line-height:1.6}
+.native-right-dock{grid-column:5;grid-row:1;min-height:0;min-width:0;display:flex;flex-direction:column}/* container-type は fixed の包含ブロックを作る: 配下に position:fixed を置かない（置くならポータル）。 */
+.native-inspector-host{min-height:0;flex:1;overflow:auto;container-type:inline-size}.native-inspector-host[hidden]{display:none}.native-inspector{overflow:visible;background:transparent}
+.native-ai-panel{min-height:0;overflow:auto;flex:1;padding:6px}.native-ai-panel .cl{width:100%;height:100%;border:0;background:transparent}.native-ai-panel textarea{max-width:100%}
+.native-mode-finish .native-right-dock{grid-row:1/-1}.native-mode-finish .native-main{grid-template-columns:var(--native-left,248px) 10px minmax(260px,1fr) 10px var(--native-right,340px)}
+.native-inspector fieldset{padding:12px 16px}.native-inspector section{padding:17px 0 8px;margin-top:10px}.native-inspector h3{font-size:12px;font-weight:700;margin-bottom:14px}.native-property{gap:8px;min-height:32px;line-height:1.5}.native-property input,.native-property select,.native-text-field textarea,.native-transcript select{border:1px solid var(--border);border-radius:7px;background:var(--bg-2);padding:7px 9px;min-width:0}.native-property input{font-variant-numeric:tabular-nums}
+.native-number-field{margin:13px 0 18px}.native-number-field .native-property{margin:0 0 7px}.native-property-slider{display:block;width:100%;height:16px;accent-color:var(--accent);cursor:ew-resize;padding:0!important;border:0!important;background:transparent!important}
+.native-right-dock[data-finish-tool=color] .native-inspector section[data-setting]:not([data-setting=color]),.native-right-dock[data-finish-tool=audio] .native-inspector section[data-setting]:not([data-setting=audio]),.native-right-dock[data-finish-tool=captions] .native-inspector section[data-setting]:not([data-setting=captions]):not([data-setting=animation-list]){display:none}
+/* 群（F14）の中の節。`data-setting` を持たない節（NativeVisualSettings の各節・位置キーフレーム）も
+   対象ツール以外では隠す。群単位の規則だけだと、対象節と同じ群に居る無印の節が漏れる（Codex 指摘 2）。 */
+.native-right-dock[data-finish-tool=color] .native-inspector-section[data-group]>div>section:not([data-setting=color]),.native-right-dock[data-finish-tool=audio] .native-inspector-section[data-group]>div>section:not([data-setting=audio]),.native-right-dock[data-finish-tool=captions] .native-inspector-section[data-group]>div>section:not([data-setting=captions]):not([data-setting=animation-list]){display:none}
+.native-right-dock[data-finish-tool=color] .native-inspector-section[data-group]:not([data-group=project]):not(:has(section[data-setting=color])),.native-right-dock[data-finish-tool=audio] .native-inspector-section[data-group]:not([data-group=project]):not(:has(section[data-setting=audio])),.native-right-dock[data-finish-tool=captions] .native-inspector-section[data-group]:not([data-group=project]):not(:has(section[data-setting=captions])){display:none}
+/* T9: 速度の節（全体の速度・再生速度）は fieldset>section で data-setting を持たないので、上の規則では隠れない。
+   絞り込み中は対象外として畳む（既定の「すべて」では従来どおり出す）。
+   M-9': 対象は許可リスト方式の 3 つ（字幕・カラー・音声）に限る。残るのは `layout`（動き・配置）のみ。
+   `fades`（シーン転換）は既存の別規則（下の fieldset:not(...) セレクタ）で従来どおり隠れる。 */
+.native-right-dock[data-finish-tool=captions] .native-inspector .native-speed-settings,.native-right-dock[data-finish-tool=color] .native-inspector .native-speed-settings,.native-right-dock[data-finish-tool=audio] .native-inspector .native-speed-settings{display:none}
+.native-right-dock[data-finish-tool=layout] .native-inspector section[data-setting=color],.native-right-dock[data-finish-tool=layout] .native-inspector section[data-setting=audio]{display:none}
+.native-right-dock[data-finish-tool=fades] .native-inspector>fieldset:not(.native-scene-fade-settings):not(.native-transition-settings){display:none}
+.native-right-dock[data-finish-tool=fades] .native-inspector .native-ducking-settings,.native-right-dock[data-finish-tool=fades] .native-inspector .native-audio-fix{display:none}
+.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=fades]) .native-scene-fade-settings,.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=fades]) .native-transition-settings{display:none}
+.native-transcript{padding:14px;line-height:1.75;min-width:0;overflow:auto}.native-transcript select{width:100%;margin-top:7px;font-size:var(--native-font-sub)}.native-transcription{padding:12px 0}.native-subtle{font-size:var(--native-font-sub);line-height:1.75;overflow-wrap:anywhere}.native-words button{line-height:1.8}.native-words{padding:10px 0}
+.native-mode-review .native-main{grid-template-columns:var(--native-left,300px) 10px minmax(260px,1fr) 10px var(--native-right,296px)}
+/* I-7: nowrap の下では日本語ラベルが任意位置で折り返して 2 行に潰れる。ボタンの幅を決定的にして、
+   溢れの実測（scrollWidth > clientWidth）で「表示」への退避を判断できるようにする。 */
+.native-timeline-toolbar button{white-space:nowrap}
+.native-timeline-toolbar{min-height:46px;height:auto;padding:7px 10px;gap:8px;flex-wrap:nowrap}.native-timeline-toolbar>strong{font-size:var(--native-font-sub)}.native-timeline-options{gap:4px;flex-wrap:nowrap;margin-left:auto}.native-timeline-options label{font-size:var(--native-font-sub)}
+.native-ruler-label{align-items:flex-start}.native-clip{border-radius:6px;top:7px;height:38px}
+.native-track-audio{background:color-mix(in srgb,var(--track-accent) 8%,var(--bg-1))}.native-waveform{color:var(--track-jimaku)}
+.native-transfer{padding:8px 20px;background:var(--bg-1);border-bottom:1px solid var(--border)}.native-transfer .task-progress-copy{flex-direction:row;gap:12px}.native-transfer small{max-width:50vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.native-workspace .script-upload{padding:16px 0;margin-bottom:10px;border-bottom:1px solid var(--border)}.native-workspace .script-upload .script-import{display:flex;align-items:center;justify-content:center;border-radius:9px;padding:12px 10px;min-height:44px;background:var(--accent);color:var(--bg-1);text-decoration:none;font-size:12px;font-weight:600;cursor:pointer}
+.native-workspace .script-panel{padding:14px;min-width:0}.native-workspace .script-panel h2{font-size:17px}.native-workspace .script-panel textarea{border:1px solid var(--border);border-radius:9px;background:var(--bg-2);font-size:12px;line-height:1.8;padding:12px}.native-workspace .script-panel button{min-width:0;white-space:normal}.native-export-panel{border-radius:12px;box-shadow:var(--panel-shadow);max-width:calc(100vw - 24px)}
+@media(max-width:1350px){.native-main{padding:0 8px 8px}.native-timeline-options{margin-left:0}}
+.native-hide-left .native-main{grid-template-columns:var(--native-rail) 0 minmax(260px,1fr) 10px var(--native-right,296px)}
+.native-hide-right .native-main{grid-template-columns:var(--native-left,248px) 10px minmax(260px,1fr) 0 var(--native-rail)}
+.native-hide-left.native-hide-right .native-main{grid-template-columns:var(--native-rail) 0 minmax(260px,1fr) 0 var(--native-rail)}
+.native-finish-empty{margin:12px;padding:14px;border:1px solid var(--border);border-radius:8px;line-height:1.8;color:var(--fg-1);background:var(--bg-2)}
+/* テロップスタイルの更新導線（TP9）。変数は既存トークンだけを使う。`--native-border` /
+   `--native-surface-2` / `--native-warn-text` / `--native-text-subtle` は**どこにも定義が無い**
+   （事前検査 B の F9-1。未定義 var() は cssClassAudit をすり抜けて両テーマで色が落ちる）。
+   `!important` なし・11px 未満なし・角丸箱に左辺だけの線を付けない。 */
+.native-pack-update{display:flex;flex-direction:column;gap:8px}
+.native-pack-update-plan{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2)}
+.native-pack-update-plan p{margin:0;font-size:13px}
+.native-pack-update-warn{color:var(--warn-fg)}
+.native-pack-update-notice{margin:0;font-size:12px;color:var(--fg-3)}
+/* アニメーション一覧の補助文言（自由書式の 1 行・旧版案件の注記。TP11）。
+   `--native-text-subtle` は定義が無い（Global Constraints）ので `--fg-3` を使う。 */
+.native-animation-note-line{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--fg-3)}

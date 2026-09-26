@@ -1,7 +1,7 @@
-// ハーネス学習ループの型定義。LL Phase A は transcript-fix 段階のみ扱う。
+// ハーネス形式学習ループの型定義。LL Phase A は transcript-fix 段階のみ扱う。
 // telop-fix / se-fix は Phase B（テロップ・SE 差分レビュー）で追加（ベースライン自動退避の対象追跡用）。
 
-/** 学習が追跡するハーネス編集パイプラインの段階。 */
+/** 学習が追跡するハーネス形式パイプラインの段階。 */
 export type LearningStage = 'transcript-fix' | 'telop-fix' | 'se-fix';
 
 /** 追跡ファイルの定義。 */

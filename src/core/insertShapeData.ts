@@ -1,4 +1,4 @@
-import { evalDataModule } from './dataModule';
+import { evalDataModule, assertNoNullOrNonFinite } from './dataModule';
 import { replaceExportArray } from './sourceEdit';
 import { ProjectFileError, type ShapeSegment } from './types';
 
@@ -15,6 +15,7 @@ export function parseInsertShapeData(source: string | null): ShapeSegment[] {
   if (!Array.isArray(m.shapeData)) {
     throw new ProjectFileError('shapeData.ts', 'shapeData 配列が見つかりません');
   }
+  assertNoNullOrNonFinite('shapeData.ts', 'shapeData', m.shapeData);
   return m.shapeData as ShapeSegment[];
 }
 

@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, openSync, readSync, readdirSync, realpathSync, statSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { extname, join, resolve } from 'node:path';
 import { VIDEO_EXTENSIONS } from '../shared/videoExtensions';
@@ -80,6 +80,10 @@ export interface FindOptions {
   exclude?: string[];
   limits?: MatchLimits;
   now?: () => number;
+  extensions?: readonly string[];
+  signal?: AbortSignal;
+  /** Native full-file matching uses canonical roots and refuses changed/symlink paths. */
+  strictPaths?: boolean;
 }
 
 /**
@@ -112,6 +116,7 @@ export function findSizeMatches(
   }
 
   while (stack.length > 0) {
+    options.signal?.throwIfAborted();
     if (candidates.length >= 2) break;
     if (now() - startedAt > limits.maxMillis) {
       exhausted = true;
@@ -121,11 +126,14 @@ export function findSizeMatches(
     if (item === undefined) break;
     let entries: import('node:fs').Dirent[];
     try {
+      if (options.strictPaths && (lstatSync(item.dir).isSymbolicLink() || realpathSync(item.dir) !== resolve(item.dir))) { exhausted = true; continue; }
       entries = readdirSync(item.dir, { withFileTypes: true });
     } catch {
+      if (options.strictPaths) exhausted = true;
       continue; // 未接続・権限なしの起点は飛ばす（一覧全体を落とさない）
     }
     for (const e of entries) {
+      options.signal?.throwIfAborted();
       if (candidates.length >= 2) break;
       if (seen >= limits.maxEntries) {
         exhausted = true;
@@ -147,12 +155,14 @@ export function findSizeMatches(
         continue;
       }
       if (!e.isFile()) continue;
-      if (!VIDEO_EXTENSIONS.includes(extname(e.name).toLowerCase())) continue;
+      if (!(options.extensions ?? VIDEO_EXTENSIONS).includes(extname(e.name).toLowerCase())) continue;
       if (criteria.name !== null && e.name !== criteria.name) continue;
       let st: import('node:fs').Stats;
       try {
+        if (options.strictPaths && lstatSync(full).isSymbolicLink()) { exhausted = true; continue; }
         st = statSync(full);
       } catch {
+        if (options.strictPaths) exhausted = true;
         continue;
       }
       // Dirent が通常ファイルだと言っても、stat 側でも確かめる（#142: FIFO・
@@ -163,8 +173,10 @@ export function findSizeMatches(
       try {
         real = realpathSync(full);
       } catch {
+        if (options.strictPaths) { exhausted = true; continue; }
         real = resolve(full); // realpath が引けなくても候補自体は落とさない
       }
+      if (options.strictPaths && (real !== resolve(full) || isExcluded(real))) { exhausted = true; continue; }
       if (seenReal.has(real)) continue;
       seenReal.add(real);
       candidates.push({ path: full, sizeBytes: st.size, mtimeMs: st.mtimeMs });

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@harness/frame-runtime": ["./src/captureRuntime/index.ts"],
+      "remotion": ["./src/captureRuntime/index.ts"]
+    }
+  },
+  "include": [
+    "src/server/__fixtures__/sample-project",
+    "src/server/__fixtures__/misaligned-project"
+  ],
+  "exclude": []
+}

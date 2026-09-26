@@ -27,16 +27,16 @@ function buildErrorMessage(rawBody: string): string {
 }
 
 /**
- * サーバがバンドルした対象プロジェクトのテロップ部品を動的 import する。
- *
- * 先に fetch して応答を検査する。`Telop.tsx` のビルド失敗時、サーバは 500 + {error}
- * JSON を返すが、dynamic import() はその本文を見せず汎用エラーになってしまうため、
- * ここでサーバの具体的な日本語メッセージを拾って投げ直す。検証済みの JS は Blob URL
- * 経由で import する（import map は Blob モジュールの bare import にも効く）。
+ * Native swatches compile against our audited frame API. Inspect failed responses
+ * before importing the Blob so project TSX errors retain their concrete message.
+ * The mainframe import map supplies React and @harness/frame-runtime to the module.
  */
-export async function loadTelopComponent(projectId: string): Promise<TelopComponent> {
-  const url = `/api/telop-component?id=${encodeURIComponent(projectId)}`;
-  const res = await fetch(url);
+export async function loadNativeTelopComponent(projectId: string, signal?: AbortSignal): Promise<TelopComponent> {
+  return loadTelopUrl(`/api/native-telop-component?id=${encodeURIComponent(projectId)}`, signal);
+}
+
+async function loadTelopUrl(url: string, signal?: AbortSignal): Promise<TelopComponent> {
+  const res = await fetch(url, signal ? { signal } : undefined);
   const text = await res.text();
   if (!res.ok) {
     throw new Error(buildErrorMessage(text));

@@ -1,0 +1,16 @@
+{
+  "version": "148.0.7778.96",
+  "source": "https://storage.googleapis.com/chrome-for-testing-public",
+  "mirror": "https://cdn.playwright.dev/builds/cft",
+  "verifiedAt": "2026-09-02",
+  "sha256": {
+    "mac-arm64": "d9014195871a583b0978001a23000aa2cff22e3bb951a92919b7c7775cd14e01",
+    "mac-x64": "1dabfd7b4ecc5759d3fe90dd3e782ae41659f5dc7c756cf403db104e93c918f0",
+    "win64": "492367a1cd439403ccb82adeb47b02b17965e3dcd5fbaf2d8fa3eca34941496a"
+  },
+  "mirrorSha256": {
+    "mac-arm64": "d9014195871a583b0978001a23000aa2cff22e3bb951a92919b7c7775cd14e01",
+    "mac-x64": "1dabfd7b4ecc5759d3fe90dd3e782ae41659f5dc7c756cf403db104e93c918f0",
+    "win64": "492367a1cd439403ccb82adeb47b02b17965e3dcd5fbaf2d8fa3eca34941496a"
+  }
+}

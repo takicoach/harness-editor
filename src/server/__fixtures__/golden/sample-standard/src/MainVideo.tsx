@@ -1,7 +1,7 @@
 import { AbsoluteFill } from 'remotion';
 import { ShapeSequence } from './InsertShape';
 
-// 標準ひな形（Harness Editor 標準 MainVideo）の最小フィクスチャ。
+// 標準ひな形（ハーネス形式の MainVideo）の最小フィクスチャ。
 // エディタはデータファイル（telopData/cutData/insertVideoData 等）を読むため
 // MainVideo 自体はプレビュー/保存に使われないが、サブ動画の「導入」(installVideoInsert)
 // が <TelopPlayer> 直前 / <CutPlayer> 直後へ <VideoInsertSequence/> を挿入するための

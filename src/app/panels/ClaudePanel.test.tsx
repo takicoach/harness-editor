@@ -7,7 +7,7 @@
  * 在席2段表示・詰まった processing 指示の打ち切りボタン・指示履歴/入力欄・
  * 上下2段折りたたみは UI ごと撤去したため、それらを検証していたテストは削除した
  * （純関数 isStuckInstruction / stuckElapsedMinutes / presenceLabel も他から参照が
- * 無いため関数自体を削除・テストも削除。詳細は .sdd/simplified-ai-tab-report.md）。
+ * 無いため関数自体を削除・テストも削除）。
  * 残すのは I-2 回帰（showTerminal=false の間は AiTerminal をマウントしない・
  * AI の導入確認すら呼ばない）——UI が変わっても消してはいけない安全ゲート。
  */

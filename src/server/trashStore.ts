@@ -135,7 +135,7 @@ export function listTrash(baseDir: string): TrashEntry[] {
   return [...readManifest(baseDir).entries].sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
 }
 
-/** 封じ込め違反のメッセージに使う操作名。経路ごとに文言を分ける。 */
+/** 封じ込め違反のメッセージに使う操作名。経路ごとに文言を分ける（再レビュー M-1）。 */
 type ContainmentVerb = '削除' | '復元';
 
 /**
@@ -162,7 +162,7 @@ function assertParentContained(
 }
 
 /**
- * destDir の「実在する最上位の祖先」の実体が baseDir 配下かを確かめる。
+ * destDir の「実在する最上位の祖先」の実体が baseDir 配下かを確かめる（再レビュー M-2）。
  * 復元先が未作成のとき、封じ込め検査を mkdirSync より後ろに置くと「弾いたのに
  * 外部 symlink の先へ空ディレクトリが生えている」状態になる。realpath は実在する
  * パスにしか掛けられないので、実在する所まで遡って検査する
@@ -208,7 +208,7 @@ export function moveToTrash(baseDir: string, relPath: string, kind: string): Tra
   assertParentContained(baseDir, abs, relPath, '削除');
   // 移動先（.trash）自体が外部への symlink だと、下の mkdirSync + renameSync が
   // **データをプロジェクト外へ持ち出す**。削除（emptyTrash）・掃除（sweep）と同じ
-  // 入口ガードを移動経路にも通す（ガードの 3 経路目）。
+  // 入口ガードを移動経路にも通す（ガードの 3 経路目・Codex レビュー P1）。
   assertTrashDirNotSymlink(baseDir);
   const id = randomUUID();
   const tombstone = join(baseDir, TRASH_DIR, id);
@@ -294,16 +294,16 @@ export function restoreFromTrash(baseDir: string, entryId: string): { restoredPa
   }
   // 字面（resolve）の包含検査は「途中のディレクトリが外を指す symlink」を見抜けない。
   // 削除後に元の場所が symlink へすり替えられていると、rename が baseDir 外へ着地する。
-  // realpath 検査を二段で掛ける:
+  // realpath 検査を二段で掛ける（再レビュー M-2）:
   //   ① mkdir の前 — 実在する最上位の祖先で検査する。後段だけだと、弾く前に mkdirSync が
   //      外部 symlink の先へ空ディレクトリを作ってしまう（弾いたのに副作用が残る）。
   //   ② mkdir の後 — **削除側と同じヘルパー**で復元先そのものを検査する（破壊的な
-  //      書き込み経路ごとに検査を再実装しない）。①が通っても、その後に
+  //      書き込み経路ごとに検査を再実装しない・再レビュー M-1）。①が通っても、その後に
   //      destDir 自身が symlink として実在していた場合はここで落ちる。
   assertNewDirContained(baseDir, destDir, entry.originalPath);
   mkdirSync(destDir, { recursive: true });
   assertParentContained(baseDir, join(baseDir, entry.originalPath), entry.originalPath, '復元');
-  // 動画の復元先に symlink が居座っている＝リンク化のあとで元のコピーを戻す操作。
+  // 動画の復元先に symlink が居座っている＝リンク化のあとで元のコピーを戻す操作（I-2）。
   // 連番で逃げると main-2.mp4 になり videoConfig.ts と食い違って**リンク切れが直らない**。
   // symlink を外して元の名前で戻し、リンク記録も消して「コピー実体のプロジェクト」へ揃える。
   // 消すのはリンク（実体ではない）だけ。外付けの原本には触れない。
@@ -313,9 +313,9 @@ export function restoreFromTrash(baseDir: string, entryId: string): { restoredPa
   const restoredAbs = join(destDir, name);
   renameSync(stored, restoredAbs);
 
-  // **manifest を先にコミットする。** tombstone の削除を先に済ませてしまうと、その後の
-  // writeManifest が失敗したときに「実体は復元済みなのに manifest には古い entry が残る」
-  // 状態が固定される。以後の復元試行は tombstone を見に行って
+  // **manifest を先にコミットする**（Codex レビュー P2）。tombstone の削除を先に済ませて
+  // しまうと、その後の writeManifest が失敗したときに「実体は復元済みなのに manifest には
+  // 古い entry が残る」状態が固定される。以後の復元試行は tombstone を見に行って
   // 「ゴミ箱の実体が見つかりません」となり、一覧から消すこともできず**恒久に壊れる**。
   // 記録を先に確定させ、失敗したら rename を巻き戻して「無かったこと」にする。
   try {
@@ -336,7 +336,7 @@ export function restoreFromTrash(baseDir: string, entryId: string): { restoredPa
   }
 
   // ここから先は後片付け。記録は確定済みなので、失敗しても復元は成立している。
-  // 残った tombstone は孤児として sweepOrphanTombstones（「空にする」）が回収する既存機構に乗る。
+  // 残った tombstone は孤児として sweepOrphanTombstones（「空にする」）が回収する。
   if (replacedLinkTarget !== null) rmSync(join(baseDir, '.sme', 'videoLink.json'), { force: true });
   try {
     rmSync(join(baseDir, TRASH_DIR, entry.id), { recursive: true, force: true });
@@ -347,7 +347,7 @@ export function restoreFromTrash(baseDir: string, entryId: string): { restoredPa
 }
 
 /**
- * manifest から参照されていない tombstone ディレクトリを掃除する（孤児回収）。
+ * manifest から参照されていない tombstone ディレクトリを掃除する（孤児回収・再レビュー M-3）。
  * 孤児は manifest の保存失敗・手で編集された manifest・検証落ち entry の除外で生まれ、
  * 一覧に出ないため利用者はどう操作しても消せずディスクを食い続ける。
  * 「空にする（全件）」だけの掃除に限定し、消すのは **UUID 形式の名前を持つディレクトリ**

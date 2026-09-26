@@ -23,7 +23,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEMO_CLIP = join(REPO, 'scripts', 'guide-assets', 'demo-golf.mp4');
 const OUT_DIR = join(REPO, 'docs', 'images', 'guide');
 const FIXTURE = join(REPO, 'src', 'server', '__fixtures__', 'sample-project');
-const PORT = Number(process.env.SME_PORT ?? 2109); // 実エディタ稼働中でも別ポートで収録できるように（isolated e2e と同じ流儀）
+const PORT = 2109;
 const BASE = `http://localhost:${PORT}`;
 const DEMO_PROJECT = 'ゴルフドリル解説';
 
@@ -60,7 +60,7 @@ function startServer(root) {
     cwd: REPO,
     env: {
       ...process.env,
-      HARNESS_PROJECT_ROOT: root,
+      SME_PROJECT_ROOT: root,
       SME_NO_OPEN: '1',
       SME_RENDER_MOCK: '1',
       SME_RENDER_MOCK_DELAY_MS: '4000',

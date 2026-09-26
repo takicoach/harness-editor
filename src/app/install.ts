@@ -14,6 +14,7 @@ export type InstallKind =
   | 'shape'
   | 'transition'
   | 'speed'
+  | 'imageRendering'
   | 'mainLayout';
 
 /** kind 別の導入エラー。未発生の kind はキー無し。 */
@@ -21,6 +22,7 @@ export type InstallErrors = Partial<Record<InstallKind, string>>;
 
 /** kind → 導入 API パスと、レスポンスに error が無いときの既定失敗メッセージ。 */
 export const INSTALL_APIS: Record<InstallKind, { path: string; failMessage: string }> = {
+  imageRendering: { path: '/api/install-image-rendering', failMessage: '画像表示の更新に失敗しました' },
   telopPack: { path: '/api/install-telop-pack', failMessage: 'テロップパックの導入に失敗しました' },
   videoInsert: { path: '/api/install-video-insert', failMessage: 'サブ動画機能の導入に失敗しました' },
   bgm: { path: '/api/install-bgm', failMessage: 'BGM機能の導入に失敗しました' },

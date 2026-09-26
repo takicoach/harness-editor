@@ -1,0 +1,89 @@
+.rightdock-script:not([hidden]) { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.rightdock { container-type: inline-size; }
+@container (max-width: 310px) {
+  .rightdock-mode-mark { display: none; }
+  .rightdock-tabs { flex-wrap: wrap; }
+  .rightdock-tab { padding-left: 8px; padding-right: 8px; }
+}
+.script-panel { padding: 20px 18px 32px; color: var(--fg-0); font-size: 13px; line-height: 1.65; }
+.script-panel header { margin-bottom: 18px; }
+.script-panel h2 { margin: 4px 0 8px; font-size: 23px; font-weight: 650; letter-spacing: .04em; }
+.script-panel p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.script-panel header > p:last-child, .script-stage-note { color: var(--fg-2); }
+.script-eyebrow { font-size: 11px; color: var(--accent); letter-spacing: .07em; }
+.script-input-label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.script-panel textarea { box-sizing: border-box; width: 100%; min-height: 145px; max-height: 420px; resize: vertical; padding: 12px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg-0); color: var(--fg-0); font: inherit; line-height: 1.9; }
+.script-panel textarea:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.script-input-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: var(--fg-2); font-size: 11px; margin: 6px 0 20px; }
+.script-import { position: relative; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.script-import input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+.script-import:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.script-purpose { padding: 0; margin: 0 0 18px; border: 0; min-width: 0; }
+.script-purpose legend { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.script-purpose label { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; cursor: pointer; }
+.script-purpose label + label { border-top: 1px solid var(--border); }
+.script-purpose input { margin-top: 6px; accent-color: var(--accent); }
+.script-purpose strong { display: block; font-size: 13px; font-weight: 550; }
+.script-purpose small { display: block; color: var(--fg-2); font-size: 11px; }
+.script-align { width: 100%; min-height: 36px; margin-bottom: 10px; }
+.script-stage-note { font-size: 11px; }
+.script-error, .script-stale { color: var(--fg-0); background: var(--bg-3); padding: 10px 12px; border-left: 3px solid var(--accent-2); }
+.script-results { border-top: 1px solid var(--border-strong); padding-top: 18px; margin-top: 22px; }
+.script-result-heading { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.script-result-heading h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.script-result-heading > span, .script-summary { color: var(--fg-2); font-size: 11px; }
+.script-filter { display: flex; gap: 6px; align-items: center; font-size: 11px; margin: 14px 0; }
+.script-filter input { accent-color: var(--accent); }
+.script-results ol { list-style: none; margin: 0 0 16px; padding: 0; }
+.script-passage { border-bottom: 1px solid var(--border); padding: 14px 0; }
+.script-match-label { color: var(--accent); font-size: 10px; font-weight: 600; }
+.script-passage[data-status="unmatched"] .script-match-label, .script-passage[data-status="ambiguous"] .script-match-label { color: var(--fg-2); }
+.script-passage > p { white-space: pre-wrap; margin: 4px 0 10px; }
+.script-passage small { color: var(--fg-2); font-size: 11px; }
+.script-candidates { display: flex; flex-wrap: wrap; gap: 6px; }
+.script-candidates button { border: 1px solid var(--border-strong); border-radius: 3px; background: transparent; padding: 5px 8px; color: var(--fg-1); font: inherit; font-size: 11px; cursor: pointer; }
+.script-candidates button:hover, .script-candidates button.selected { border-color: var(--accent); color: var(--accent); background: var(--accent-tint); }
+.script-candidates button:disabled { opacity: .45; cursor: default; }
+.script-edit-review { border-top: 1px solid var(--border-strong); margin-top: 24px; padding-top: 18px; }
+.script-edit-review h3, .script-edit-review h4 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+.script-edit-review > p { font-size: 12px; color: var(--fg-2); }
+.script-edit-review > .script-import { display: inline-block; margin: 0 0 14px; }
+.script-import-disabled { opacity: .45; cursor: default; }
+.script-import input:disabled { cursor: default; }
+.script-edit-content { margin-top: 14px; }
+.script-edit-content ol { list-style: none; padding: 0; margin: 10px 0 18px; }
+.script-edit-changes > li, .script-edit-passages > li { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.script-edit-content dl { margin: 0 0 12px; }
+.script-edit-content dt { font-size: 10px; color: var(--fg-2); }
+.script-edit-content dd { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-edit-content dd:last-child { border-left: 2px solid var(--accent); padding-left: 10px; color: var(--accent); }
+.script-edit-content summary { cursor: pointer; font-size: 12px; padding: 7px 0; }
+.script-edit-content .btn-secondary, .script-edit-review > .btn-secondary { max-width: 100%; white-space: normal; border: 1px solid var(--border-strong); border-radius: 3px; padding: 6px 8px; font: inherit; font-size: 11px; background: transparent; color: var(--fg-1); cursor: pointer; }
+.script-edit-review .btn-secondary:disabled { opacity: .45; cursor: default; }
+.script-edit-review .btn-secondary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.script-edit-content .script-result-heading > span { white-space: nowrap; flex-shrink: 0; }
+.script-proposal-reason { color: var(--fg-2); font-size: 12px; }
+.script-adoption { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-strong); }
+.script-adoption h4 { margin: 0 0 14px; font-size: 14px; font-weight: 600; }
+.script-adoption > label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; color: var(--fg-2); font-size: 12px; }
+.script-adoption select, .script-adoption textarea { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--bg-1); color: var(--fg-0); font: inherit; }
+.script-adoption textarea { min-height: 70px; resize: vertical; }
+.script-adoption > .script-learning-consent { flex-direction: row; align-items: flex-start; line-height: 1.6; }
+.script-learning-consent input { margin-top: 3px; accent-color: var(--accent); }
+.script-adoption-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.script-adoption .btn-primary { border: 1px solid var(--accent); border-radius: 3px; padding: 7px 12px; background: var(--accent); color: var(--bg-0); font: inherit; font-size: 12px; cursor: pointer; }
+.script-adoption .btn-primary:disabled { opacity: .45; cursor: default; }
+.script-adoption :is(select,textarea,.btn-primary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.script-decision-status { border-left: 2px solid var(--accent); padding: 1px 0 1px 12px; }
+.script-decision-status p { margin: 6px 0; font-size: 12px; }
+.script-decision-status small { display: block; margin-top: 8px; line-height: 1.7; color: var(--fg-2); }
+.script-judgment-history li { border-bottom: 1px solid var(--border); padding-block: 8px; font-size: 11px; }
+.script-judgment-history p { color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-modification { border-block: 1px solid var(--border); padding: 12px 0; margin: 12px 0; }
+.script-modification ol { padding-inline-start: 20px; }
+.script-modification li { margin-block: 12px; }
+.script-modification-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.script-modification label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.script-modification input { width: 100%; min-width: 0; box-sizing: border-box; min-height: 34px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 3px; background: var(--bg-1); color: var(--fg-0); font: inherit; font-variant-numeric: tabular-nums; }
+.script-modification input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.script-modification-range + .script-adoption-actions { margin-top: 8px; }

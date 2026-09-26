@@ -1,5 +1,5 @@
 import type { TelopPosition } from '../../core/types';
-import { telopBottomFrac, telopScaleOriginY, telopVCoeff } from '../../preview/telopLayout';
+import { telopBottomFrac, telopScaleOriginY, telopVCoeff, clampTelopX } from '../../preview/telopLayout';
 
 /** 画面座標（左上原点）の矩形。 */
 export interface Rect {
@@ -42,7 +42,7 @@ export const BOX_FRAC_H = 0.16;
  * 枠アンカー（テロップ下端）の位置比を返す。
  *
  * プロジェクトの実描画位置は `TELOP_CONFIG.bottomOffset` で決まり、プリセットごとに違う
- * （標準テンプレート short=200 / golf-short-gold=540）。**選択枠と当たり判定だけ**はこの
+ * （ハーネス形式標準 short=200 / golf-short-gold=540）。**選択枠と当たり判定だけ**はこの
  * 実値へ合わせないと、枠が実描画テキストから離れて掴めなくなる。
  *
  * 読めない場合（null / undefined / 非有限・compH が 0 以下）は標準値へフォールバックする。
@@ -106,6 +106,11 @@ export function telopBoxRect(
  * 本体ドラッグの画面移動量（dxScreen,dyScreen ピクセル）を正規化 position の変化へ変換し、
  * 開始 position へ加算してクランプして返す。x は中心 50%、y は縦係数（telopVCoeff）で
  * カーソルにテロップが 1:1 で追従するようにする。
+ *
+ * `elemWidthPx`（`content` と同じ座標系＝ stage ローカル px）を渡すと、telopTransform の
+ * 実式（x*50% は画面全幅基準・帯は中央寄せ）で実際に画面外へ出ない範囲まで x を追加で
+ * クランプする（{@link clampTelopX}・2026-09-05 の不具合の恒久対策）。省略時は従来どおり
+ * [-1,1] のみ（呼び出し側が実測幅を持たない場合の後方互換）。
  */
 export function pointerToPosition(
   content: Rect,
@@ -114,11 +119,13 @@ export function pointerToPosition(
   dyScreen: number,
   compW: number,
   compH: number,
+  elemWidthPx?: number,
 ): TelopPosition {
   if (content.w <= 0 || content.h <= 0) return startPos;
   const vCoeff = telopVCoeff(compW, compH);
+  const rawX = clamp(startPos.x + (2 * dxScreen) / content.w, -1, 1);
   return {
-    x: clamp(startPos.x + (2 * dxScreen) / content.w, -1, 1),
+    x: elemWidthPx != null ? clampTelopX(rawX, content.w, elemWidthPx) : rawX,
     // テロップは下端固定。y>0（下方向）は画面外へ出るため上方向のみ許す（[-1,0]）。
     y: clamp(startPos.y + dyScreen / (vCoeff * content.h), -1, 0),
   };

@@ -6,8 +6,10 @@
  * 値の意味論は core/motion.ts（プリセット＝詳細値のショートカット、詳細上書きは from/to）。
  */
 import { useState } from 'react';
-import type { Motion, MotionPreset, MotionState } from '../../../core/motion';
+import type { Motion, MotionBase, MotionPreset, MotionState } from '../../../core/motion';
 import { DEFAULT_INTENSITY } from '../../../core/motion';
+import { KeyframeList } from './KeyframeList';
+import { toKeyframeMotion } from '../../../core/motionKeyOps';
 
 const PRESET_LABELS: Array<{ id: MotionPreset | 'none'; label: string }> = [
   { id: 'none', label: 'なし' },
@@ -17,7 +19,11 @@ const PRESET_LABELS: Array<{ id: MotionPreset | 'none'; label: string }> = [
   { id: 'panRight', label: '右へパン' },
   { id: 'fadeIn', label: 'フェードイン強調' },
   { id: 'custom', label: 'カスタム' },
+  { id: 'keyframes', label: 'キーフレーム（自由に打つ）' },
 ];
+
+/** 位置・大きさ・不透明度の既定値（base 未指定時＝素の要素）。 */
+const NEUTRAL_BASE: MotionBase = { x: 0, y: 0, scale: 1, opacity: 1, rotation: 0 };
 
 export interface MotionSettingsProps {
   idPrefix: string;
@@ -27,6 +33,25 @@ export interface MotionSettingsProps {
   withRotation?: boolean;
   /** 不透明度の詳細指定を出すか（メイン動画は false）。 */
   withOpacity?: boolean;
+  /**
+   * 要素の基本値（position/scale/opacity/rotation）。キーフレームへ切り替えたときの
+   * 初期 2 点と、キーを打つときの補間の土台に使う。未指定＝素の要素。
+   */
+  base?: MotionBase;
+  /**
+   * キーフレームが**書き出しに反映されるか**。supported=false のときは message を注意書きとして
+   * 出す（黙って結果が変わらないようにするための告知）。未指定＝対応済みとして扱う。
+   */
+  keyframeSupport?: { supported: boolean; message: string };
+  /**
+   * キーフレームを選べるようにするか（既定 true）。メイン動画の区間 motion は
+   * 書き出し側の複製が 2 点アニメしか解釈しないため false（時間変化は大域キーフレームが担当）。
+   */
+  withKeyframes?: boolean;
+  /** 区間長（フレーム）。与えると各キーの時間を秒でも表示する。 */
+  durationFrames?: number;
+  /** fps（durationFrames と併用）。 */
+  fps?: number;
 }
 
 /** 詳細行のスライダー1本（from/to の1軸）。 */
@@ -94,16 +119,25 @@ function EndpointDetails({
   );
 }
 
-export function MotionSettings({ idPrefix, motion, onChange, withRotation = false, withOpacity = true }: MotionSettingsProps) {
+export function MotionSettings({
+  idPrefix, motion, onChange, withRotation = false, withOpacity = true,
+  base = NEUTRAL_BASE, keyframeSupport, withKeyframes = true, durationFrames, fps,
+}: MotionSettingsProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const preset: MotionPreset | 'none' = motion?.preset ?? 'none';
+  const isKeyframes = motion !== undefined && motion.keys !== undefined && motion.keys.length > 0;
+  const preset: MotionPreset | 'none' = isKeyframes ? 'keyframes' : motion?.preset ?? 'none';
 
   const choosePreset = (id: MotionPreset | 'none'): void => {
     if (id === 'none') {
       onChange(undefined);
       return;
     }
-    // プリセット切替時は詳細上書きを引き継がない（プリセットの素の動きへ戻す）。
+    if (id === 'keyframes') {
+      // 切替の瞬間に絵が変わらないよう、今の動き（プリセット）を 2 点として引き継ぐ。
+      onChange(toKeyframeMotion(motion, base));
+      return;
+    }
+    // プリセット切替時は詳細上書き・キーフレームを引き継がない（プリセットの素の動きへ戻す）。
     onChange({ preset: id, intensity: motion?.intensity ?? DEFAULT_INTENSITY });
   };
 
@@ -112,14 +146,29 @@ export function MotionSettings({ idPrefix, motion, onChange, withRotation = fals
       <div className="ins-label"><span>アニメ（開始→終了）</span></div>
       <select
         id={`${idPrefix}-motion-preset`}
+        aria-label="アニメの種類"
         value={preset}
         onChange={(e) => choosePreset(e.target.value as MotionPreset | 'none')}
       >
         {PRESET_LABELS
+          .filter((p) => withKeyframes || p.id !== 'keyframes')
           .filter((p) => withOpacity || p.id !== 'fadeIn')
           .map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
       </select>
-      {motion && motion.preset !== 'custom' && (
+      {isKeyframes && (
+        <KeyframeList
+          idPrefix={idPrefix}
+          motion={motion}
+          base={base}
+          withRotation={withRotation}
+          withOpacity={withOpacity}
+          support={keyframeSupport}
+          durationFrames={durationFrames}
+          fps={fps}
+          onChange={onChange}
+        />
+      )}
+      {motion && !isKeyframes && motion.preset !== 'custom' && (
         <div className="ins-motion-intensity">
           <div className="ins-label">
             <span>強さ {(motion.intensity ?? DEFAULT_INTENSITY).toFixed(2)}</span>
@@ -135,7 +184,7 @@ export function MotionSettings({ idPrefix, motion, onChange, withRotation = fals
           />
         </div>
       )}
-      {motion && (
+      {motion && !isKeyframes && (
         <>
           <button
             type="button"

@@ -1,0 +1,121 @@
+import {_electron as electron} from 'playwright-core';
+import {expect} from '@playwright/test';
+import {mkdtemp,readFile,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+const build=JSON.parse(await readFile(new URL('../dist/desktop/latest.json',import.meta.url),'utf8'));
+const testRoot=await mkdtemp(join(tmpdir(),'harness-desktop-smoke-'));
+const extracted=join(testRoot,'解凍したアプリ');
+const extraction=spawnSync('/usr/bin/ditto',['-x','-k',build.zip,extracted]);assert.equal(extraction.status,0,extraction.stderr.toString());
+build.appPath=join(extracted,'Harness Editor.app');
+const runtime=join(build.appPath,'Contents/Resources/runtime');
+const ffmpeg=join(runtime,'tools/ffmpeg');
+const video=join(testRoot,'sample.mp4');
+const generated=spawnSync(ffmpeg,['-v','error','-f','lavfi','-i','testsrc2=size=640x360:rate=30','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac',video]);
+assert.equal(generated.status,0,generated.stderr.toString());
+const pythonCandidates=[process.env.SUPERMOVIE_PYTHON,...spawnSync('/usr/bin/which',['-a','python3'],{encoding:'utf8'}).stdout.split(/\r?\n/)].filter(Boolean);
+const python=pythonCandidates.find(candidate=>{
+  const result=spawnSync(candidate,['--version'],{encoding:'utf8'});
+  const version=/Python (\d+)\.(\d+)/.exec(result.stdout+result.stderr);
+  return result.status===0&&version&&(Number(version[1])>3||Number(version[1])===3&&Number(version[2])>=10);
+});
+assert.ok(python,'文字起こしの確認には Python 3.10 以上が必要です');
+const env={...process.env,PATH:'/usr/bin:/bin',HARNESS_DESKTOP_TEST:'1',SME_TRANSCRIBE_MOCK:'1',SUPERMOVIE_PYTHON:python,HARNESS_DESKTOP_USER_DATA:join(testRoot,'settings'),HARNESS_DESKTOP_PROJECT_ROOT:join(testRoot,'projects')};
+let app,origin;
+async function launch(){
+  app=await electron.launch({executablePath:join(build.appPath,'Contents/MacOS/Harness Editor'),env,timeout:90000});
+  const page=await app.firstWindow({timeout:90000});await page.waitForLoadState('domcontentloaded');
+  await page.locator('body').filter({hasText:'プロジェクト'}).waitFor({timeout:60000});
+  const prefs=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences());
+  assert.equal(prefs.nodeIntegration,false);assert.equal(prefs.contextIsolation,true);assert.equal(prefs.sandbox,true);
+  return page;
+}
+async function close(){
+  if(!app||app.process().exitCode!==null)return;
+  const closed=app.waitForEvent('close',{timeout:10000}).catch(()=>{});
+  await app.evaluate(({dialog,app})=>{dialog.showMessageBoxSync=()=>1;app.quit();});await closed;
+}
+try{
+  let page=await launch();origin=new URL(page.url()).origin;
+  console.log('STARTED',origin,testRoot);
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  const response=await page.request.post(`${origin}/api/create-project?native=1&name=DesktopSmoke&video=sample.mp4`,{data:await readFile(video),headers:{'content-type':'application/octet-stream'}});
+  console.log('CREATE',response.status(),await response.text());
+  assert.ok(response.ok());
+  await page.goto(`${origin}/?project=DesktopSmoke`);
+  await page.getByRole('button',{name:'仕上げ',exact:true}).waitFor({timeout:60000});
+  await expect(page.locator('iframe[data-native-preview]')).toHaveAttribute('data-native-frame','0',{timeout:60000});
+  await page.screenshot({path:join(testRoot,'editor.png')});
+  const sessionResponse=await page.request.post(`${origin}/api/sequence/session?id=DesktopSmoke`,{data:{}});
+  let session=await sessionResponse.json();
+  const edit=await page.request.post(`${origin}/api/sequence/command?id=DesktopSmoke`,{data:{sessionId:session.sessionId,expectedRevision:session.document.revision,executionId:'desktop-smoke-edit',command:{type:'update-clip',clipId:session.document.clips[0].id,patch:{name:'Desktop saved clip'}}}});
+  assert.ok(edit.ok(),await edit.text());session=await edit.json();
+  await page.reload();
+  await expect(page.locator('iframe[data-native-preview]')).toHaveAttribute('data-native-frame','0',{timeout:60000});
+  await page.locator('body').click({position:{x:5,y:5}});
+  const current=async()=>await (await page.request.post(`${origin}/api/sequence/session?id=DesktopSmoke`,{data:{}})).json();
+  await app.evaluate(({Menu})=>Menu.getApplicationMenu().items.find(item=>item.label==='編集').submenu.items.find(item=>item.label==='元に戻す').click());
+  await expect.poll(async()=>(await current()).document.clips[0].name).toBe('sample.mp4');
+  await app.evaluate(({Menu})=>Menu.getApplicationMenu().items.find(item=>item.label==='編集').submenu.items.find(item=>item.label==='やり直す').click());
+  await expect.poll(async()=>(await current()).document.clips[0].name).toBe('Desktop saved clip');
+  session=await current();
+  const save=await page.request.post(`${origin}/api/sequence/save?id=DesktopSmoke`,{data:{sessionId:session.sessionId,expectedRevision:session.document.revision,expectedSavedRevision:session.savedRevision,executionId:'desktop-smoke-save'}});
+  assert.ok(save.ok(),await save.text());session=await save.json();
+  assert.equal(session.dirty,false);
+  // 配布アプリの中から同梱 Python スクリプトと FFmpeg を呼べることを確認する。
+  // 文字起こしモデルは配布していないため、スクリプトの模擬 backend を使う。
+  const audioOccurrence=session.document.clips.find(clip=>clip.content.kind==='audio');
+  assert.ok(audioOccurrence,'audio occurrence must exist');
+  const transcribeResponse=await page.request.post(`${origin}/api/sequence/transcribe?id=DesktopSmoke`,{data:{sessionId:session.sessionId,expectedRevision:session.document.revision,executionId:'desktop-smoke-transcribe',occurrenceId:audioOccurrence.id}});
+  assert.ok(transcribeResponse.ok(),await transcribeResponse.text());
+  const transcribeJob=await transcribeResponse.json();
+  let transcription;
+  const transcribeDeadline=Date.now()+60000;
+  do {
+    const poll=await page.request.get(`${origin}/api/sequence/transcribe/status?id=DesktopSmoke&job=${transcribeJob.id}`);
+    transcription=await poll.json();
+    if(['completed','failed','cancelled'].includes(transcription.phase))break;
+    await new Promise(resolve=>setTimeout(resolve,300));
+  }while(Date.now()<transcribeDeadline);
+  assert.equal(transcription.phase,'completed',JSON.stringify(transcription));
+  const transcriptResponse=await page.request.get(`${origin}/api/sequence/transcribe/result?id=DesktopSmoke&job=${transcribeJob.id}`);
+  assert.ok(transcriptResponse.ok(),await transcriptResponse.text());
+  const transcript=await transcriptResponse.json();
+  assert.ok(transcript.transcript.words.length>0,'packaged transcription must produce words');
+  console.log('TRANSCRIBE COMPLETE',JSON.stringify(transcription));
+  await page.evaluate(()=>localStorage.setItem('desktop-smoke','retained'));
+  const exportResponse=await page.request.post(`${origin}/api/sequence/export?id=DesktopSmoke`,{data:{sessionId:session.sessionId,expectedRevision:session.document.revision,executionId:'desktop-smoke-export'}});
+  const job=await exportResponse.json();console.log('EXPORT',exportResponse.status(),JSON.stringify(job));assert.ok(exportResponse.ok());
+  await writeFile(join(testRoot,'result.json'),JSON.stringify({origin,errors,sessionId:session.sessionId,job},null,2));
+  let status;
+  const deadline=Date.now()+90000;
+  do {
+    const poll=await page.request.get(`${origin}/api/sequence/export/status?id=DesktopSmoke&job=${job.id}`);
+    status=await poll.json();
+    if(['complete','failed','cancelled'].includes(status.phase))break;
+    await new Promise(resolve=>setTimeout(resolve,300));
+  }while(Date.now()<deadline);
+  assert.equal(status.phase,'complete',JSON.stringify(status));
+  const download=await page.request.get(`${origin}/api/sequence/export/download?id=DesktopSmoke&job=${job.id}`);
+  assert.ok(download.ok());
+  assert.equal(decodeURIComponent(download.headers()['content-disposition'].split("filename*=UTF-8''")[1]),'ハーネス_DesktopSmoke.mp4');
+  const output=join(testRoot,'export.mp4');await writeFile(output,await download.body());
+  const probe=spawnSync(join(runtime,'tools/ffprobe'),['-v','error','-show_streams','-of','json',output],{encoding:'utf8'});
+  assert.equal(probe.status,0,probe.stderr);const streams=JSON.parse(probe.stdout).streams;
+  assert.ok(streams.some(stream=>stream.codec_type==='video'&&stream.width===640&&stream.height===360));
+  assert.ok(streams.some(stream=>stream.codec_type==='audio'));
+  const decoded=spawnSync(ffmpeg,['-v','error','-i',output,'-f','null','-'],{encoding:'utf8'});assert.equal(decoded.status,0,decoded.stderr);
+  console.log('EXPORT COMPLETE',JSON.stringify(status));
+  await close();
+  page=await launch();assert.equal(new URL(page.url()).origin,origin);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('desktop-smoke')),'retained');
+  const reopened=await (await page.request.post(`${origin}/api/sequence/session?id=DesktopSmoke`,{data:{}})).json();
+  assert.equal(reopened.document.clips[0].name,'Desktop saved clip');
+  assert.deepEqual(errors,[]);
+  const projects=await page.request.get(`${origin}/api/projects`);assert.ok((await projects.text()).includes('DesktopSmoke'));
+  await close();
+  let stopped=false;try{await fetch(origin,{signal:AbortSignal.timeout(2000)});}catch{stopped=true;}assert.ok(stopped,'backend must stop with application');
+  console.log('PASS',testRoot);
+}catch(error){console.error(error);console.error(await readFile(join(testRoot,'settings/desktop.log'),'utf8').catch(()=>''));if(app)await close().catch(()=>{});process.exitCode=1;}

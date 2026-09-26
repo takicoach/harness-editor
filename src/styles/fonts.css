@@ -1,0 +1,22 @@
+/* 書き出しの headless Chromium も同一オリジンでこの CSS を読む（index.html と native-render.html の両方から link する）。 */
+@font-face { font-family: 'Noto Sans JP'; src: url('/fonts/noto-sans-jp-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Noto Sans JP'; src: url('/fonts/noto-sans-jp-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'Zen Kaku Gothic New'; src: url('/fonts/zen-kaku-gothic-new-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Zen Kaku Gothic New'; src: url('/fonts/zen-kaku-gothic-new-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'BIZ UDPGothic'; src: url('/fonts/biz-udpgothic-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'BIZ UDPGothic'; src: url('/fonts/biz-udpgothic-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'M PLUS Rounded 1c'; src: url('/fonts/m-plus-rounded-1c-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'M PLUS Rounded 1c'; src: url('/fonts/m-plus-rounded-1c-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'Noto Serif JP'; src: url('/fonts/noto-serif-jp-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Noto Serif JP'; src: url('/fonts/noto-serif-jp-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'Dela Gothic One'; src: url('/fonts/dela-gothic-one.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Mochiy Pop One'; src: url('/fonts/mochiy-pop-one.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Yusei Magic'; src: url('/fonts/yusei-magic.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Zen Maru Gothic'; src: url('/fonts/zen-maru-gothic.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'Kosugi Maru'; src: url('/fonts/kosugi-maru.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Hachi Maru Pop'; src: url('/fonts/hachi-maru-pop.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Zen Kurenaido'; src: url('/fonts/zen-kurenaido.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'RocknRoll One'; src: url('/fonts/rocknroll-one.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Reggae One'; src: url('/fonts/reggae-one.woff2') format('woff2'); font-weight: 400; font-display: block; }
+@font-face { font-family: 'Shippori Mincho'; src: url('/fonts/shippori-mincho.woff2') format('woff2'); font-weight: 600; font-display: block; }
+@font-face { font-family: 'Zen Old Mincho'; src: url('/fonts/zen-old-mincho.woff2') format('woff2'); font-weight: 600; font-display: block; }

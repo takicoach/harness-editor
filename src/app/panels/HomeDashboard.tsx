@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ProjectSummary, ProjectSteps } from '../../shared/types';
 import { defaultProjectName } from '../createProjectApi';
+import {TaskProgress,type TransferProgress} from '../components/TaskProgress';
 import { DISPLAY_STATUSES, STATUS_LABEL, type ProjectStage } from '../../shared/projectStage';
 import { VideoThumb } from './VideoThumb';
-import { MediaPicker } from './MediaPicker';
+import { MediaPicker, type PickedFile } from './MediaPicker';
 import { useDropdown } from '../useDropdown';
 import { useLiveNow } from '../useLiveNow';
 import { resolveStatusView, formatRelativeTime } from './projectStatusView';
 import { groupProjectsByStatus } from './homeKanban';
 import { loadHomeView, saveHomeView, type HomeView } from './homeViewPref';
 import { largeUploadNotice } from '../../shared/uploadNotice';
-import { VIDEO_ACCEPT, VIDEO_EXTENSIONS } from '../../shared/videoExtensions';
+import { CREATE_MEDIA_ACCEPT, classifyCreateSelection, imageLimitMessage } from '../../shared/createMedia';
 import { deleteProjectRequest } from '../trashApi';
 import { moveProjectsToTrash, formatBulkTrashResult } from '../trashBulk';
 import { revealProjectRequest } from '../projectRevealApi';
@@ -18,21 +19,34 @@ import { pruneSelection, toggleSelection } from './projectSelection';
 import { TrashConfirmDialog } from './TrashConfirmDialog';
 import { TrashView } from './TrashView';
 import { TrashIcon } from '../icons/TrashIcon';
+import { Icon } from '../Icon';
 import { linkCandidateRequest, convertToLinkRequest } from '../convertLinkApi';
 import { formatSize } from '../../shared/format';
+import type { EditorProjectBoardItem } from '../../shared/editorBoard';
+import { useEditorProjectBoard, type EditorProjectBoardState } from '../useEditorProjectBoard';
+import { editorProjectBoardView } from './editorProjectBoardView';
+import './editorProjectBoard.css';
 
-/** ホームD&Dで受け付ける動画拡張子。正本は shared/videoExtensions（accept と同一由来）。 */
-const HOME_DROP_EXTENSIONS = VIDEO_EXTENSIONS;
+/** Dropped images use the same numeric filename order as Finder. */
+const FILE_NAME_ORDER = new Intl.Collator('ja', { numeric: true });
 
 interface HomeDashboardProps {
+  /** Native projects retain managed media copies for reproducible preview/export. */
+  managedMedia?: boolean;
   projects: ProjectSummary[];
   error: string | null;
+  /** 一覧の初回取得中か（status-ia-1）。true の間は空状態を出さない。 */
+  loading?: boolean;
+  /** URL指定が一覧外だった等、一覧を隠さずに伝える案内。 */
+  notice?: string | null;
+  /** AI作業は制作stageとは別の読み取り専用projection。未指定なら従来カードだけを描画する。 */
+  agentBoard?: Omit<EditorProjectBoardState, 'refresh'>;
   /** カードクリックでプロジェクトを開く。 */
   onPick: (id: string) => void;
   /** バッジメニューで手動 stage を設定（null=自動判定に戻す）。App が楽観更新・巻き戻し・トーストを担う。 */
   onSetStage: (id: string, stage: ProjectStage) => void;
   /** 「動画を作成する」。動画（コピー or 外部リンク）と名前を受け取り作成〜エディタで開くまで担う。 */
-  onCreate: (name: string, source: CreateSource, preferCopy: boolean) => Promise<void>;
+  onCreate: (name: string, source: CreateSource, preferCopy: boolean,onProgress?:(progress:TransferProgress)=>void) => Promise<void>;
   /** プロジェクトの削除・復元後に一覧を再取得する（App の refreshProjects）。 */
   onProjectsChanged: () => void;
   /** 相対時刻の基準（テスト注入用）。 */
@@ -49,7 +63,10 @@ const STAGE_OPTIONS: { stage: ProjectStage; label: string }[] = [
  * プロジェクト未選択時のホーム。カードグリッドで各プロジェクトの
  * サムネ・ステータス・最終編集日時・尺を一覧する。
  */
-export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, onProjectsChanged, now }: HomeDashboardProps) {
+export function HomeDashboard({ projects, error, loading = false, notice = null, agentBoard, onPick, onSetStage, onCreate, onProjectsChanged, now, managedMedia = false }: HomeDashboardProps) {
+  const boardItem = (projectId: string) => agentBoard && Object.prototype.hasOwnProperty.call(agentBoard.items, projectId)
+    ? agentBoard.items[projectId]
+    : undefined;
   // ホーム画面表示中だけ 45 秒間隔で現在時刻を更新し、相対時刻表示・stale 判定を進行させる
   // （now が明示的に渡された場合はテスト注入として優先し、live 更新は使わない）。
   const liveNow = useLiveNow();
@@ -236,25 +253,51 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
   const dropBlocked = (e: React.DragEvent): boolean =>
     overExcluded(e) || createSource !== null || pickerOpen;
 
+  /**
+   * 選んだ・ドロップしたファイルから作成の素材を決める（設計 M1・M3b・M6b）。
+   * 1回の作成で1種類。画像は複数可（上限を超えたら理由だけ出す）。動画・音声は1件目だけ（複数なら通知）。
+   */
+  const startCreate = (files: File[], via: 'drop' | 'select'): void => {
+    const first = files[0];
+    if (first === undefined) return;
+    const selection = classifyCreateSelection(files.map((file) => file.name));
+    if (!selection.ok) {
+      setDropNotice(selection.message);
+      return;
+    }
+    if (selection.kind === 'image' && files.length > 1) {
+      const ordered = via === 'drop' ? [...files].sort((a, b) => FILE_NAME_ORDER.compare(a.name, b.name)) : files;
+      const limit = imageLimitMessage(ordered.length, ordered.reduce((sum, file) => sum + file.size, 0));
+      if (limit !== null) {
+        setDropNotice(limit);
+        return;
+      }
+      setCreateSource({ kind: 'upload-images', files: ordered });
+      return;
+    }
+    if (files.length > 1) {
+      setDropNotice(`${files.length} 件${via === 'drop' ? 'ドロップされました' : '選ばれました'}。1件目のみ取り込みます: ${first.name}`);
+    }
+    setCreateSource({ kind: 'upload', file: first });
+  };
+
   const handleHomeDrop = (e: React.DragEvent): void => {
     if (!isFileDrag(e)) return;
     e.preventDefault();
     setHomeDragDepth(0);
     setBlockedOver(false);
     if (dropBlocked(e)) return;
-    const files = Array.from(e.dataTransfer.files);
-    const first = files[0];
-    if (first === undefined) return;
-    const dot = first.name.lastIndexOf('.');
-    const ext = dot === -1 ? '' : first.name.slice(dot).toLowerCase();
-    if (!HOME_DROP_EXTENSIONS.includes(ext)) {
-      setDropNotice(`動画ファイル（${HOME_DROP_EXTENSIONS.join(' ')}）をドロップしてください`);
+    startCreate(Array.from(e.dataTransfer.files), 'drop');
+  };
+
+  const pickImages = (files: PickedFile[]): void => {
+    const limit = imageLimitMessage(files.length, files.reduce((sum, file) => sum + file.sizeBytes, 0));
+    if (limit !== null) {
+      setDropNotice(limit);
       return;
     }
-    if (files.length > 1) {
-      setDropNotice(`${files.length} 件ドロップされました。1件目のみ取り込みます: ${first.name}`);
-    }
-    setCreateSource({ kind: 'upload', file: first });
+    setPickerOpen(false);
+    setCreateSource({ kind: 'link-images', files });
   };
 
   const homeDropHandlers = {
@@ -284,7 +327,7 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
     <>
       {homeDragDepth > 0 && !blockedOver && (
         <div className="home-drop-hint" data-testid="home-drop-hint">
-          ここにドロップして動画を作成
+          ここにドロップして作成（動画・音声・画像）
         </div>
       )}
       {dropNotice !== null && (
@@ -295,13 +338,13 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
 
   const createUi = (
     <>
-      <button type="button" className="home-create-btn" onClick={() => fileInputRef.current?.click()}>
+      <button type="button" className="home-create-btn" data-tutorial="home-create" onClick={() => fileInputRef.current?.click()}>
         ＋ 動画を作成する
       </button>
       <button
         type="button"
         className="home-create-link-btn"
-        title="外付けドライブなどの動画を、コピーせずリンクで取り込みます（内蔵ストレージを消費しません）"
+        title="元動画をコピーせず、選んだ場所から読み込みます"
         onClick={() => setPickerOpen(true)}
       >
         フォルダから選ぶ
@@ -309,28 +352,32 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
       <input
         ref={fileInputRef}
         type="file"
-        accept={VIDEO_ACCEPT}
+        accept={CREATE_MEDIA_ACCEPT}
+        multiple
         style={{ display: 'none' }}
         data-testid="home-create-file"
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f !== undefined) setCreateSource({ kind: 'upload', file: f });
+          startCreate(Array.from(e.target.files ?? []), 'select');
           e.target.value = ''; // 同じファイルを選び直しても change が発火するように
         }}
       />
       {pickerOpen && (
         <MediaPicker
-          title="動画を選ぶ（リンクで取り込み）"
-          note="選んだ動画はコピーせずリンクで繋ぎます。取り込み後もそのドライブを接続したままにしてください。"
+          media="all"
+          multiple
+          title={managedMedia ? '素材を選ぶ' : '素材を選ぶ（リンクで取り込み）'}
+          note="動画・音声は1件を選びます。画像は複数選ぶと、選んだ順に1枚5秒で並べます（複数の画像はコピーして取り込みます）。"
           onCancel={() => setPickerOpen(false)}
           onPick={(f) => {
             setPickerOpen(false);
             setCreateSource({ kind: 'link', name: f.name, path: f.path, sizeBytes: f.sizeBytes });
           }}
+          onPickMany={pickImages}
         />
       )}
       {createSource !== null && (
         <CreateProjectModal
+          managedMedia={managedMedia}
           source={createSource}
           onCancel={() => setCreateSource(null)}
           onCreate={onCreate}
@@ -346,7 +393,7 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
 
   if (error !== null) {
     return (
-      <div className="home">
+      <div className="home" data-tutorial="home">
         <div className="sme-center">
           <p className="sme-error">プロジェクト一覧を取得できませんでした</p>
           <p className="hint">{error}</p>
@@ -364,9 +411,24 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
     );
   }
 
+  // 取得中は空状態より前に読込中を出す（status-ia-1）。
+  // 「まだプロジェクトがありません」を先に見せると「作った動画が消えた」と誤解させる。
+  if (loading && projects.length === 0) {
+    return (
+      // 読込中でもドロップは受ける（サイクル 3 残 Minor）。一覧が出るまでの数百 ms に
+      // 落とした動画が黙って無視されると「ドロップは効かない」と学習してしまう。
+      <div className="home" data-tutorial="home" {...homeDropHandlers}>
+        {dropOverlay}
+        <div className="sme-center" data-testid="home-loading">
+          <TaskProgress label="プロジェクトを読み込み中…"/>
+        </div>
+      </div>
+    );
+  }
+
   if (projects.length === 0) {
     return (
-      <div className="home" {...homeDropHandlers}>
+      <div className="home" data-tutorial="home" {...homeDropHandlers}>
         {dropOverlay}
         <div className="sme-center">
           <p>まだプロジェクトがありません</p>
@@ -387,13 +449,13 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
   }
 
   return (
-    <div className="home" {...homeDropHandlers}>
+    <div className="home" data-tutorial="home" {...homeDropHandlers}>
       {dropOverlay}
       <div className="home-head">
         <h1>プロジェクト</h1>
         <span className="home-count">{projects.length} 件</span>
         {createUi}
-        <div className="home-view-switch" role="group" aria-label="表示切替">
+        <div className="home-view-switch" data-tutorial="home-view-switch" role="group" aria-label="表示切替">
           {([['panel', '一覧'], ['kanban', '進行ボード']] as Array<[HomeView, string]>).map(([v, label]) => (
             <button
               key={v}
@@ -426,6 +488,11 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
           ゴミ箱
         </button>
       </div>
+      {notice && <p className="home-board-notice" role="status">{notice}</p>}
+      {agentBoard && <div className="home-agent-guide">
+        <span>処理中のタブを開いたまま、別の動画を編集できます。</span>
+        {agentBoard.status === 'error' && <span role="status">AI作業の状態を確認できません。次の更新で再確認します。</span>}
+      </div>}
       {selectMode && (
         <div className="home-select-bar" data-testid="home-select-bar" role="status">
           <span className="home-select-count">{selectedTargets.length} 件選択中</span>
@@ -451,7 +518,7 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
         </p>
       )}
       {view === 'panel' ? (
-        <div className="home-grid">
+        <div className="home-grid" data-tutorial="home-grid">
           {projects.map((p) => (
             <ProjectCard
                     key={p.id}
@@ -465,6 +532,8 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
                     convertBusy={convertBusyId === p.id}
                     selectMode={selectMode}
                     selected={liveSelected.includes(p.id)}
+                    agentItem={boardItem(p.id)}
+                    agentStatus={agentBoard?.status}
                     onToggleSelect={(id) => setSelectedIds((s) => toggleSelection(s, id))}
                   />
           ))}
@@ -516,6 +585,8 @@ export function HomeDashboard({ projects, error, onPick, onSetStage, onCreate, o
                     convertBusy={convertBusyId === p.id}
                     selectMode={selectMode}
                     selected={liveSelected.includes(p.id)}
+                    agentItem={boardItem(p.id)}
+                    agentStatus={agentBoard?.status}
                     onToggleSelect={(id) => setSelectedIds((s) => toggleSelection(s, id))}
                   />
                 ))}
@@ -626,24 +697,43 @@ function ConvertLinkDialog({ name, target, busy, onConfirm, onCancel }: ConvertL
   );
 }
 
-/** 新規作成の素材。コピー取り込み（アップロード）と、外部実体へのリンクの2種類。 */
+/**
+ * 新規作成の素材。1件（動画・音声・画像）はコピー取り込み（アップロード）か外部実体へのリンク。
+ * 2枚以上の画像は、アップロードかフォルダから選んだパスで、どちらもコピーで取り込む（設計 M3e）。
+ */
 export type CreateSource =
   | { kind: 'upload'; file: File }
-  | { kind: 'link'; name: string; path: string; sizeBytes: number };
+  | { kind: 'link'; name: string; path: string; sizeBytes: number }
+  | { kind: 'upload-images'; files: File[] }
+  | { kind: 'link-images'; files: PickedFile[] };
+
+/** 作成ダイアログの「素材: …」（設計 M6）。 */
+export function createSourceLabel(source: CreateSource): string {
+  if (source.kind === 'upload') return source.file.name;
+  if (source.kind === 'link') return source.name;
+  return `画像 ${source.files.length} 枚（${source.files[0]?.name ?? ''} ほか）`;
+}
+/** 複数画像の合計の大きさ（バイト）。 */
+function imagesTotalBytes(source: Extract<CreateSource, { kind: 'upload-images' | 'link-images' }>): number {
+  return source.kind === 'upload-images' ? source.files.reduce((sum, file) => sum + file.size, 0) : source.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+}
 
 interface CreateProjectModalProps {
+  managedMedia?: boolean;
   source: CreateSource;
   onCancel: () => void;
-  onCreate: (name: string, source: CreateSource, preferCopy: boolean) => Promise<void>;
+  onCreate: (name: string, source: CreateSource, preferCopy: boolean,onProgress?:(progress:TransferProgress)=>void) => Promise<void>;
 }
 
 /**
  * 新規プロジェクトの名前確認モーダル。作成成功時は親がエディタへ遷移して
  * ホームごとアンマウントされるため、成功側のクローズ処理は持たない。
  */
-function CreateProjectModal({ source, onCancel, onCreate }: CreateProjectModalProps) {
-  const fileName = source.kind === 'upload' ? source.file.name : source.name;
-  const [name, setName] = useState(() => defaultProjectName(fileName));
+function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }: CreateProjectModalProps) {
+  const fileName = createSourceLabel(source);
+  const images = source.kind === 'upload-images' || source.kind === 'link-images' ? source : null;
+  const [name, setName] = useState(() => defaultProjectName(source.kind === 'upload' ? source.file.name : source.kind === 'link' ? source.name : source.files[0]!.name));
+  const [progress,setProgress]=useState<TransferProgress>({phase:'preparing'});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // アップロード経路の既定は「できる限りリンク化」。サーバが登録済みフォルダから
@@ -651,7 +741,8 @@ function CreateProjectModal({ source, onCancel, onCreate }: CreateProjectModalPr
   // 必ずコピーさせるための逃げ道（外付けを外して持ち歩きたい場合など）。
   const [preferCopy, setPreferCopy] = useState(false);
   // リンク取り込みは実体を運ばないので、大容量の待ち時間案内は出さない。
-  const sizeNotice = source.kind === 'upload' ? largeUploadNotice(source.file.size) : null;
+  const sizeNotice = source.kind === 'upload' && (!managedMedia||preferCopy) ? largeUploadNotice(source.file.size)
+    : source.kind === 'upload-images' ? largeUploadNotice(imagesTotalBytes(source)) : null;
 
   const submit = (): void => {
     if (busy) return;
@@ -662,7 +753,7 @@ function CreateProjectModal({ source, onCancel, onCreate }: CreateProjectModalPr
     }
     setBusy(true);
     setError(null);
-    onCreate(trimmed, source, preferCopy).catch((err: unknown) => {
+    (managedMedia?onCreate(trimmed, source, preferCopy,setProgress):onCreate(trimmed,source,preferCopy)).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'プロジェクトの作成に失敗しました');
       setBusy(false);
     });
@@ -672,7 +763,13 @@ function CreateProjectModal({ source, onCancel, onCreate }: CreateProjectModalPr
     <div className="export-overlay" onClick={busy ? undefined : onCancel}>
       <div className="export-dialog home-create-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="export-head">動画を作成する</div>
-        <div className="home-create-file-note">動画: {fileName}</div>
+                <div className="home-create-file-note">素材: {fileName}</div>
+        {images !== null && (
+          <p className="home-create-link-note" role="note" data-testid="home-create-images-note">
+            画像 {images.files.length} 枚（合計 {formatSize(imagesTotalBytes(images))}）をコピーして取り込みます。元の画像は変更しません。選んだ順に1枚5秒で並べます。
+          </p>
+        )}
+        {managedMedia && source.kind==='upload' && <p className="home-create-link-note" role="note">{preferCopy?'元の動画を変更せず、編集用のコピーを保存します。動画の容量に応じた空き容量が必要です。':'元の動画をコピーせずに使います。外付けの動画は、編集するときにドライブを接続してください。'}</p>}
         {source.kind === 'link' && (
           <div className="home-create-link-note" role="note">
             リンクで取り込みます（コピーしません）: {source.path}
@@ -703,23 +800,17 @@ function CreateProjectModal({ source, onCancel, onCreate }: CreateProjectModalPr
               disabled={busy}
               onChange={(e) => setPreferCopy(e.target.checked)}
             />
-            コピーして取り込む（同じ動画が外付けにあってもリンクにしない）
+            コピーして取り込む（外付けを外しても編集できるようにする）
           </label>
         )}
         {source.kind === 'upload' && !preferCopy && (
           <p className="hint home-create-link-hint">
-            同じ動画が登録済みのフォルダ（外付け・デスクトップ・ダウンロード・ムービー）にあれば、
-            コピーせずリンクで取り込みます。
+            {managedMedia?'元動画の保存場所を確認します。自動で見つからない場合は、保存場所を選んでください。':'同じ動画が登録済みのフォルダ（外付け・デスクトップ・ダウンロード・ムービー）にあれば、コピーせずリンクで取り込みます。'}
           </p>
         )}
         {error !== null && <p className="sme-error home-create-error">{error}</p>}
         {busy && (
-          <div className="home-create-progress">
-            <span className="status-spinner" aria-hidden="true" />
-            {source.kind === 'link'
-              ? '動画を確認して準備しています…'
-              : '動画を取り込んで準備しています…（大きい動画は数十秒かかることがあります）'}
-          </div>
+          <TaskProgress label={progress.phase==='uploading'?(images!==null?'画像をコピーしています':'素材をコピーしています'):progress.phase==='checking'?'元の動画を確認しています':'動画を確認して編集の準備をしています'} value={progress.total?progress.loaded!/progress.total:undefined} detail={progress.total?`${((progress.loaded??0)/1048576).toFixed(0)} / ${(progress.total/1048576).toFixed(0)} MB`:'素材の解析・音声の準備が終わると編集画面が開きます。'} />
         )}
         <div className="export-actions">
           <button type="button" className="export-cancel" onClick={onCancel} disabled={busy}>
@@ -777,10 +868,14 @@ interface ProjectCardProps {
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  agentItem?: EditorProjectBoardItem;
+  agentStatus?: EditorProjectBoardState['status'];
 }
 
-function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onConvertLink, convertBusy = false, selectMode = false, selected = false, onToggleSelect }: ProjectCardProps) {
+function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onConvertLink, convertBusy = false, selectMode = false, selected = false, onToggleSelect, agentItem, agentStatus }: ProjectCardProps) {
   const view = resolveStatusView(p, now);
+  const agentView = agentItem ? editorProjectBoardView(agentItem) : null;
+  const boardItemMissing = agentStatus === 'ready' && agentItem === undefined;
   const dd = useDropdown();
   const steps = p.steps;
   // 削除アイコンを掴んだ直後だけドラッグ開始を抑止するフラグ。
@@ -800,6 +895,9 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
   return (
     <div
       className={'home-card' + (selectMode ? ' select-mode' : '') + (selected ? ' selected' : '')}
+      // AI エージェントが案件を名前で開けるようにする（ホームにはカード以外の入口が無い）。
+      data-testid={`project-card-${p.id}`}
+      data-project-id={p.id}
       role="button"
       tabIndex={0}
       draggable={!selectMode}
@@ -880,8 +978,15 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
       </button>
       )}
       <div className={thumbClass}>
-        {p.videoFile !== null ? (
-          <VideoThumb src={`/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile)}`} />
+        {p.videoAssetId || p.videoFile !== null ? (
+          <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({ id:p.id, asset:p.videoAssetId })}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
+        ) : p.imageAssetId ? (
+          <img className="ml-thumb-video-el" src={`/api/sequence/asset?${new URLSearchParams({ id: p.id, asset: p.imageAssetId })}`} alt="" loading="lazy" draggable={false} />
+        ) : p.audioOnly ? (
+          <div className="home-card-thumb-audio" role="img" aria-label={`音声の作品（${p.durationLabel}）`}>
+            <Icon name="music" size={28} />
+            <span>音声 {p.durationLabel}</span>
+          </div>
         ) : (
           <div className="home-card-thumb-empty" />
         )}
@@ -983,6 +1088,28 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
           )}
         </div>
         <div className="home-card-name">{p.name}</div>
+        {agentStatus && <div className="home-card-agent" data-testid="home-card-agent">
+          <div><span>AI作業</span><strong className={agentView ? `tone-${agentView.operationTone}` : 'tone-idle'}>
+            {agentStatus === 'error' || boardItemMissing ? '確認できません' : agentStatus === 'loading' ? '確認中…' : agentView?.operationLabel ?? 'まだありません'}
+          </strong>{agentStatus === 'ready' && agentView?.operationDetail && <small>{agentView.operationDetail}</small>}</div>
+          <div><span>人の確認</span><strong className={agentView ? `tone-${agentView.humanReviewTone}` : 'tone-idle'}>
+            {agentStatus === 'error' || boardItemMissing ? '確認できません' : agentStatus === 'loading' ? '確認中…' : agentView?.humanReviewLabel ?? '対象なし'}
+          </strong>{agentStatus === 'ready' && agentView?.needsHumanReview &&
+            <a className="home-card-review-link" href={editorProjectReviewHref(p.id)} target="_blank" rel="noopener"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
+              }}>変更を確認</a>}</div>
+          <div><span>編集画面</span><strong>{agentStatus === 'ready' && !boardItemMissing ? agentView?.editorLabel ?? '編集画面は未接続'
+            : agentStatus === 'error' ? '確認できません' : '確認中…'}</strong></div>
+          <a className="home-card-open-tab" href={editorProjectHref(p.id)} target="_blank" rel="noopener"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
+            }}>別タブで開く</a>
+        </div>}
         {steps !== undefined && (
           <div className="home-card-steps" aria-label="工程の進み具合">
             {STEP_ORDER.map((key) => {
@@ -995,6 +1122,10 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
                   className={'home-step' + (done ? ' done' : '') + (invalid ? ' invalid' : '')}
                   data-step={key}
                   data-done={String(done)}
+                  // status-ia-10: 済／未／判定不能が色だけの区別になっていた。
+                  // data-done は判定不能も "false" に潰すので互換のため残し、
+                  // 3 値は data-state で出す（AI エージェントも状態を取り違えない）。
+                  data-state={invalid ? 'unknown' : done ? 'done' : 'todo'}
                   title={label + (done ? '：済み' : invalid ? '：判定不能' : '：未')}
                 >
                   <span className="home-step-dot" aria-hidden="true" />
@@ -1030,4 +1161,22 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
       </div>
     </div>
   );
+}
+
+export function editorProjectHref(projectId: string, href = window.location.href): string {
+  const url = new URL(href); url.searchParams.set('project', projectId); url.hash = '';
+  return `${url.pathname}${url.search}`;
+}
+
+/** 案件を別タブで開き、既存の「AIの作業」画面へ直接進むURL。 */
+export function editorProjectReviewHref(projectId: string, href = window.location.href): string {
+  const url = new URL(editorProjectHref(projectId, href), href);
+  url.searchParams.set('agentActivity', 'review');
+  return `${url.pathname}${url.search}`;
+}
+
+/** Homeが表示されている間だけboard pollを生かし、既存の表示本体は単体テスト可能に保つ。 */
+export function HomeDashboardWithAgentBoard(props: HomeDashboardProps) {
+  const agentBoard = useEditorProjectBoard(true);
+  return <HomeDashboard {...props} agentBoard={agentBoard} />;
 }

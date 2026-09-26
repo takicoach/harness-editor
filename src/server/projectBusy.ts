@@ -14,10 +14,10 @@
  */
 
 /** ジョブが終了している phase 名（各 Manager の Phase 型の終端値の和集合）。 */
-const TERMINAL_PHASES = new Set(['done', 'failed', 'cancelled', 'completed']);
+const TERMINAL_PHASES = new Set(['done', 'failed', 'cancelled', 'completed', 'complete']);
 
 export interface JobLookup {
-  get(projectId: string): { phase: string } | undefined;
+  get(projectId: string, directory?: string): { phase: string } | undefined;
 }
 
 /**
@@ -28,10 +28,10 @@ export interface JobLookup {
 export type BusyRegistries = Record<string, JobLookup>;
 
 /** projectId に対して実行中のジョブ種別名を返す（空配列なら削除して良い）。 */
-export function findBusyJobs(projectId: string, registries: BusyRegistries): string[] {
+export function findBusyJobs(projectId: string, registries: BusyRegistries, directory?: string): string[] {
   const busy: string[] = [];
   for (const [name, reg] of Object.entries(registries)) {
-    const job = reg.get(projectId);
+    const job = directory ? reg.get(projectId, directory) : reg.get(projectId);
     if (job !== undefined && !TERMINAL_PHASES.has(job.phase)) busy.push(name);
   }
   return busy;

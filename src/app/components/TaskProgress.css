@@ -1,0 +1,10 @@
+.task-progress{display:flex;align-items:center;gap:14px;min-width:0;width:100%;color:var(--fg-1,#30493f);padding:12px 0}
+.task-progress-ring{position:relative;display:grid;place-items:center;width:54px;height:54px;flex:0 0 54px;color:var(--accent,#158366)}
+/* Progress graphics keep their container size even inside a header with 16px icons. */
+.task-progress .task-progress-ring svg{position:absolute;inset:0;display:block;width:100%;height:100%;transform:rotate(-90deg);fill:none;stroke-width:3;stroke-linecap:round}
+.task-progress-track{stroke:currentColor;opacity:.14}.task-progress-fill{stroke:currentColor;transition:stroke-dasharray .15s linear}.task-progress-ring b{font-size:12px;line-height:1;font-variant-numeric:tabular-nums}.task-progress-ring small{font-size:9px}
+.task-progress-copy{display:flex;flex:1;flex-direction:column;gap:6px;min-width:0;line-height:1.5;overflow-wrap:anywhere}.task-progress-copy>small{font-size:11px;color:var(--fg-2,#637b72)}
+.task-progress-bar{height:5px;border-radius:20px;background:color-mix(in srgb,var(--accent,#158366) 12%,transparent);overflow:hidden;width:100%}.task-progress-bar i{display:block;height:100%;background:var(--accent,#158366);border-radius:inherit;transition:width .15s linear}
+.task-progress.is-compact{width:auto;padding:0;gap:7px;font-size:11px}.task-progress.is-compact .task-progress-ring{width:20px;height:20px;flex-basis:20px}
+.task-progress.is-indeterminate .task-progress-fill{transform-origin:center;animation:task-progress-turn 1.2s linear infinite}@keyframes task-progress-turn{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.task-progress.is-indeterminate .task-progress-fill{animation:none}.task-progress-fill,.task-progress-bar i{transition:none}}

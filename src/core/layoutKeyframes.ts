@@ -33,12 +33,15 @@ function clamp(v: number, lo: number, hi: number): number {
 
 /** キーフレーム値のクランプ（scale は上限 8 まで許容・originalFrame は非負整数）。 */
 export function clampKeyframe(k: LayoutKeyframe): LayoutKeyframe {
+  // 非有限値（NaN/±Infinity）は既定値へ倒す。クランプは Math.min/max なので
+  // NaN を素通しし、そのまま mainLayoutData.ts へ `scale: NaN` と書かれてしまう。
+  const f = (v: number, fallback: number): number => (Number.isFinite(v) ? v : fallback);
   return {
-    originalFrame: Math.max(0, Math.round(k.originalFrame)),
-    x: clampLayoutPos(k.x),
-    y: clampLayoutPos(k.y),
-    scale: clamp(k.scale, 0.1, 8),
-    rotation: clampRotation(k.rotation),
+    originalFrame: Math.max(0, Math.round(f(k.originalFrame, 0))),
+    x: clampLayoutPos(f(k.x, 0)),
+    y: clampLayoutPos(f(k.y, 0)),
+    scale: clamp(f(k.scale, 1), 0.1, 8),
+    rotation: clampRotation(f(k.rotation, 0)),
   };
 }
 

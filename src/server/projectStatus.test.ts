@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  chmodSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -252,6 +261,15 @@ describe('resolveProjectStatus（IO統合）', () => {
     return resolveProjectStatus(dir, resolveProjectSteps(dir), NOW);
   }
 
+  it('観測ごとに statusSeq を採番し、必ず増える（一覧と SSE の新旧判定の土台）', () => {
+    // クライアントは到着順ではなくこの番号で「どちらが新しい観測か」を決める。
+    // 増えなくなると、遅れて着地した古い一覧がライブ差分を巻き戻す不具合が復活する。
+    const a = resolve().statusSeq;
+    const b = resolve().statusSeq;
+    expect(typeof a).toBe('number');
+    expect(b).toBeGreaterThan(a);
+  });
+
   it('新規プロジェクト（データファイルなし） → idle・lastEditedAt undefined', () => {
     const r = resolve();
     expect(r.status).toBe('idle');
@@ -317,6 +335,27 @@ describe('writeStatusStage（stage のみ更新・activity 保持）', () => {
     writeStatusStage(dir, 'telop');
     expect(existsSync(join(dir, '.sme', 'status.json'))).toBe(true);
     expect(readStatusFile(dir).stage).toBe('telop');
+  });
+
+  it('書き込みは一時ファイル→rename（読み手が切れた JSON を掴まない）', () => {
+    // 原子的置換になっていることを、**その場書きだけが失敗する状況**で測る:
+    // 既存ファイルを読み取り専用にすると、writeFileSync(target) は EACCES で落ち、
+    // rename は（ディレクトリが書ける限り）成功する。
+    // 実測の動機（フルスイート e2e・2026-09-06）: 書き込み直後を読んだ側が
+    // `SyntaxError: Unexpected end of JSON input`＝**切れた JSON** を掴んだ。
+    // 読み手は e2e だけではない（readStatusFile は解析失敗を「自動判定」へ黙って倒す）。
+    mkdirSync(join(dir, '.sme'), { recursive: true });
+    const target = join(dir, '.sme', 'status.json');
+    writeFileSync(target, JSON.stringify({ stage: null, activity: null }));
+    chmodSync(target, 0o444);
+    try {
+      writeStatusStage(dir, 'telop');
+      expect(readStatusFile(dir).stage).toBe('telop');
+      // 一時ファイルを残さない（残骸は一覧の走査に混ざる）。
+      expect(readdirSync(join(dir, '.sme'))).toEqual(['status.json']);
+    } finally {
+      chmodSync(join(dir, '.sme', 'status.json'), 0o644);
+    }
   });
 
   it('既存 activity を保持したまま stage を更新', () => {

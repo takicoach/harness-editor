@@ -22,7 +22,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { EditorProject, EditorTelop } from '../../core/types';
 import type { EditState } from '../edit/editState';
 import { useEditSession } from '../useEditSession';
@@ -159,7 +159,6 @@ function Harness({ project }: { project: EditorProject }) {
         seLibrary={[]}
         imageLibrary={[]}
         videoLibrary={[]}
-        videoDurations={{}}
         bgmLibrary={[]}
         videoUrl=""
         projectId="p1"
@@ -173,16 +172,16 @@ function Harness({ project }: { project: EditorProject }) {
       />
       {selectedTelop !== undefined && (
         <SettingsTab
+          projectId="test"
           telop={selectedTelop}
           state={state}
           fps={FPS}
           telopPackInstalled={false}
-          videoInsertInstalled={false}
           bgmInstalled={false}
           installing={null}
           installErrors={{}}
           dirty={session.dirty}
-          telopComponent={null}
+          componentRevision={null}
           previewWidth={1080}
           previewHeight={1920}
           onInstall={() => {}}

@@ -1,11 +1,11 @@
 import { playbackTotalFrames } from '../core/cutEngine';
-import { buildCutOrdering, reorderSe, reorderStartEnd } from '../core/cutOrder';
-import { projectTelops } from '../core/telopEngine';
+import { buildCutOrdering, reorderSpanCovering, reorderStartEnd } from '../core/cutOrder';
+import { clampTelops, projectTelops } from '../core/telopEngine';
 import { projectTitles } from '../core/titleEngine';
-import { clampSe, projectSe } from '../core/seAnchor';
+import { deriveSePlayback } from '../core/seExport';
 import { clampImages, projectImages } from '../core/imageEngine';
 import { clampVideoInserts, projectVideoInserts } from '../core/videoInsertEngine';
-import { clampBgm, projectBgm } from '../core/bgmEngine';
+import { deriveBgmPlayback } from '../core/bgmExport';
 import { clampShapes, projectShapes } from '../core/shapeEngine';
 import { applyDuckingToBgm } from '../core/ducking';
 import { computeJoins, resolveSceneTransitions } from '../core/joinEngine';
@@ -15,61 +15,10 @@ import type { PlaybackOverlap } from '../core/transitionEngine';
 import { speedScale, hasPerSegmentSpeed, resolveSpeedSegments, playbackToSpeed, speedTotalFrames } from '../core/speedEngine';
 import type { SpeedSegment } from '../core/speedEngine';
 import { collapseTelops, collapseTitles, collapseSe, collapseImages, collapseVideoInserts, collapseBgm, collapseShapes } from '../core/sceneCollapse';
-import type { BgmClip, CutSegment, EditorProject, ElementAnim, ImageType, SceneTransition, ShapeSegment, TelopPosition, TelopSegment, TitleSegment, TitleStyle } from '../core/types';
+import type { BgmClip, CutSegment, EditorProject, ImagePlayback, SceneTransition, SePlayback, ShapeSegment, TelopSegment, TitleSegment, TitleStyle, VideoInsertPlayback } from '../core/types';
+import { hasTimelinePlacements, sourceAnchoredProject, independentAssetProject, mergePlacedAssets } from '../core/timelinePlacement';
 
-/** プレビューで描く 1 つの挿入画像（カット適用済み）。 */
-export interface ImagePlayback {
-  id: number;
-  /** カット適用後（再生）の開始フレーム。 */
-  playbackStart: number;
-  /** カット適用後（再生）の終了フレーム（排他的）。 */
-  playbackEnd: number;
-  file: string;
-  type: ImageType;
-  scale: number;
-  /** 中心からの正規化オフセット（未指定＝中央）。サブ動画と同じ意味論。 */
-  position?: TelopPosition;
-  /** ユーザー不透明度（未指定＝1）。 */
-  opacity?: number;
-  /** ユーザー回転角（度、未指定＝0）。 */
-  rotation?: number;
-  /** 登場アニメ（未指定＝InsertImage の既定 fade）。 */
-  enter?: ElementAnim;
-  /** 退場アニメ（未指定＝InsertImage の既定 fade）。 */
-  exit?: ElementAnim;
-}
-
-/** プレビューで描く 1 つのサブ動画（カット適用済み）。 */
-export interface VideoInsertPlayback {
-  id: number;
-  /** カット適用後（再生）の開始フレーム。 */
-  playbackStart: number;
-  /** カット適用後（再生）の終了フレーム（排他的）。 */
-  playbackEnd: number;
-  file: string;
-  sourceInFrame: number;
-  position?: TelopPosition;
-  scale: number;
-  /** 登場アニメ（未指定＝InsertVideo の既定 none）。 */
-  enter?: ElementAnim;
-  /** 退場アニメ（未指定＝InsertVideo の既定 none）。 */
-  exit?: ElementAnim;
-  /** 再生速度（倍率・未指定＝1.0）。 */
-  playbackRate?: number;
-}
-
-/** プレビューで鳴らす 1 つの効果音（カット適用済み）。 */
-export interface SePlayback {
-  id: number;
-  /** カット適用後（再生）の開始フレーム。 */
-  playbackFrame: number;
-  /** カット適用後（再生）の終端フレーム。区間長 = playbackEnd - playbackFrame。 */
-  playbackEnd: number;
-  file: string;
-  volume: number;
-  fadeInFrames?: number;
-  fadeOutFrames?: number;
-}
+export type { SePlayback, ImagePlayback, VideoInsertPlayback };
 
 /** プレビュー（@remotion/player）に渡す、カット適用済みの再生モデル。 */
 export interface PlaybackModel {
@@ -226,6 +175,19 @@ export function applySpeed(
 
 /** EditorProject からカット適用済みの再生モデルを組み立てる。 */
 export function buildPlaybackModel(project: EditorProject): PlaybackModel {
+  if (hasTimelinePlacements(project)) {
+    const source = buildPlaybackModel(sourceAnchoredProject(project));
+    const independent = buildPlaybackModel(independentAssetProject(project));
+    return { ...source,
+      telops: mergePlacedAssets(project.telops, source.telops, independent.telops),
+      titles: mergePlacedAssets(project.titles, source.titles, independent.titles),
+      images: mergePlacedAssets(project.images, source.images, independent.images),
+      videoInserts: mergePlacedAssets(project.videoInserts ?? [], source.videoInserts, independent.videoInserts),
+      bgm: mergePlacedAssets(project.bgm ?? [], source.bgm, independent.bgm),
+      se: mergePlacedAssets(project.se, source.se, independent.se),
+      shapes: mergePlacedAssets(project.shapes ?? [], source.shapes, independent.shapes),
+    };
+  }
   const original = project.videoConfig.durationFrames;
   // 並び替え（cutData.ts の配列順）を再導出する。恒等順列なら applyCuts の出力と同一。
   const ordering = buildCutOrdering(original, project.cutRegions, project.cutOrder);
@@ -244,25 +206,14 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   // 再生座標の各要素を collapse で最終座標へ写す（overlaps 空なら恒等）。
   // 各要素は projectX で「単調（原素材順）再生座標」になるため、reorder で並び替え後の
   // 再生座標へ写してから collapse する（恒等順列なら reorder は恒等）。
-  const projectedTelops = reorderStartEnd(projectTelops(project.telops, project.cutRegions), ordering);
+  const projectedTelops = reorderStartEnd(projectTelops(clampTelops(project.telops, project.cutRegions).telops, project.cutRegions), ordering);
   const telops = collapseTelops(projectedTelops, overlaps);
 
   const projectedTitles = reorderStartEnd(projectTitles(project.titles, project.cutRegions), ordering);
   const titles = collapseTitles(projectedTitles, overlaps);
 
-  // serializeProject と同型: clampSe→projectSe の順で射影し、縮退区間（endFrame<=startFrame）を除外。
-  const { se: clampedSe } = clampSe(project.se, project.cutRegions);
-  const projectedSe: SePlayback[] = reorderSe(projectSe(clampedSe, project.cutRegions), ordering)
-    .filter((s) => (s.endFrame ?? 0) > s.startFrame)
-    .map((s) => ({
-      id: s.id,
-      playbackFrame: s.startFrame,
-      playbackEnd: s.endFrame ?? s.startFrame,
-      file: s.file,
-      volume: s.volume ?? 1,
-      fadeInFrames: s.fadeInFrames,
-      fadeOutFrames: s.fadeOutFrames,
-    }));
+  // serializeProject と同型の SE 導出（正本は core/seExport.ts・書き出しと共有）。
+  const projectedSe = deriveSePlayback(project.se, project.cutRegions, ordering);
   const se = collapseSe(projectedSe, overlaps);
 
   // serializeProject と同じく clamp してから project する。Codex P2 指摘:
@@ -279,6 +230,7 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
     position: i.position,
     opacity: i.opacity,
     rotation: i.rotation,
+    motion: i.motion,
     enter: i.enter,
     exit: i.exit,
     // scale 未指定は playback 側で 1 既定（InsertImage.tsx の `scale ?? 1` と一致）。
@@ -303,17 +255,16 @@ export function buildPlaybackModel(project: EditorProject): PlaybackModel {
   }));
   const videoInserts = collapseVideoInserts(projectedVi, overlaps);
 
-  // サブ動画と同型: clampBgm→projectBgm の順で射影し、縮退区間（endFrame<=startFrame）を除外。
-  const { bgm: clampedBgm } = clampBgm(project.bgm ?? [], project.cutRegions);
-  const projectedBgm = projectBgm(clampedBgm, project.cutRegions).filter((c) => c.endFrame > c.startFrame);
+  // clampBgm→projectBgm の射影は core/bgmExport が正本（書き出しと共有）。
+  const projectedBgm = deriveBgmPlayback(project.bgm ?? [], project.cutRegions);
   // ダッキングは単調再生座標で計算し（cutRegions 基準のため）、そのあと並び替えを掛ける。
-  const duckedBgm = reorderStartEnd(applyDuckingToBgm(
+  const duckedBgm = reorderSpanCovering(applyDuckingToBgm(
     projectedBgm,
     project.transcript.words,
     project.cutRegions,
     project.videoConfig.fps,
     project.ducking,
-  ), ordering);
+  ), ordering).filter((c) => c.endFrame > c.startFrame);
   const bgm = collapseBgm(duckedBgm, overlaps);
 
   // 画像・サブ動画と同型: clampShapes→projectShapes の順で射影し、縮退区間を除外。

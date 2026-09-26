@@ -12,7 +12,7 @@ import type { Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAllowedLocalRequest } from './localGuard';
 import { AI_TOOLS, DEFAULT_AI_TOOL, isAiToolId, type AiToolId } from './aiTools';
-import { checkToolVersion, findTool } from './aiToolBin';
+import { checkToolVersion, findTool, type ToolStatus } from './aiToolBin';
 import { claudeInstallJob } from './claudeInstallJob';
 import { HttpError, sendJson } from './http';
 import { handlePtyUpgrade, ptyTokens } from './ptyApi';
@@ -174,17 +174,26 @@ export async function handleAiApi(
   }
 
   if (url.pathname === '/api/ai/tools' && method === 'GET') {
-    const tools = Object.values(AI_TOOLS).map((t) => {
-      const loc = findTool(t, ctx.editorDir);
+    // I1（レビュー指摘）: 「再確認」ボタンは同じ GET を叩くだけだと TOOL_CACHE_TTL_MS
+    // （5秒）以内は同じ結果が返り無効化する。`?recheck=1` のときだけキャッシュを
+    // 素通しする。通常の一覧取得（初回表示・導入完了後の refreshTools）はキャッシュ
+    // を使う——乱打を毎回フルスキャンにしないため。
+    const bypassCache = url.searchParams.get('recheck') === '1';
+    const tools = await Promise.all(Object.values(AI_TOOLS).map(async (t) => {
+      const loc = await findTool(t, { editorDir: ctx.editorDir, bypassCache });
+      const version = loc === null ? null : await checkToolVersion(t, loc, { bypassCache });
+      const status: ToolStatus = loc === null ? 'missing'
+        : version === null || version.ok === true ? 'ready' : version.ok === 'unverified' ? 'unverified' : 'outdated';
       return {
-        id: t.id,
-        label: t.label,
+        id: t.id, label: t.label,
         installed: loc !== null,
+        path: loc?.path ?? null,
         source: loc?.source ?? null,
-        versionOk: loc === null ? true : checkToolVersion(t, loc).ok,
+        status,
+        versionOk: status !== 'outdated',
         installable: t.installPackage !== null,
       };
-    });
+    }));
     sendJson(res, 200, {
       tools,
       current: ptySessions.currentTool(),

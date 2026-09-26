@@ -4,6 +4,8 @@ import { assignLanes } from './lanePacking';
 import type { EditorVideoInsert } from '../../core/types';
 import type { DisplayMap } from '../../core/timelineDisplayMap';
 import { TrackHeader } from './TrackHeader';
+import { clipHandleWidth, clipHandleStyle } from './clipHandles';
+import { clipAriaLabel, handleClipNavKey, isClipActivateKey, rovingTabIndex } from './clipAria';
 
 /** つまみ識別子。サブ動画トラックでは 1 つのサブ動画ブロックの端／本体を表す。 */
 export interface VideoInsertHandleId {
@@ -20,6 +22,13 @@ export interface VideoInsertOverride {
 }
 
 interface VideoInsertTrackProps {
+  /** 読み上げ名の時刻表示に使う fps（監査 interaction-10）。 */
+  fps: number;
+  /**
+   * クリップを **キーボードで** 選んだとき（Enter / Space）。監査 interaction-10。
+   * ポインタ経路（onHandleDown）と違い、ドラッグを始めずに選択だけを行う。
+   */
+  onActivate?: (handle: VideoInsertHandleId) => void;
   pxPerFrame: number;
   videoInserts: EditorVideoInsert[];
   /** カット区間内に完全に飲まれたサブ動画の ID 集合（警告表示用）。 */
@@ -48,16 +57,20 @@ export function VideoInsertTrack({
   selectedVideoInsertId,
   liveOverride,
   onHandleDown,
+  fps,
+  onActivate,
   map,
 }: VideoInsertTrackProps) {
   const { lanes, laneCount } = useMemo(
     () => assignLanes(videoInserts.map((v) => ({ start: v.originalStart, end: v.originalEnd }))),
     [videoInserts],
   );
+  // ロービング tabindex 用の並び（DOM の描画順と同じ）。タブ停止はこの中の 1 個だけ。
+  const clipIds = videoInserts.map((v) => v.id);
   const trackStyle = { ['--lane-count']: Math.max(1, laneCount) } as React.CSSProperties;
 
   return (
-    <div className="tl-track tl-track-vi" style={trackStyle}>
+    <div className={'tl-track tl-track-vi' + (videoInserts.length === 0 ? ' tl-track-empty' : '')} style={trackStyle}>
       <TrackHeader kind="vi" label="サブ動画" />
       {videoInserts.map((vi, i) => {
         const start =
@@ -66,6 +79,8 @@ export function VideoInsertTrack({
           liveOverride?.videoInsertId === vi.id ? liveOverride.originalEnd : vi.originalEnd;
         const left = frameToXMapped(start, pxPerFrame, map);
         const width = Math.max(2, widthMapped(start, end, pxPerFrame, map));
+        // つまみ幅（極小クリップでは非表示）。監査 interaction-4。
+        const handleW = clipHandleWidth(width, 6);
         const lane = lanes[i] ?? 0;
         const top = `calc(${lane} * var(--lane-row-h) + var(--lane-inset))`;
         const selected = selectedVideoInsertId === vi.id;
@@ -73,6 +88,27 @@ export function VideoInsertTrack({
         return (
           <div
             key={vi.id}
+            data-testid={`clip-video-${vi.id}`}
+            // キーボードから到達して選べるようにする（監査 interaction-10）。
+            // これが無いと selectedHandle が立たず、←/→ の 1 フレーム微調整に届かない。
+            // ただしタブ停止はトラックで 1 個だけ（ロービング tabindex・サイクル 4 レビュー
+            // Important）。全クリップを停止にすると 120 個超の Tab でしか抜けられない。
+            // 停止以外のクリップへは ↑/↓・Home/End で移る。
+            tabIndex={rovingTabIndex(vi.id, clipIds, selectedVideoInsertId)}
+            data-clip-nav=""
+            role="button"
+            aria-label={clipAriaLabel('サブ動画', start, end, fps, vi.file)}
+            onKeyDown={(e) => {
+              // ↑/↓・Home/End は同じトラック内のクリップ移動（←/→ は 1 フレーム微調整のまま）。
+              if (handleClipNavKey(e.key, e.currentTarget)) {
+                e.preventDefault();
+                return;
+              }
+              if (!isClipActivateKey(e.key)) return;
+              e.preventDefault();
+              onActivate?.({ kind: 'videoInsert', videoInsertId: vi.id, edge: 'body' });
+            }}
+            data-id={vi.id}
             className={'tl-vi-block' + (selected ? ' selected' : '') + (flagged ? ' flagged' : '')}
             style={{ left, width, top }}
             title={flagged ? `${vi.file}（カット区間内）` : vi.file}
@@ -89,6 +125,7 @@ export function VideoInsertTrack({
             )}
             <div
               className="tl-vi-handle tl-vi-handle-start"
+              style={clipHandleStyle(handleW, 'start')}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 onHandleDown({ kind: 'videoInsert', videoInsertId: vi.id, edge: 'start' }, e);
@@ -96,6 +133,7 @@ export function VideoInsertTrack({
             />
             <div
               className="tl-vi-handle tl-vi-handle-end"
+              style={clipHandleStyle(handleW, 'end')}
               onPointerDown={(e) => {
                 e.stopPropagation();
                 onHandleDown({ kind: 'videoInsert', videoInsertId: vi.id, edge: 'end' }, e);

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import { formatClock } from '../../shared/format';
 import { buildWordChips } from '../../core/wordChips';
-import { originalToPlayback, playbackToOriginal } from '../../core/cutEngine';
+import { playbackToOriginal } from '../../core/cutEngine';
 import { cutOrderingOf } from '../../core/cutOrder';
 import {
   TRANSCRIPT_FOLLOW_STORAGE_KEY,
@@ -37,6 +37,7 @@ import { rangesOverlap } from '../../core/frameRange';
 import { partitionTelops } from '../../core/decorationTelop';
 import { useDenoise, type DenoiseStrength } from '../useDenoise';
 import { useNormalize, type NormalizeStrength } from '../useNormalize';
+import { telopFocusPlaybackFrame } from '../timeline/telopFocus';
 
 interface TranscriptPanelProps {
   state: EditState;
@@ -124,6 +125,7 @@ export function TranscriptPanel({
     state: denoiseState,
     start: startDenoise,
     restore: restoreDenoise,
+    dismissError: dismissDenoiseError,
     heavyJobConfirm: denoiseHeavyJobConfirm,
   } = useDenoise(projectId, denoiseApplied);
 
@@ -133,6 +135,7 @@ export function TranscriptPanel({
     state: normalizeState,
     start: startNormalize,
     restore: restoreNormalize,
+    dismissError: dismissNormalizeError,
     heavyJobConfirm: normalizeHeavyJobConfirm,
   } = useNormalize(projectId);
 
@@ -360,7 +363,21 @@ export function TranscriptPanel({
       <details className="tx-audio-group">
         <summary>
           <span>音声</span>
+          {/* status-ia-7: 実行中・失敗は閉じたセクションの中に隠さない。
+              「音声」を閉じたままでも重い処理と失敗に気づけるようにする。 */}
           <span className="tx-audio-badges">
+            {denoiseState.status === 'running' ? (
+              <span className="ins-pack-hint busy" data-testid="audio-badge-denoise-running">ノイズ除去 実行中…</span>
+            ) : null}
+            {denoiseState.status === 'error' ? (
+              <span className="ins-pack-hint bad" data-testid="audio-badge-denoise-error">ノイズ除去 失敗</span>
+            ) : null}
+            {normalizeState.status === 'running' ? (
+              <span className="ins-pack-hint busy" data-testid="audio-badge-normalize-running">音量 実行中…</span>
+            ) : null}
+            {normalizeState.status === 'error' ? (
+              <span className="ins-pack-hint bad" data-testid="audio-badge-normalize-error">音量 失敗</span>
+            ) : null}
             {denoiseState.applied ? <span className="ins-pack-hint">ノイズ除去 適用済み</span> : null}
             {normalizeState.applied ? <span className="ins-pack-hint">音量 適用済み</span> : null}
           </span>
@@ -411,6 +428,8 @@ export function TranscriptPanel({
             state={denoiseState}
             onReloadRequested={onReloadRequested}
             onCancel={() => void fetch(`/api/denoise?id=${encodeURIComponent(projectId)}`, { method: 'DELETE' })}
+            onRetry={() => void startDenoise(denoiseStrength)}
+            onDismiss={dismissDenoiseError}
           />
         ) : null}
       </div>
@@ -458,6 +477,8 @@ export function TranscriptPanel({
             state={normalizeState}
             onReloadRequested={onReloadRequested}
             onCancel={() => void fetch(`/api/normalize?id=${encodeURIComponent(projectId)}`, { method: 'DELETE' })}
+            onRetry={() => void startNormalize(normalizeStrength)}
+            onDismiss={dismissNormalizeError}
           />
         ) : null}
       </div>
@@ -479,8 +500,9 @@ export function TranscriptPanel({
               className={'tx-row' + (selected ? ' selected' : '') + (cut ? ' cut' : '')}
               onClick={() => {
                 onSelect({ ...state, selection: { kind: 'telop', id: t.id } });
-                const pb = originalToPlayback(
-                  t.originalStart,
+                playerRef.current?.pause();
+                const pb = telopFocusPlaybackFrame(
+                  t,
                   cutsBypassed ? [] : state.cutRegions,
                   cutsBypassed ? undefined : cutOrderingOf(state),
                 );

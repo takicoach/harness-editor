@@ -19,7 +19,7 @@ describe('isAiToolId', () => {
 });
 
 describe('DEFAULT_AI_TOOL', () => {
-  it('claude（利用者の既定を変えない）', () => {
+  it('claude（受講生の既定を変えない）', () => {
     expect(DEFAULT_AI_TOOL).toBe('claude');
   });
 });

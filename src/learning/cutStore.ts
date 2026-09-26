@@ -92,7 +92,8 @@ function readDistillState(): DistillState {
   }
 }
 
-function countLines(path: string): number {
+/** jsonl の空でない行数（未作成なら 0）。承認の前後で比べて「新しく記録した行数」を求めるのにも使う。 */
+export function countJsonlLines(path: string): number {
   if (!existsSync(path)) return 0;
   return readFileSync(path, 'utf8').split('\n').filter((line) => line.trim() !== '').length;
 }
@@ -109,8 +110,8 @@ export function countUndistilledFeedback(): number {
   const telopConsumed = state.telopConsumedLines ?? 0;
   const seConsumed = state.seConsumedLines ?? 0;
 
-  const cutRemaining = Math.max(0, countLines(cutFeedbackPath()) - cutConsumed);
-  const telopRemaining = Math.max(0, countLines(telopFeedbackPath()) - telopConsumed);
-  const seRemaining = Math.max(0, countLines(seFeedbackPath()) - seConsumed);
+  const cutRemaining = Math.max(0, countJsonlLines(cutFeedbackPath()) - cutConsumed);
+  const telopRemaining = Math.max(0, countJsonlLines(telopFeedbackPath()) - telopConsumed);
+  const seRemaining = Math.max(0, countJsonlLines(seFeedbackPath()) - seConsumed);
   return cutRemaining + telopRemaining + seRemaining;
 }

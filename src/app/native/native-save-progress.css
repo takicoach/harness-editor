@@ -1,0 +1,14 @@
+.native-save-button,.native-save-progress{width:124px;flex-shrink:0;box-sizing:border-box}
+.native-save-progress{display:flex;align-items:center;justify-content:center;gap:9px;padding:0 8px;height:var(--btn-h);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);border-radius:var(--radius-md);background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.native-save-ring{position:relative;display:block;width:20px;height:20px;flex:0 0 20px}
+.native-header .native-save-ring svg{position:absolute;inset:0;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.native-save-ring-track{opacity:.16}
+.native-save-ring-value{transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset var(--dur-state) var(--ease-settle);}
+.native-save-orbit{animation:native-save-orbit 1.6s linear infinite;will-change:transform}
+.native-save-progress-label{font-size:11px;white-space:nowrap;font-weight:600}
+.native-save-progress-label>span{font-variant-numeric:tabular-nums}
+.native-save-progress[data-complete=true] .native-save-orbit{animation:none;will-change:auto}
+.native-save-check path{stroke-dasharray:1;stroke-dashoffset:0;animation:native-save-check 240ms ease-out both}
+@keyframes native-save-orbit{to{transform:rotate(360deg)}}
+@keyframes native-save-check{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+@media(prefers-reduced-motion:reduce){.native-save-orbit,.native-save-check path{animation:none}.native-save-ring-value{transition:none}}

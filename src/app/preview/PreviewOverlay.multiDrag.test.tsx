@@ -2,8 +2,8 @@
  * @vitest-environment jsdom
  *
  * プレビュー上のドラッグが「テロップ複数選択」中は選択全員へ同値適用されることの回帰テスト。
- * 「揃える」意味論（確定した値を選択中の全員へ書き込む）をプレビュードラッグにも適用する。
- * 実機不具合: 複数選択中でもプライマリしか動かなかった。
+ * 複数選択の「揃える」意味論をプレビューのドラッグにも適用する（実機不具合: 複数選択中でも
+ * プライマリしか動かなかった）。
  *
  * ここは **実 React の pointerdown → pointermove → pointerup を通した結線** だけを見る。
  * 座標変換そのもの（pointerToPosition / pointerToScale）は overlayGeometry.test.ts、
@@ -12,7 +12,7 @@
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/react';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from './editorPlayback';
 import type { EditorTelop } from '../../core/types';
 import { initialEditState, type EditState } from '../edit/editState';
 import { PreviewOverlay } from './PreviewOverlay';
@@ -39,11 +39,17 @@ beforeAll(() => {
   vi.stubGlobal('ResizeObserver', FakeResizeObserver);
 });
 
-/** フレーム 0 では非表示のテロップ 2 件（ヒット領域 div を出さず box 操作だけを見る）。 */
+/**
+ * フレーム 0 で可視のテロップ 2 件。
+ *
+ * 以前はフレーム 0 で**非表示**の 2 件（100..400 / 500..800）を使っていたが、
+ * サイクル 4 A-4 で「選択中テロップが再生位置の外なら枠とつまみを出さない」
+ * 仕様になったため、box 操作を見るテストは可視のテロップで組む必要がある。
+ */
 function makeTelops(): EditorTelop[] {
   return [
-    { id: 1, originalStart: 100, originalEnd: 400, text: 'てろっぷA', template: 1 },
-    { id: 2, originalStart: 500, originalEnd: 800, text: 'てろっぷB', template: 1 },
+    { id: 1, originalStart: 0, originalEnd: 400, text: 'てろっぷA', template: 1 },
+    { id: 2, originalStart: 0, originalEnd: 800, text: 'てろっぷB', template: 1 },
   ];
 }
 
@@ -218,8 +224,8 @@ describe('複数選択中のプレビュードラッグ', () => {
   it('ドラッグしたが値が変わらない（同一 state 参照）なら確定を積まない', () => {
     // 既に x=1/3 にいるテロップを、同じ 1/3 へ吸着する量だけ動かす → 値は不変。
     const telops: EditorTelop[] = [
-      { id: 1, originalStart: 100, originalEnd: 400, text: 'A', template: 1, position: { x: 1 / 3, y: 0 } },
-      { id: 2, originalStart: 500, originalEnd: 800, text: 'B', template: 1, position: { x: 1 / 3, y: 0 } },
+      { id: 1, originalStart: 0, originalEnd: 400, text: 'A', template: 1, position: { x: 1 / 3, y: 0 } },
+      { id: 2, originalStart: 0, originalEnd: 800, text: 'B', template: 1, position: { x: 1 / 3, y: 0 } },
     ];
     const { container, commits } = setup([1, 2], { telops });
     // 開始 x=1/3 から dx=+1px（≒0.0074）→ 吸着で 1/3 へ戻る＝値の変化なし。

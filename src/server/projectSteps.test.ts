@@ -8,12 +8,13 @@ import { autoStatusFromSteps } from './projectStatus';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-/** 新規作成時に複製される雛形の実物。 */
+/** 旧形式の進捗判定に使う現用部品・データ。起動設定は不要。 */
 const TEMPLATE = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '..',
   '..',
   'project-template',
+  'src',
 );
 
 const TELOP_DIR = 'テロップテンプレート';
@@ -120,16 +121,15 @@ describe('resolveProjectSteps', () => {
 
 describe('新規作成直後の工程判定', () => {
   /**
-   * 新規プロジェクトは createProject が「空の transcript.json」を書き、
-   * project-template には空の seData.ts が同梱される。ファイルの**有無**だけで
+   * 旧形式では空の transcript.json と空の seData.ts が存在しうる。ファイルの**有無**だけで
    * 判定すると、1 秒も編集していない動画が transcribe/audio 済み扱いになり、
    * 進行ボードでいきなり「カット」列に並ぶ。
-   * 実物（project-template + createProject が書く transcript.json）で固定する。
+   * 現用の空データと旧形式の transcript.json で固定する。新規v2作成とは別の互換検査。
    */
-  it('雛形どおりの新規プロジェクトは transcribe/cut/audio がすべて未済', () => {
-    // project-template の実物をコピーする（テンプレートが変わったら追随して落ちる）。
-    cpSync(TEMPLATE, dir, { recursive: true });
-    // createProject.ts が実際に書く内容と同じ空 transcript.json。
+  it('旧形式の空データでは transcribe/cut/audio がすべて未済', () => {
+    // 現用データをコピーする（空データの内容が変わったら追随して落ちる）。
+    cpSync(TEMPLATE, join(dir, 'src'), { recursive: true });
+    // 旧形式の空 transcript.json。
     writeFileSync(
       join(dir, 'transcript.json'),
       JSON.stringify({ engine: 'none', language: 'ja', duration_ms: 1000, words: [], segments: [] }),
@@ -145,7 +145,7 @@ describe('新規作成直後の工程判定', () => {
   });
 
   it('中身が入れば済扱いになる（判定が常に false ではないことの固定）', () => {
-    cpSync(TEMPLATE, dir, { recursive: true });
+    cpSync(TEMPLATE, join(dir, 'src'), { recursive: true });
     writeFileSync(
       join(dir, 'transcript.json'),
       JSON.stringify({ segments: [{ start: 0, end: 1, text: 'あ' }], words: [] }),

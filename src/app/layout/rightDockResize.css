@@ -1,0 +1,24 @@
+.rightdock { position: relative; }
+.rightdock-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 12;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.rightdock-resizer::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+}
+.rightdock-resizer:hover::after,
+.rightdock-resizer:focus-visible::after { background: var(--accent); }
+[data-resizing-right-dock='true'] .stage { transition: none; user-select: none; cursor: col-resize; }

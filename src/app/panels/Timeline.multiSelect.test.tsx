@@ -11,7 +11,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { EditorProject, EditorTelop } from '../../core/types';
 import type { EditState } from '../edit/editState';
 import { useEditSession } from '../useEditSession';
@@ -63,7 +63,11 @@ function makeProject(): EditorProject {
 type Listener = (e: unknown) => void;
 
 /** frameupdate を任意に発火できる最小プレイヤー。 */
-function makeFakePlayer(): PlayerRef & { emitFrame: (frame: number) => void } {
+function makeFakePlayer(): PlayerRef & {
+  emitFrame: (frame: number) => void;
+  pause: ReturnType<typeof vi.fn>;
+  seekTo: ReturnType<typeof vi.fn>;
+} {
   const listeners = new Map<string, Set<Listener>>();
   const player = {
     addEventListener(type: string, fn: Listener) {
@@ -74,16 +78,20 @@ function makeFakePlayer(): PlayerRef & { emitFrame: (frame: number) => void } {
     removeEventListener(type: string, fn: Listener) {
       listeners.get(type)?.delete(fn);
     },
-    seekTo() {},
+    seekTo: vi.fn(),
     getCurrentFrame: () => 0,
     play() {},
-    pause() {},
+    pause: vi.fn(),
     isPlaying: () => false,
     emitFrame(frame: number) {
       for (const fn of listeners.get('frameupdate') ?? []) fn({ detail: { frame } });
     },
   };
-  return player as unknown as PlayerRef & { emitFrame: (frame: number) => void };
+  return player as unknown as PlayerRef & {
+    emitFrame: (frame: number) => void;
+    pause: ReturnType<typeof vi.fn>;
+    seekTo: ReturnType<typeof vi.fn>;
+  };
 }
 
 let fakePlayer: ReturnType<typeof makeFakePlayer>;
@@ -109,7 +117,6 @@ function Harness({ project }: { project: EditorProject }) {
       <div data-testid="can-undo">{String(session.canUndo)}</div>
       <button data-testid="undo" onClick={session.undo}>undo</button>
       <Timeline
-        videoDurations={{}}
         session={session}
         baseProject={project}
         playerRef={playerRef}
@@ -128,7 +135,6 @@ function Harness({ project }: { project: EditorProject }) {
         onPlaybackRateChange={setPlaybackRate}
       />
       <Inspector
-        videoDurations={{}}
         state={state}
         fps={FPS}
         seLibrary={[]}
@@ -140,7 +146,7 @@ function Harness({ project }: { project: EditorProject }) {
         installing={null}
         installErrors={{}}
         dirty={session.dirty}
-        telopComponent={null}
+        componentRevision={null}
         previewWidth={1080}
         previewHeight={1920}
         onInstall={() => {}}
@@ -195,9 +201,9 @@ function telopsOf(c: HTMLElement): { id: number; pos: { x: number; y: number } |
   return JSON.parse(c.querySelector('[data-testid="telops"]')?.textContent ?? '[]');
 }
 
-function setup() {
+function setup(project = makeProject()) {
   fakePlayer = makeFakePlayer();
-  return render(<Harness project={makeProject()} />);
+  return render(<Harness project={project} />);
 }
 
 /** #1 と #2（じまく 2 件）を複数選択した状態にする。 */
@@ -212,6 +218,65 @@ afterEach(() => {
 });
 
 describe('修飾キー＋クリックでの複数選択トグル', () => {
+  it('通常クリックは再生を止め、選んだ字幕の中央へ移動する', () => {
+    const { container } = setup();
+    clickBlock(jimakuBlocks(container)[0] as HTMLElement);
+
+    expect(fakePlayer.pause).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.seekTo).toHaveBeenCalledWith(250);
+  });
+
+  it.each([
+    ['Enter', 'Enter'],
+    ['Space', ' '],
+  ])('%s選択も再生を止め、選んだ字幕の中央へ移動する', (_label, key) => {
+    const { container } = setup();
+    fireEvent.keyDown(jimakuBlocks(container)[1] as HTMLElement, { key });
+
+    expect(fakePlayer.pause).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.seekTo).toHaveBeenCalledWith(650);
+  });
+
+  it('2倍速でも既存の再生座標変換を通して中央へ移動する', () => {
+    const project = makeProject();
+    project.mainSpeed = 2;
+    const { container } = setup(project);
+    clickBlock(jimakuBlocks(container)[0] as HTMLElement);
+
+    expect(fakePlayer.seekTo).toHaveBeenCalledWith(125);
+  });
+
+  it('全区間がカット済みなら停止だけ行い、別の位置へは動かさない', () => {
+    const project = makeProject();
+    project.cutRegions = [{ start: 100, end: 400 }];
+    const { container } = setup(project);
+    const block = jimakuBlocks(container)[0] as HTMLElement;
+    fireEvent.pointerDown(block, { clientX: 0, clientY: 0, button: 0 });
+    const seeksBeforeFocus = fakePlayer.seekTo.mock.calls.length;
+    fireEvent.pointerUp(window, { clientX: 0, clientY: 0, button: 0 });
+
+    expect(fakePlayer.pause).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.seekTo).toHaveBeenCalledTimes(seeksBeforeFocus);
+  });
+
+  it('ドラッグと開始ハンドルのクリックでは編集フォーカスを発動しない', () => {
+    const { container } = setup();
+    const first = jimakuBlocks(container)[0] as HTMLElement;
+    dragBlock(first, 40);
+    expect(fakePlayer.pause).not.toHaveBeenCalled();
+
+    const startHandle = jimakuBlocks(container)[0]?.querySelector('.tl-handle.start') as HTMLElement;
+    clickBlock(startHandle);
+    expect(fakePlayer.pause).not.toHaveBeenCalled();
+  });
+
+  it('Shift＋クリックは複数選択だけを変え、再生位置を動かさない', () => {
+    const { container } = setup();
+    clickBlock(jimakuBlocks(container)[0] as HTMLElement, { shiftKey: true });
+
+    expect(fakePlayer.pause).not.toHaveBeenCalled();
+  });
+
   it('Cmd＋クリックで 2 個選択になり、最後にクリックした方がプライマリ', () => {
     const { container } = setup();
     selectTwoSubtitles(container);

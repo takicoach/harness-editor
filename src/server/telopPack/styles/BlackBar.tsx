@@ -4,7 +4,7 @@ import {
   useCurrentFrame,
   interpolate,
   Easing,
-} from "remotion";
+} from "@harness/frame-runtime";
 
 // 字幕データの型定義
 export interface SubtitleItem {

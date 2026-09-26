@@ -193,7 +193,6 @@ test('setBgmVolume（手動）は autoVolume を外す', () => {
 
 // --- 重ね禁止（単一トラック運用・spec §9.1）---
 // BGM は「1曲ずつ・重ねない」。重なる配置は隣接クリップ端へスナップ（or 収まらなければ据え置き）。
-// 参照: BGM トラック設計（内部設計書）§9.1
 function bgmClip(id: number, originalStart: number, originalEnd: number): EditorBgmClip {
   return {
     id,

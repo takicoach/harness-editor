@@ -17,4 +17,7 @@ describe('pickInsertImageExport', () => {
   it('InsertImage が関数でなければ throw', () => {
     expect(() => pickInsertImageExport({ InsertImage: 'not a fn' })).toThrow();
   });
+  it('default-only exports do not satisfy the named InsertImage contract', () => {
+    expect(() => pickInsertImageExport({ default: () => null })).toThrow(/InsertImage/);
+  });
 });

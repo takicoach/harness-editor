@@ -4,7 +4,7 @@ import type { CutOrderAnchor, CutOrdering, CutRegion, CutSegment } from './types
 /**
  * カット並び替え（案A）の中核。
  *
- * cutData.ts は「残す区間の順序付きリスト」で、配列順＝再生順。
+ * ハーネス形式の cutData.ts は「残す区間の順序付きリスト」で、配列順＝再生順。
  * 再生順が原素材順と異なる（＝並び替え編集済み）プロジェクトが実在するが、
  * エディタ内部は「原素材−削除区間」の単調モデル（CutRegion[]）で編集するため、
  * そのままでは再生順が失われ、保存で並び替えが壊れる。
@@ -19,6 +19,63 @@ export function cutOrderFromCutData(cutData: CutSegment[]): CutOrderAnchor[] {
   return [...cutData]
     .sort((a, b) => a.playbackStart - b.playbackStart)
     .map((s) => ({ originalStart: s.originalStart, originalEnd: s.originalEnd }));
+}
+
+/**
+ * applyCuts はカットのない隣接範囲を最大区間へまとめるため、保存済みアンカーが
+ * [30,60), [0,30) のように接していても [0,60) になる。保存済みアンカーの
+ * 明示境界は再生順にかかわらず復元し、分割操作と並び順を失わないようにする。
+ *
+ * アンカー間に隙間がある境界は復元しない。その隙間のカットを解除した場合は、従来どおり
+ * 融合区間として先頭側アンカーの順位を継ぐ。
+ */
+function partitionAtAdjacentAnchors(
+  segments: CutSegment[],
+  anchors: CutOrderAnchor[] | undefined,
+): CutSegment[] {
+  if (anchors === undefined || anchors.length < 2 || segments.length === 0) return segments;
+  const indexByStart = new Map(anchors.map((anchor, index) => [anchor.originalStart, index]));
+  const boundaries = [...new Set(
+    anchors
+      .flatMap((anchor) => {
+        return indexByStart.has(anchor.originalEnd) ? [anchor.originalEnd] : [];
+      }),
+  )].sort((a, b) => a - b);
+  if (boundaries.length === 0) return segments;
+
+  const partitioned: CutSegment[] = [];
+  let boundaryIndex = 0;
+  for (const segment of segments) {
+    while (
+      boundaryIndex < boundaries.length &&
+      boundaries[boundaryIndex]! <= segment.originalStart
+    ) boundaryIndex++;
+    let originalStart = segment.originalStart;
+    while (
+      boundaryIndex < boundaries.length &&
+      boundaries[boundaryIndex]! < segment.originalEnd
+    ) {
+      const originalEnd = boundaries[boundaryIndex++]!;
+      const playbackStart = segment.playbackStart + originalStart - segment.originalStart;
+      partitioned.push({
+        id: partitioned.length + 1,
+        originalStart,
+        originalEnd,
+        playbackStart,
+        playbackEnd: playbackStart + originalEnd - originalStart,
+      });
+      originalStart = originalEnd;
+    }
+    const playbackStart = segment.playbackStart + originalStart - segment.originalStart;
+    partitioned.push({
+      id: partitioned.length + 1,
+      originalStart,
+      originalEnd: segment.originalEnd,
+      playbackStart,
+      playbackEnd: playbackStart + segment.originalEnd - originalStart,
+    });
+  }
+  return partitioned.length === segments.length ? segments : partitioned;
 }
 
 /**
@@ -93,7 +150,10 @@ export function buildCutOrdering(
   regions: CutRegion[],
   anchors: CutOrderAnchor[] | undefined,
 ): CutOrdering {
-  const monotoneSegments = applyCuts(originalTotalFrames, regions);
+  const monotoneSegments = partitionAtAdjacentAnchors(
+    applyCuts(originalTotalFrames, regions),
+    anchors,
+  );
   const segments = orderCutSegments(monotoneSegments, anchors);
   if (segments === monotoneSegments) {
     return {
@@ -174,6 +234,65 @@ export function reorderStartEnd<T extends { startFrame: number; endFrame: number
   if (ordering === undefined || ordering.identity) return items;
   return items.map((it) => {
     const { start, end } = mapSpan(it.startFrame, it.endFrame, ordering, true);
+    return { ...it, startFrame: start, endFrame: end };
+  });
+}
+
+/**
+ * BGM 用のカバー型区間写像。mapSpan と違い contiguousRunCap で打ち切らず、
+ * 触れる全区間の写像の min/max で範囲全体を覆う。外側の2端だけでは、
+ * 逆順で両端が同じ境界へ移ったときに全尺が0へ潰れる。
+ * 音楽ベッドは並び替えブロックをまたいで鳴り続けるのが正しく、cap で切ると
+ * 全尺クリップが先頭 run（04 では 211f）に潰れる（2026-08-17 実FB）。
+ */
+function mapSpanCovering(
+  start: number,
+  end: number,
+  ordering: CutOrdering,
+  toOrdered: boolean,
+): { start: number; end: number } {
+  const s = toOrdered
+    ? monotoneToOrdered(start, ordering, 'start')
+    : orderedToMonotone(start, ordering, 'start');
+  const e = toOrdered
+    ? monotoneToOrdered(end, ordering, 'end')
+    : orderedToMonotone(end, ordering, 'end');
+  let first = Math.min(s, e);
+  let last = Math.max(s, e);
+  for (let i = 0; i < ordering.segments.length; i++) {
+    const segment = ordering.segments[i]!;
+    const monotone = ordering.monotone[i]!;
+    const from = toOrdered ? monotone : { start: segment.playbackStart, end: segment.playbackEnd };
+    const destination = toOrdered ? segment.playbackStart : monotone.start;
+    const a = Math.max(start, from.start);
+    const b = Math.min(end, from.end);
+    if (b <= a) continue;
+    first = Math.min(first, destination + a - from.start);
+    last = Math.max(last, destination + b - from.start);
+  }
+  return { start: first, end: last };
+}
+
+/** BGM（カバー型）の単調 → 並び替え後写像。 */
+export function reorderSpanCovering<T extends { startFrame: number; endFrame: number }>(
+  items: T[],
+  ordering: CutOrdering | undefined,
+): T[] {
+  if (ordering === undefined || ordering.identity) return items;
+  return items.map((it) => {
+    const { start, end } = mapSpanCovering(it.startFrame, it.endFrame, ordering, true);
+    return { ...it, startFrame: start, endFrame: end };
+  });
+}
+
+/** reorderSpanCovering の逆（並び替え後 → 単調）。 */
+export function unreorderSpanCovering<T extends { startFrame: number; endFrame: number }>(
+  items: T[],
+  ordering: CutOrdering | undefined,
+): T[] {
+  if (ordering === undefined || ordering.identity) return items;
+  return items.map((it) => {
+    const { start, end } = mapSpanCovering(it.startFrame, it.endFrame, ordering, false);
     return { ...it, startFrame: start, endFrame: end };
   });
 }

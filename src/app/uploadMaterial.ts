@@ -13,6 +13,8 @@ export interface UploadMaterialResponse {
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a'];
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+/** Keep the file chooser's filter aligned with drag-and-drop classification. */
+export const MATERIAL_UPLOAD_ACCEPT = [...IMAGE_EXTENSIONS, ...AUDIO_EXTENSIONS, ...VIDEO_EXTENSIONS].join(',');
 export { VIDEO_EXTENSIONS };
 
 /**

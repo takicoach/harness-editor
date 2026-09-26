@@ -1,0 +1,16 @@
+{
+  "name": "harness-editor-desktop-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "electron main.cjs",
+    "package:mac": "node build.mjs",
+    "test": "node --test policy.test.mjs server.test.mjs",
+    "build:media": "node build-media.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.4.3",
+    "@electron/packager": "20.3.0"
+  }
+}

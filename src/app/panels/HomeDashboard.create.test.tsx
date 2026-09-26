@@ -21,10 +21,11 @@ afterEach(() => {
 
 const PROJECTS: ProjectSummary[] = [];
 
-function renderHome(): { onCreate: ReturnType<typeof vi.fn> } {
+function renderHome(managedMedia=false): { onCreate: ReturnType<typeof vi.fn> } {
   const onCreate = vi.fn().mockResolvedValue(undefined);
   render(
     <HomeDashboard
+      managedMedia={managedMedia}
       projects={PROJECTS}
       error={null}
       onPick={vi.fn()}
@@ -46,6 +47,13 @@ function openModal(): void {
 }
 
 describe('作成モーダルのコピー指定', () => {
+  it.each([false,true])('native creation preserves the explicit copy choice %s',copy=>{
+    const {onCreate}=renderHome(true);openModal();
+    expect((screen.getByTestId('home-create-copy') as HTMLInputElement).checked).toBe(false);
+    if(copy)fireEvent.click(screen.getByTestId('home-create-copy'));
+    fireEvent.click(screen.getByRole('button',{name:'作成'}));
+    expect(onCreate).toHaveBeenCalledWith(expect.any(String),expect.objectContaining({kind:'upload'}),copy,expect.any(Function));
+  });
   it('既定はリンク優先（preferCopy=false）で、説明文が出る', () => {
     const { onCreate } = renderHome();
     openModal();

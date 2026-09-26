@@ -43,10 +43,22 @@ export interface ProjectSummary {
   sizeLabel: string;
   /** public/ 配下の動画ファイル名（サムネイル用）。未配置なら null。リンク切れでは保持する。 */
   videoFile: string | null;
+  /** Managed v2 media for thumbnails. Never reopen the legacy public video after migration. */
+  videoAssetId?: string;
+  imageAssetId?: string;
+  audioOnly?: boolean;
   /** メイン動画が外部実体への symlink の場合の接続先と状態（外付け取り込み）。通常は undefined。 */
   videoLink?: { target: string; state: 'ok' | 'broken' | 'mismatch' };
   /** 解決済みの表示ステータス（手動 stage > 自動判定）。表示ステータス全値の正本は shared/projectStage。 */
   status: DisplayStatus;
+  /**
+   * この要約を作った観測（サーバがディスクを読んだ 1 回）の通し番号。単調増加。
+   * 一覧の全置換と SSE のライブ差分は届く順番が入れ替わりうるため、クライアントは
+   * 到着順ではなくこの番号で新旧を決める（`mergeProjectSummaries` / `applyStatusPatch`）。
+   * optional なのは番号を知らないサーバ（旧版）との互換のため。その場合は従来どおり
+   * 到着順で上書きする（ライブ更新が止まるより、たまに巻き戻る方がまだ軽い）。
+   */
+  statusSeq?: number;
   /** 手動 stage による固定か（.sme/status.json の stage が非 null）。「手動」バッジ表示用。 */
   stageManual?: boolean;
   /** AI 作業中の工程名（`.sme/status.json` の activity）。無ければ undefined。 */
@@ -61,8 +73,7 @@ export interface ProjectSummary {
    * 工程ステッパー（自動判定）。現行サーバは一覧・SSE 差分の両方で常に載せる。
    * optional なのは steps を知らない旧サーバのレスポンスと互換を保つため
    * （その場合はステッパーを表示しない）。
-   * 既知の制限: SSE で live に変わるのは rendered だけ（watcher が .sme と out しか通さない）。
-   * transcribe/cut/telop/audio は次の refreshProjects まで更新されない。
+   * v2 は保存ごとに全工程をSSE更新。旧TSX案件のライブ更新は rendered のみ。
    */
   steps?: ProjectSteps;
 }
@@ -104,6 +115,12 @@ export interface ProjectFingerprint {
   speedData?: FileFingerprint | null;
   /** mainLayoutData.ts が読込時に存在しなければ null（既定レイアウトでは不要）。旧クライアントは送らない（undefined）。 */
   mainLayoutData?: FileFingerprint | null;
+  /** mainAudioData.ts が読込時に存在しなければ null（無補正では不要）。旧クライアントは送らない（undefined）。 */
+  mainAudioData?: FileFingerprint | null;
+  /** shooting-script.json が読込時に存在しなければ null。旧クライアントは送らない（undefined）。 */
+  scriptDocument?: FileFingerprint | null;
+  /** Independent asset bindings; null before the first independent placement. */
+  editorTimeline?: FileFingerprint | null;
 }
 
 /** PUT /api/project の送信ボディ。 */
@@ -112,6 +129,16 @@ export interface SaveRequest {
   project: EditorProject;
   /** 読込時に受け取った指紋。外部変更検知に使う。 */
   fingerprint: ProjectFingerprint;
+  /**
+   * 外部変更を検知しても、この画面の内容で上書きする（既定 false = 従来どおり 409）。
+   *
+   * 同じプロジェクトは複数の画面から開けるため、後から保存した画面が全ファイルを書き戻し、
+   * 先に開いていた画面が 409 で保存不能になることがある（2026-09-04 のデータ損失）。
+   * 従来の出口は「開き直してください」だけで、開き直すと未保存の編集が消えた。
+   * **利用者が衝突の通知を見たうえで明示的に選んだときだけ** true を送る。
+   * 自動保存・再試行からは決して立てない（黙って他方の作業を消さないため）。
+   */
+  overwrite?: boolean;
 }
 
 /** PUT /api/project の成功レスポンス。 */
@@ -119,6 +146,30 @@ export interface SaveResponse {
   ok: true;
   /** 書き戻し後の新しい指紋。クライアントは次回保存のためこれを保持する。 */
   fingerprint: ProjectFingerprint;
+  /**
+   * C-2: サブ動画がソース実長を超えていて保存時にクランプ（originalEnd を短縮）された場合、
+   * その正規化後の値。クランプが1件も起きなければ省略（undefined）。
+   *
+   * 保存はディスク上の値をクランプするが、クライアントが送った編集内容（クランプ前）を
+   * そのまま「保存済み」として確定すると、タイムライン・プレビュー・超過警告が
+   * ディスクの実体と無言で食い違う（次に開くとクリップが短くなっている）。
+   * クライアントはこれを見て、往復中に利用者がさらに編集していなければ画面へ反映し、
+   * クランプが起きたことを通知する。
+   */
+  clampedVideoInserts?: { id: number; originalEnd: number; timelinePlacement?: import('../core/timelinePlacement').TimelinePlacement }[];
+  /**
+   * X-2(a): クランプでは直せないサブ動画（イン点がソース終端以降・再生速度が高すぎる等で
+   * 再生できるソースフレームが1枚も残っていない）。該当が無ければ省略（undefined）。
+   *
+   * データは変更しない（非破壊）。黙って通すと書き出しで初めて壊れているのが分かるため、
+   * クライアントは保存後の通知として利用者へ伝え、イン点の修正か削除を促す。
+   */
+  unplayableVideoInserts?: { id: number; file: string }[];
+  /**
+   * 上書き保存で消した内容の退避先（プロジェクトからの相対パス・data-safety-4）。
+   * 通常保存では付かない。UI はここを「以前の内容の控え」として案内する。
+   */
+  backupDir?: string;
 }
 
 /** 画面の指示に添付する「今見ている文脈」。 */
@@ -137,6 +188,8 @@ export type InstructionStatus = 'pending' | 'processing' | 'done' | 'failed';
 /** 受け箱に積まれる 1 指示。サーバが採番・保持し、画面と Claude Code が参照する。 */
 export interface InstructionRecord {
   id: string;
+  requestId?: string;
+  requestCreatedAt?: number;
   projectId: string;
   /** 解決済み絶対パス。Claude が編集対象を一意に特定するために使う。 */
   projectDir: string;
@@ -151,6 +204,8 @@ export interface InstructionRecord {
 
 /** POST /api/instructions の送信ボディ（projectDir はサーバが解決するため含めない）。 */
 export interface InstructionInput {
+  requestId?: string;
+  requestCreatedAt?: number;
   projectId: string;
   text: string;
   context: InstructionContext;
@@ -207,6 +262,21 @@ export interface LearningDiffResponse {
   /** null = seData ベースラインなし。 */
   ses: LearningSeDiffItem[] | null;
   undistilledCount: number;
+  /** 新形式の比較元が無いなど、候補を比較できなかった理由。 */
+  unavailableReason?: string;
+  /** 新形式（取り込み案件）のみ。取り込み後に入った AI の編集の回数（1以上ならチェックを既定オフ）。 */
+  aiEditCount?: number;
+  /** 新形式のみ。パネルの「比較元: …」に出す文。 */
+  baselineLabel?: string;
+  /** 新形式のみ。承認要求にそのまま付けて返す照合キー。 */
+  candidateKey?: LearningCandidateKey;
+}
+
+/** 新形式の承認を書き出しジョブへ結び付けるキー（書き出し記録の値）。 */
+export interface LearningCandidateKey {
+  jobId: string;
+  documentId: string;
+  contentHash: string;
 }
 
 /** POST /api/learning/approve の送信ボディ（承認された項目のみ）。 */
@@ -218,6 +288,28 @@ export interface LearningApproveRequest {
   telops?: LearningTelopDiffItem[];
   /** 後方互換: 未指定なら空配列扱い。 */
   ses?: LearningSeDiffItem[];
+  /** 新形式の案件では必須（GET /api/learning/diff の candidateKey をそのまま送る）。 */
+  jobId?: string;
+  documentId?: string;
+  contentHash?: string;
+}
+
+/** 学習カテゴリ（承認差分の種類）。 */
+export type LearningCategory = 'cut' | 'word' | 'telop' | 'se';
+
+/** 今回の承認で新しく自動ルール化された 1 件（人間向け表示用）。 */
+export interface LearningPromotedRule {
+  category: LearningCategory;
+  /** そのまま画面へ出せる 1 行（例: 「えー」は自動でカットします）。 */
+  text: string;
+}
+
+/** 今回の承認で学習データへ新しく記録した件数（カット・テロップ・SE は jsonl に増えた行数、語句は辞書に入った件数）。昇格件数とは別物。 */
+export interface LearningRecordedCounts {
+  cut: number;
+  words: number;
+  telops: number;
+  ses: number;
 }
 
 /** POST /api/learning/approve のレスポンス。 */
@@ -231,4 +323,21 @@ export interface LearningApproveResponse {
   seRulesPromoted: number;
   seConflicts: number;
   undistilledCount: number;
+  /**
+   * 追加フィールド（後方互換・省略時は全 0 扱い）。
+   * 承認して学習データへ記録した件数。上の *Promoted は「閾値に達して自動ルール化された件数」で、
+   * 初回承認ではほぼ 0 になるため、人間向け表示にはこちらを使う。
+   */
+  recorded?: LearningRecordedCounts;
+  /**
+   * 追加フィールド（後方互換・省略時は空扱い）。
+   * 今回新しく自動ルールになった内容。上の *Promoted 件数はルール本数の差分で数えるのに対し、
+   * こちらは「前後のルール集合の差」で求めるため、競合で既存ルールが外れた場合に件数と一致しないことがある
+   * （画面表示はこの内容リストを正とする）。
+   */
+  promotedRules?: LearningPromotedRule[];
+  /** 送ったが記録済み（ストアの重複照合で弾かれた）ため数えなかった件数（カット・テロップ・SE の合計）。 */
+  alreadyRecorded?: number;
+  /** スキル側の取り出し台帳（harvest_v2_state.json）を更新できなかった理由。学習の記録自体は成功している。 */
+  ledgerError?: string;
 }

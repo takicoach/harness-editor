@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, useVideoConfig } from 'remotion';
+import { useCurrentFrame, useVideoConfig } from '@harness/frame-runtime';
 import type { ShapeSegment } from './types';
 import { shapeSvgGeometry, thicknessToPx, fadeOpacity } from './shapeDraw';
 
@@ -35,6 +35,19 @@ export const InsertShape: React.FC<InsertShapeProps> = ({ shape, width: widthPro
   const strokeWidth = thicknessToPx(shape.thickness, height);
   const g = shapeSvgGeometry(shape, width, height);
   const markerId = `arrow-${shape.id}`;
+
+  // I-5: この payload の ShapeKind は旧 4 種のまま（triangle / angle はエディタ内蔵の
+  // native 描画専用で、legacy プロジェクトへ配る shapeData.ts の型には入っていない）。
+  // shapeData.ts は素の JSON なので型の外の kind が手で書かれ得る。以前はどの分岐にも
+  // 当たらず「中身が空の妥当な SVG」を返して無音で消えていたため、ここで明示的に断る。
+  // 対応を増やすなら types.ts の ShapeKind と nativeDataPacks.ts の DATA_TYPES.shape を
+  // 同時に更新し、描画も src/preview/native/sceneRenderer.tsx と揃えること。
+  const SUPPORTED: readonly string[] = ['line', 'arrow', 'rect', 'ellipse'];
+  if (!SUPPORTED.includes(shape.kind)) {
+    throw new Error(
+      `InsertShape: 未対応の図形種別です: ${String(shape.kind)}（この描画部品は line / arrow / rect / ellipse のみ描けます）`,
+    );
+  }
 
   return (
     <svg

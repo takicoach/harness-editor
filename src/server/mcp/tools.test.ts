@@ -26,6 +26,16 @@ describe('getNextInstruction', () => {
     const out = await getNextInstruction(inbox, 0);
     expect(out.empty).toBe(true);
   });
+
+  it('中止済み poll は pending を取得しない', async () => {
+    const inbox = createInstructionInbox();
+    enq(inbox, '次の接続用');
+    const controller = new AbortController();
+    controller.abort();
+    const out = await getNextInstruction(inbox, 1_000, undefined, controller.signal);
+    expect(out.empty).toBe(true);
+    expect(inbox.list('p')[0]?.status).toBe('pending');
+  });
 });
 
 describe('getNextInstruction: projectId フィルタ（動画専属モード）', () => {

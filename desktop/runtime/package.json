@@ -1,0 +1,28 @@
+{
+  "name": "harness-editor-mac-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@noble/hashes": "2.4.0",
+    "@resvg/resvg-js": "2.6.2",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "esbuild": "0.25.12",
+    "mammoth": "1.12.3",
+    "mp4box": "2.4.1",
+    "node-pty": "1.1.0",
+    "pdfjs-dist": "5.6.205",
+    "playwright-core": "1.60.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "ws": "8.21.1",
+    "vite": "6.4.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "tsx": "4.23.0",
+    "typescript": "5.9.3",
+    "chokidar": "4.0.3",
+    "zod": "4.4.3"
+  }
+}

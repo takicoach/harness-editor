@@ -1,3 +1,4 @@
+import { AssetTimingSection, useAssetTimingDisplay } from './AssetTimingSection';
 import { useState, useEffect } from 'react';
 import { cutOrderingOf } from '../../../core/cutOrder';
 import { useAudition } from '../../audio/useAudition';
@@ -31,6 +32,7 @@ interface BgmSettingsTabProps {
 /** BGM 選択時のインスペクタ本体（ファイル差替・区間・音量・フェード・波形・削除）。
  *  VideoInsertSettingsTab のミラー（イン点同期は BGM には不要なので省略）。 */
 export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVersions, installing, installErrors, bgmInstalled, dirty, onInstall, onEdit }: BgmSettingsTabProps) {
+  const timing = useAssetTimingDisplay();
   const audition = useAudition();
   const playbackStart = originalToPlayback(bgm.originalStart, state.cutRegions, cutOrderingOf(state));
   const playbackEnd = originalToPlayback(bgm.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
@@ -54,7 +56,8 @@ export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVe
   const waveformUrl = projectId !== '' && bgm.file !== ''
     ? assetUrl(projectId, assetPathFor('bgm', bgm.file), assetVersions)
     : null;
-  const waveformSamples = useWaveformSamples(waveformUrl);
+  // 読み込み中と失敗の分離（X-2(b)）。注記は failed=true のときだけ出す。
+  const { samples: waveformSamples, failed: waveformFailed } = useWaveformSamples(waveformUrl);
 
   function commitStart(): void {
     const frame = parseSecField(startStr, shownStart, fps);
@@ -83,7 +86,7 @@ export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVe
         <div className="ins-section">
           <div className="ins-label"><span>BGM 機能</span></div>
           <div className="ins-pack-cta">
-            <p>最終書き出し（remotion render）に BGM を反映するには「BGM 機能を導入」が必要です。</p>
+            <p>BGM の編集データを準備するには「BGM 機能を導入」を押してください。</p>
             <InstallCtaButton
               kind="bgm"
               label="BGM 機能を導入"
@@ -100,7 +103,7 @@ export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVe
       <div className="ins-section">
         <div className="ins-label"><span>BGM #{bgm.id}</span></div>
         <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-          {`${formatClock(frameToSec(bgm.originalStart, fps))} — ${formatClock(frameToSec(bgm.originalEnd, fps))}`}
+          {timing?.label ?? `${formatClock(frameToSec(bgm.originalStart, fps))} — ${formatClock(frameToSec(bgm.originalEnd, fps))}`}
         </div>
       </div>
 
@@ -188,9 +191,14 @@ export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVe
           width={240}
           height={48}
         />
+        {waveformFailed && (
+          <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 0' }}>
+            波形なし（音声なし／取得失敗）
+          </p>
+        )}
       </div>
 
-      <div className="ins-section">
+<AssetTimingSection>
         <div className="ins-label"><span>表示する時間（秒）</span></div>
         {!editable && (
           <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 6px' }}>
@@ -226,7 +234,7 @@ export function BgmSettingsTab({ bgm, state, fps, bgmLibrary, projectId, assetVe
             />
           </div>
         </div>
-      </div>
+      </AssetTimingSection>
 
       <div className="ins-section">
         <button className="tx-mini-btn ins-bgm-remove" onClick={() => onEdit(removeBgm(state, bgm.id))}>

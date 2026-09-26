@@ -1,6 +1,5 @@
 import { finalToPlayback, playbackToFinal, type PlaybackOverlap } from './transitionEngine';
-import type { BgmClip, ShapeSegment, TelopSegment, TitleSegment } from './types';
-import type { ImagePlayback, SePlayback, VideoInsertPlayback } from '../preview/playbackModel';
+import type { BgmClip, ImagePlayback, SePlayback, ShapeSegment, TelopSegment, TitleSegment, VideoInsertPlayback } from './types';
 
 /** 再生フレーム→最終フレーム（意図明示エイリアス）。 */
 export function collapseFrame(frame: number, overlaps: PlaybackOverlap[]): number {

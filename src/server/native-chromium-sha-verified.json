@@ -1,0 +1,44 @@
+{
+  "version": "148.0.7778.96",
+  "verifiedAt": "2026-09-12",
+  "source": "https://storage.googleapis.com/chrome-for-testing-public",
+  "artifacts": [
+    {
+      "platform": "mac-arm64",
+      "file": "chrome-mac-arm64.zip",
+      "bytes": 177411466,
+      "sha256": "fbab7ac5c63f72771a7cd79ab15ed6f198b0f9567ec927c9cf5ece3b1f08ffb1",
+      "source": "https://storage.googleapis.com/chrome-for-testing-public/148.0.7778.96/mac-arm64/chrome-mac-arm64.zip",
+      "zipCRC": "pass",
+      "executable": "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "bundleVersion": "148.0.7778.96",
+      "executableVersion": "148.0.7778.96",
+      "executableSha256": "2447c7bdea8e8ad38b52594f1ba53e18821c05445e8a07ad1cf3b0f23931d89d"
+    },
+    {
+      "platform": "mac-x64",
+      "file": "chrome-mac-x64.zip",
+      "bytes": 187779698,
+      "sha256": "9d896b8c242652fe274b5ff7029853ac4b1471086ecfe48a675552783323108a",
+      "source": "https://storage.googleapis.com/chrome-for-testing-public/148.0.7778.96/mac-x64/chrome-mac-x64.zip",
+      "zipCRC": "pass",
+      "executable": "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "bundleVersion": "148.0.7778.96",
+      "executableVersion": "148.0.7778.96",
+      "executableSha256": "efd53a32bd47d83a21c040be74714ad3ec6f254e746d439012b096ab33325c9c"
+    },
+    {
+      "platform": "win64",
+      "file": "chrome-win64.zip",
+      "bytes": 190733461,
+      "sha256": "6cd8c5f6eeff7b6515dbcd35d050f696da3f7eac4b4a209c06e3d4354c2704a6",
+      "source": "https://storage.googleapis.com/chrome-for-testing-public/148.0.7778.96/win64/chrome-win64.zip",
+      "zipCRC": "pass",
+      "executable": "chrome-win64/chrome.exe",
+      "bundleVersion": null,
+      "executableVersion": "148.0.7778.96",
+      "executableSha256": "290fa7018fda22c52ada5eddb0113baf3ebc41fd0fde6085eddb19793606c635"
+    }
+  ],
+  "scope": "Official immutable full Chrome archives. CRC and binary/plist identity verified separately; Windows execution is not established by acquisition."
+}

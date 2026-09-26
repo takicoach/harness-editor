@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { cpSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { PRISTINE_SAMPLE_PROJECT } from './helpers';
+// 旧画面（?legacy=1）のチュートリアル。新画面のチュートリアルは tests/native-tutorial.spec.ts。
 
 const FIXTURES_ROOT = resolve(import.meta.dirname, '../src/server/__fixtures__');
-const SAMPLE_DIR = resolve(FIXTURES_ROOT, 'sample-project');
 
 // エディタ操作テストはテロップ追加＋保存で fixture を書き換えるため、sample-project を
 // 他 spec と取り合わないよう専用コピーへ隔離する（learning-diff.spec と同じ作法・
@@ -14,7 +15,10 @@ let projectDir = '';
 test.beforeEach(() => {
   projectId = `tutorial-tmp-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   projectDir = resolve(FIXTURES_ROOT, projectId);
-  cpSync(SAMPLE_DIR, projectDir, { recursive: true });
+  // 複製元は pristine スナップショット（helpers.ts の PRISTINE_SAMPLE_PROJECT）。
+  // 共有 sample-project から複製すると、他 spec の git checkout/clean と重なった回に
+  // 壊れたコピーができる（実測: 開いたエディタが telopData.ts の読み込みで停止）。
+  cpSync(PRISTINE_SAMPLE_PROJECT, projectDir, { recursive: true });
 });
 
 test.afterEach(() => {
@@ -22,7 +26,7 @@ test.afterEach(() => {
 });
 
 test('チュートリアル: e2e 環境（SME_TUTORIAL=0）では自動開始しない', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?legacy=1');
   await expect(page.locator('.home-card', { hasText: 'sample-project' })).toBeVisible({ timeout: 15_000 });
   // 新規コンテキスト（localStorage 空）でもオーバーレイは出ない。
   await page.waitForTimeout(800);
@@ -30,7 +34,7 @@ test('チュートリアル: e2e 環境（SME_TUTORIAL=0）では自動開始し
 });
 
 test('チュートリアル: ホームの？から開始し、ホーム系ステップを進んで finish まで到達できる', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?legacy=1');
   await expect(page.locator('.home-card', { hasText: 'sample-project' })).toBeVisible({ timeout: 15_000 });
 
   await page.locator('.tb-tutorial-btn').click();
@@ -87,7 +91,7 @@ test('チュートリアル: ホームの？から開始し、ホーム系ステ
 });
 
 test('チュートリアル: エディタで再実行→＋追加からテロップ追加で🎉→保存で自動前進→完了', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?legacy=1');
   // 隔離コピーのプロジェクトを開く（保存まで行うため sample-project 本体は触らない）。
   await page.locator('.home-card', { hasText: projectId }).click({ timeout: 15_000 });
   await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });

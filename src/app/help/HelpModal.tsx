@@ -1,10 +1,10 @@
 /**
  * HelpModal — チュートリアル図鑑。横2ペイン（検索・カテゴリ・一覧 / 選択項目の詳細）で
- * 12項目を辞書的に閲覧できるモーダル。狭幅では1カラム・アコーディオン展開に畳む
+ * 14項目を辞書的に閲覧できるモーダル。狭幅では1カラム・アコーディオン展開に畳む
  * （CSS の media query で切替・DOM は両方持って出し分ける）。
- * 項目の正本は helpTopics.ts。ここは描画だけを担い、文言を持たない。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusTrap } from '../useFocusTrap';
 import {
   HELP_CATEGORIES,
   HELP_TOPICS,
@@ -35,13 +35,20 @@ export interface HelpModalProps {
   /** ✕ / オーバーレイクリック / Esc で閉じる。 */
   onClose: () => void;
   /** ヘッダー「▶ もう一度最初から見る」。モーダルを閉じてスポットライト型チュートリアルを最初から開始する
-   * （既存の再実行機構を App 側で呼ぶため、close と start の両方を App 側の1関数に委ねる）。 */
+   * （既存の再実行機構を App 側で呼ぶため、close と start の両方を App 側の1関数に委ねる）。
+   * `hideTutorialRestart` の間はボタン自体を出さないため呼ばれない。 */
   onRestartTutorial: () => void;
+  /**
+   * スポットライト型チュートリアルのない画面では再開ボタンを隠す。
+   * 現在、製品コードの利用箇所は無い（2026-09-25 以降、新画面でも再開ボタンを出す）。prop とテストは残している。
+   */
+  hideTutorialRestart?: boolean;
 }
 
 type CategoryFilter = HelpCategory | 'all';
 
-export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
+export function HelpModal({ onClose, onRestartTutorial, hideTutorialRestart = false }: HelpModalProps) {
+  const detailPaneRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryFilter>('all');
   const [rawSelectedId, setSelectedId] = useState<string | null>(HELP_TOPICS[0]?.id ?? null);
@@ -73,6 +80,11 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
   const selected: HelpTopic | null = index >= 0 ? (filtered[index] ?? null) : null;
   const prevId = prevTopicId(filtered, selectedId);
   const nextId = nextTopicId(filtered, selectedId);
+
+  // 縦長画像を読んだあとも、次の項目は画像の先頭から表示する。
+  useEffect(() => {
+    if (detailPaneRef.current) detailPaneRef.current.scrollTop = 0;
+  }, [selectedId]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
@@ -111,7 +123,10 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
   function renderDetail(topic: HelpTopic) {
     return (
       <>
-        <img className="help-img" src={helpImageFor(topic.id)} alt={topic.title} />
+        <a key={topic.id} className="help-image-link" href={helpImageFor(topic.id)} target="_blank" rel="noreferrer"
+          aria-label={`${topic.title}の画像を大きく表示`} title="クリックして画像を大きく表示">
+          <img className="help-img" src={helpImageFor(topic.id)} alt={topic.title} />
+        </a>
         <div className="help-cap-row">
           <span className="help-cap">{topic.title}</span>
           <span className="help-detail-chip">{topic.category}</span>
@@ -142,9 +157,13 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
     );
   }
 
+  // aria-modal を名乗る以上、Tab はこの中だけを巡回させる（サイクル 3 残 Minor）。
+  const helpDialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(helpDialogRef);
   return (
     <div className="help-overlay" onClick={onClose}>
       <div
+        ref={helpDialogRef}
         className="help-dialog"
         role="dialog"
         aria-modal="true"
@@ -155,9 +174,11 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
         <div className="help-head">
           <span className="help-title">📖 チュートリアル図鑑</span>
           <span className="help-count">全{HELP_TOPICS.length}項目</span>
-          <button type="button" className="help-replay-btn" onClick={onRestartTutorial}>
-            ▶ もう一度最初から見る
-          </button>
+          {!hideTutorialRestart && (
+            <button type="button" className="help-replay-btn" onClick={onRestartTutorial}>
+              ▶ もう一度最初から見る
+            </button>
+          )}
           <button type="button" className="help-close" aria-label="閉じる" onClick={onClose}>
             ✕
           </button>
@@ -221,7 +242,7 @@ export function HelpModal({ onClose, onRestartTutorial }: HelpModalProps) {
               ))}
             </div>
           </div>
-          <div className="help-detail-pane">{selected !== null && renderDetail(selected)}</div>
+          <div ref={detailPaneRef} className="help-detail-pane">{selected !== null && renderDetail(selected)}</div>
         </div>
       </div>
     </div>

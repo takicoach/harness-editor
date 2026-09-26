@@ -6,7 +6,7 @@
  */
 export type AiToolId = 'claude' | 'codex';
 
-/** 既定は claude（利用者の体験を変えない）。 */
+/** 既定は claude（受講生の体験を変えない）。 */
 export const DEFAULT_AI_TOOL: AiToolId = 'claude';
 
 /**

@@ -46,3 +46,12 @@ _breakdown/*.html
 # パッケージマネージャは npm（package-lock.json が正）。pnpm の生成物は追跡しない
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# 新エディターのテストが作る一時物
+src/server/__fixtures__/e2e-create-project-tmp-*/
+src/server/__fixtures__/conv-tmp-*/
+src/server/__fixtures__/*-tmp-*/
+src/server/__fixtures__/bulk-e2e-*/
+.sme-inbox.json.lock
+tests/.fixture-snapshot/
+.aaa-shots/

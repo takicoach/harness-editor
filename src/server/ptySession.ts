@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { dirname, join, parse, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveToolForPty, checkToolVersion } from './aiToolBin';
+import { buildPtyPath } from './ptyPath';
 import { AI_TOOLS, DEFAULT_AI_TOOL, type AiToolId } from './aiTools';
 import { createOscColorResponder } from './oscColorReply';
 import { terminalColorsFor } from '../shared/terminalColors';
@@ -162,6 +163,59 @@ export function createPtySessionManager() {
   let switchChain: Promise<unknown> = Promise.resolve();
   /** ptyApi が登録する writer 失効関数（循環 import を避けるため注入で受ける）。 */
   let invalidateWriter: (() => void) | null = null;
+  /**
+   * X-1 対策: 子プロセスが死んで fd が閉じたが、node-pty の onExit（非同期）が
+   * まだ発火していない「窓」を表す旗。`pty !== null` は「onExit 未確定」を意味する
+   * だけで「生きている」の証明にはならない — resize/write は書き込み時点で
+   * 実際に失敗しうる前提で扱う（onExit 確定を待って判定しない）。
+   * 新しい世代を spawn するたびに false へ戻す（下記 `pty = ptySpawn(...)` 直後）。
+   */
+  let ptyDead = false;
+  /**
+   * 「この世代の終了を既に確定・通知した」ラッチ。onExit（本物の終了イベント）と
+   * markPtyDead（fd が死んでいると分かった瞬間）のどちらが先に来ても、
+   * 終了確定と exitFns の発火は世代あたり1回だけにする。
+   */
+  let finalizedGen = -1;
+  /**
+   * 終了を確定して1回だけ通知する。pty/tool/sid を落とし state() を 'exited' にする。
+   * 二重発火防止は finalizedGen ラッチが担う（onExit と markPtyDead の競合）。
+   */
+  function finalizeExit(code: number): void {
+    if (finalizedGen === generation) return;
+    finalizedGen = generation;
+    exitCode = code;
+    pty = null;
+    tool = null;
+    sid = null;
+    liveDataSub?.dispose();
+    liveDataSub = null;
+    for (const fn of exitFns) fn(code);
+  }
+  /**
+   * 死んだ pty の fd への resize/write（node-pty の native ioctl/write 呼び出し）は
+   * 同期的に `ioctl(2) failed, EBADF` 等を throw しうる（実測: macOS で子プロセスが
+   * 自然終了してから onExit が確定するまでの数ミリ秒の窓に resize が飛ぶと再現する）。
+   * ここで一度でも捕まえたら以後の呼び出しは無条件で no-op にする（同じ fd へ何度も
+   * 突っ込んで同じ例外を繰り返させない）。
+   *
+   * さらに、no-op にするだけでは **state() が 'running' のまま**になり、
+   * 「画面上は動いているのに入力が無言で捨てられる」状態を作ってしまう
+   * （前ラウンドのレビュー minor 指摘。実測でも窓を捉えた瞬間の state() は 5 回中 4 回
+   * 'running' だった）。fd が死んでいると分かった時点でセッションは終了しているので、
+   * ここで終了を確定して UI にも1回だけ通知する（本物の onExit が後から届いても
+   * finalizedGen ラッチで二重発火しない）。終了コードは OS から取れないため -1
+   * （クライアントの既定と同じ「不明」値）を使う。
+   */
+  function markPtyDead(op: 'write' | 'resize', err: unknown): void {
+    if (ptyDead) return; // 既知の死。二重ログしない。
+    ptyDead = true;
+    console.error(
+      `[sme] pty ${op} が失敗しました（プロセスは既に終了している可能性）。継続します:`,
+      err instanceof Error ? err.message : err,
+    );
+    finalizeExit(-1);
+  }
 
   /** SIGTERM → 猶予 → 強制 kill。編集途中の強制終了を既定にしない。 */
   const GRACEFUL_EXIT_MS = 3000;
@@ -231,7 +285,7 @@ export function createPtySessionManager() {
         return { ok: false, error: `プロジェクト置き場が見つかりません: ${opts.projectRoot}` };
       }
       const adapter = AI_TOOLS[wanted];
-      const loc = resolveToolForPty(adapter, opts.editorDir, opts.env);
+      const loc = await resolveToolForPty(adapter, opts.editorDir, opts.env);
       if (loc === null) {
         const hint = adapter.installPackage === null
           ? `ターミナルで npm i -g @openai/codex を実行してください。`
@@ -239,8 +293,8 @@ export function createPtySessionManager() {
         return { ok: false, error: `${adapter.binName} が見つかりません。${hint}`, code: 'not-found' };
       }
       if (loc.source !== 'test-override') {
-        const v = checkToolVersion(adapter, loc);
-        if (!v.ok) {
+        const v = await checkToolVersion(adapter, loc);
+        if (v.ok === false) {
           return {
             ok: false,
             code: 'too-old',
@@ -287,16 +341,34 @@ export function createPtySessionManager() {
               actualTool: tool ?? DEFAULT_AI_TOOL,
             };
       }
+      // C-1 派生バグ（AAA G-1）: ring はここまで switchTool() だけがクリアしていた。
+      // しかし ensure() がここまで到達する経路は「まっさらな初回起動」だけでなく
+      // 「pty が自然終了した後の再起動」（AiTerminal.tsx の exited → restart ボタン）
+      // も通る。後者でクリアしないと、新セッションの scrollback に旧セッション
+      // （直前まで動いていた別の会話）の出力が混ざって再生される。switchTool の
+      // 「旧ツールの履歴を新しい端末に再生しない」という設計判断は、そもそも
+      // 「新しい pty を spawn するたび」に成立すべき不変条件であり、経路（切替 or
+      // 自然終了後の再起動）で区別する理由がない。ここで一元的にクリアする。
+      ring = '';
       theme = opts.theme ?? 'dark';
       const prep = adapter.prepare?.({ editorDir: opts.editorDir, env: opts.env });
       prepareNotes = prep?.notes ?? [];
       const { env, removed } = sanitizeEnv(opts.env, adapter.billingEnvKeys);
       removedEnvKeys = removed;
-      const spawnEnv = { ...env, ...(prep?.env ?? {}) };
+      const spawnEnv = {
+        ...env,
+        ...(prep?.env ?? {}),
+        PATH: buildPtyPath(env.PATH ?? env.Path, loc.file, process.execPath),
+      };
+      // Windows は `Path` と `PATH` が別キーで届くことがある。片方だけ書き戻すと
+      // node-pty へ渡る環境が食い違う（実際の子プロセスが見るのは大文字小文字を
+      // OS が同一視する片方のみとは限らない）ため、両方を揃える。
+      if (process.platform === 'win32') (spawnEnv as Record<string, string>).Path = spawnEnv.PATH;
       const args =
         loc.source === 'test-override'
           ? loc.args
           : [...loc.args, ...adapter.launchArgs(opts.port ?? 2109, theme)];
+      ptyDead = false;
       try {
         pty = ptySpawn(loc.file, args, {
           name: 'xterm-256color',
@@ -352,24 +424,40 @@ export function createPtySessionManager() {
         exitSub.dispose();
         if (liveDataSub === dataSub) liveDataSub = null;
         if (isStale()) return; // 既に新セッションが立っている → pty/exitCode を触らない
-        exitCode = code;
-        pty = null;
-        tool = null;
-        sid = null;
-        for (const fn of exitFns) fn(code);
+        // markPtyDead が先に終了を確定していれば finalizeExit は no-op（二重発火しない）。
+        finalizeExit(code);
       });
       liveDataSub = dataSub;
       return { ok: true };
     },
     write(data: string): void {
-      pty?.write(data);
+      if (pty === null || ptyDead) return;
+      try {
+        pty.write(data);
+      } catch (err) {
+        markPtyDead('write', err);
+      }
     },
     resize(cols: number, rows: number): void {
-      if (cols > 0 && rows > 0 && cols <= 500 && rows <= 300) pty?.resize(cols, rows);
+      if (pty === null || ptyDead) return;
+      if (!(cols > 0 && rows > 0 && cols <= 500 && rows <= 300)) return;
+      try {
+        pty.resize(cols, rows);
+      } catch (err) {
+        markPtyDead('resize', err);
+      }
     },
     startWaiting(): { ok: boolean; error?: string } {
-      if (pty === null || tool === null) return { ok: false, error: 'AI が起動していません' };
-      pty.write(AI_TOOLS[tool].waitingPrompt + '\r');
+      if (pty === null || tool === null || ptyDead) return { ok: false, error: 'AI が起動していません' };
+      try {
+        // Mark the prompt as a paste, then submit outside it. A plain text + CR
+        // burst is treated by Codex's paste detection as text including Enter,
+        // leaving the waiting prompt unsent (actual Codex/Claude PTY verified).
+        pty.write('\x1b[200~' + AI_TOOLS[tool].waitingPrompt + '\x1b[201~\r');
+      } catch (err) {
+        markPtyDead('write', err);
+        return { ok: false, error: 'AI が起動していません' };
+      }
       return { ok: true };
     },
     onData(fn: (c: string) => void): () => void {
@@ -437,6 +525,9 @@ export function createPtySessionManager() {
           invalidateWriter?.();
           await stopGracefully();
           // 旧ツールの表示履歴を新しい端末に再生しない（確認文言「会話は残りません」と一致させる）。
+          // ensure() 内でも spawn 直前に同じクリアを行うが、ここは ensure() が
+          // spawn まで到達せず失敗した場合（tool-not-found 等）にも「会話は残りません」の
+          // 約束を守るためのもの。両者は経路が違うため重複ではない。
           ring = '';
           const r = await api.ensure(opts);
           if (!r.ok) return { ok: false, error: r.error, code: r.code === 'tool-mismatch' ? undefined : r.code };

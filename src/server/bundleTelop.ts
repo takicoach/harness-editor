@@ -1,45 +1,14 @@
-import { build } from 'esbuild';
-import { join } from 'node:path';
+import { compileSequenceComponent } from './sequence/components';
 
 const TELOP_DIR = 'テロップテンプレート';
 
-// エディタ本体と同一インスタンスを共有する必要があるパッケージだけ外部化する。
-// ブラウザ側は index.html の import map で解決する。@remotion/* ヘルパ
-// （@remotion/shapes 等）は外部化せずバンドルへ取り込む。取り込んでも内部の
-// `remotion` 参照は外部化されるため、エディタ本体と同一インスタンスを共有する。
-export const TELOP_EXTERNALS = [
-  'react',
-  'react-dom',
-  'react/jsx-runtime',
-  'react/jsx-dev-runtime',
-  'remotion',
-];
-
-/**
- * 対象プロジェクトの Telop.tsx を、ローカル依存だけ取り込んだ ESM 1 ファイルへ
- * バンドルして返す。react / remotion は外部化したまま。
- */
-export async function bundleTelopComponent(dir: string): Promise<string> {
-  const entry = join(dir, 'src', TELOP_DIR, 'Telop.tsx');
-  const result = await build({
-    entryPoints: [entry],
-    bundle: true,
-    write: false,
-    format: 'esm',
-    platform: 'browser',
-    target: 'es2022',
-    jsx: 'automatic',
-    external: TELOP_EXTERNALS,
-    logLevel: 'silent',
-  }).catch((err: unknown) => {
-    // esbuild は構文エラー・import 解決失敗などで throw する。非エンジニアが
-    // どのファイルを直せばよいか分かるよう、日本語の文脈を付けて投げ直す。
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`テロップ部品 Telop.tsx のビルドに失敗しました: ${message}`);
-  });
-  const file = result.outputFiles[0];
-  if (!file) {
-    throw new Error('テロップ部品のバンドル結果が空です');
+/** Read-only swatch compilation through the same audited frame API as native export. */
+export async function bundleNativeTelopComponent(dir: string, projectId: string): Promise<string> {
+  const staticFileBase = `/api/asset?${new URLSearchParams({ id: projectId })}&path=`;
+  try {
+    return new TextDecoder().decode(await compileSequenceComponent(dir, `src/${TELOP_DIR}/Telop.tsx`, 'Telop', '', staticFileBase));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`スタイル見本を作成できませんでした。名前からスタイルを選択できます。\n${detail.replaceAll('旧部品を変更せず移行を中止しました', 'この見本では利用できません').replaceAll('移行できません', '見本では利用できません')}`);
   }
-  return file.text;
 }

@@ -287,6 +287,8 @@ function contrast(fg: Rgb, bg: Rgb): number {
 
 /** 面（背景）と文字色のコントラストを見るボタン。hover は自分では color を持たず base から継ぐ。 */
 const CONTRAST_CASES: Array<{ label: string; selector: string; colorFrom: string }> = [
+  { label: '主操作', selector: '.btn-primary', colorFrom: '.btn-primary' },
+  { label: '主操作hover', selector: '.btn-primary:hover:not(:disabled)', colorFrom: '.btn-primary' },
   { label: '確定（警告色）', selector: '.hjc-confirm', colorFrom: '.hjc-confirm' },
   { label: '確定（警告色）hover', selector: '.hjc-confirm:hover:not(:disabled)', colorFrom: '.hjc-confirm' },
   { label: '完全に削除（赤の塗り）', selector: '.btn-danger-solid', colorFrom: '.btn-danger-solid' },
@@ -297,7 +299,7 @@ const CONTRAST_CASES: Array<{ label: string; selector: string; colorFrom: string
   },
 ];
 
-describe('確定ボタンの文字と面のコントラスト（両テーマで AA 4.5:1）', () => {
+describe('塗りボタンの文字と面のコントラスト（両テーマで AA 4.5:1）', () => {
   for (const theme of [
     { name: 'ダーク', tokens: DARK_TOKENS },
     { name: 'ライト', tokens: LIGHT_TOKENS },

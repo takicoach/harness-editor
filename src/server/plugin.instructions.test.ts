@@ -12,12 +12,12 @@ import { join } from 'node:path';
 const pluginSrc = readFileSync(join(import.meta.dirname, 'plugin.ts'), 'utf8');
 
 describe('plugin.ts: 起動時の受け箱永続化アタッチ', () => {
-  it('configureServer で .sme-inbox.json に対して attachPersistence を呼ぶ', () => {
-    expect(pluginSrc).toContain("instructionInbox.attachPersistence(join(root, '.sme-inbox.json')");
+  it('永続化をHTTPサーバのライフサイクルへ接続する', () => {
+    expect(pluginSrc).toContain("wireInboxPersistence(server.httpServer ?? null, instructionInbox, join(root, '.sme-inbox.json')");
   });
 
   it('resolveProjectDir で projectDir を再解決する deps を渡す', () => {
-    const idx = pluginSrc.indexOf('instructionInbox.attachPersistence(');
+    const idx = pluginSrc.indexOf('wireInboxPersistence(server.httpServer');
     const block = pluginSrc.slice(idx, idx + 300);
     expect(block).toContain('resolveProjectDir:');
     expect(block).toContain('resolveProjectDir(root, projectId)');
@@ -27,12 +27,11 @@ describe('plugin.ts: 起動時の受け箱永続化アタッチ', () => {
     expect(pluginSrc).toContain('受け箱の永続化を無効化しました（同じフォルダで別のエディタが起動中です）');
   });
 
-  it('サーバ停止時（既存 killAll と同じ並び）に releasePersistence を呼ぶ', () => {
+  it('サーバ停止時に既存のジョブ終了処理を保つ', () => {
     const closeIdx = pluginSrc.indexOf("server.httpServer?.on('close'");
     const closeBlock = pluginSrc.slice(closeIdx, closeIdx + 500);
     // ジョブの kill は jobRegistries.ts の正本 1 箇所から導出する（再レビュー M-4）。
     expect(closeBlock).toContain('killAllProjectJobs()');
-    expect(closeBlock).toContain('instructionInbox.releasePersistence()');
   });
 });
 

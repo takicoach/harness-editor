@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleAiApi, resolveActualPort, apiKeyDetected, smeAi } from './aiPlugin';
+import * as aiToolBin from './aiToolBin';
 import { ptySessions } from './ptySession';
 import { claudeInstallJob } from './claudeInstallJob';
 import { handlePtyUpgrade, ptyTokens } from './ptyApi';
@@ -136,6 +137,42 @@ describe('GET /api/ai/tools', () => {
     const { res, captured } = makeRes();
     await handleAiApi(makeReq('GET', '/api/ai/tools'), res, ctx());
     expect((captured.body as { current: string | null }).current).toBe('codex');
+  });
+
+  it('採用パス・探索段・4 状態を返す', async () => {
+    const { res, captured } = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/tools'), res, ctx());
+    const body = captured.body as { tools: Record<string, unknown>[] };
+    for (const tool of body.tools) {
+      expect(Object.keys(tool).sort()).toEqual(
+        ['id', 'installable', 'installed', 'label', 'path', 'source', 'status', 'versionOk'],
+      );
+      expect(['ready', 'outdated', 'missing', 'unverified']).toContain(tool.status);
+      if (tool.installed) expect(typeof tool.path).toBe('string');
+      else expect(tool.path).toBeNull();
+    }
+  });
+
+  it('I1: recheck=1 のときだけ findTool/checkToolVersion に bypassCache:true を渡す', async () => {
+    const loc = { file: '/bin/claude', args: [], path: '/bin/claude', source: 'path' as const };
+    const findSpy = vi.spyOn(aiToolBin, 'findTool').mockResolvedValue(loc);
+    const verSpy = vi.spyOn(aiToolBin, 'checkToolVersion').mockResolvedValue({ ok: true });
+    const { res } = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/tools?recheck=1'), res, ctx());
+    expect(findSpy.mock.calls.length).toBeGreaterThan(0);
+    for (const call of findSpy.mock.calls) expect(call[1]?.bypassCache).toBe(true);
+    for (const call of verSpy.mock.calls) expect(call[2]?.bypassCache).toBe(true);
+  });
+
+  it('I1: recheck 無しでは bypassCache を渡さない', async () => {
+    const loc = { file: '/bin/claude', args: [], path: '/bin/claude', source: 'path' as const };
+    const findSpy = vi.spyOn(aiToolBin, 'findTool').mockResolvedValue(loc);
+    const verSpy = vi.spyOn(aiToolBin, 'checkToolVersion').mockResolvedValue({ ok: true });
+    const { res } = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/tools'), res, ctx());
+    expect(findSpy.mock.calls.length).toBeGreaterThan(0);
+    for (const call of findSpy.mock.calls) expect(call[1]?.bypassCache).not.toBe(true);
+    for (const call of verSpy.mock.calls) expect(call[2]?.bypassCache).not.toBe(true);
   });
 });
 

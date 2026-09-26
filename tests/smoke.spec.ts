@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { execSync } from 'node:child_process';
-import { readFileSync, existsSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, writeFileSync, cpSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { createTempProject, PRISTINE_SAMPLE_PROJECT, removeTempProject } from './helpers';
 
 /** ＋追加メニューを開いて項目をクリックする（UI リフレッシュでメニュー集約されたため）。 */
 async function clickAddMenuItem(page: Page, selector: string): Promise<void> {
@@ -15,6 +16,7 @@ async function clickAddMenuItem(page: Page, selector: string): Promise<void> {
 // git clean -fdx <dir> で untracked な新規ファイル（cutData.ts 等）と
 // gitignore 済み sidecar（cut-baseline.json / cutLearning.json）を削除する。
 const FIXTURE_DIR = resolve(import.meta.dirname, '../src/server/__fixtures__/sample-project');
+const FIXTURES_ROOT = resolve(import.meta.dirname, '../src/server/__fixtures__');
 
 test.afterEach(() => {
   try {
@@ -180,147 +182,170 @@ test('テロップを選択し文字を直し、単語をカットし、Undo・�
   expect(pageErrors).toEqual([]);
 });
 
-test('cutData.ts 不在プロジェクトで変換バナーが出て、変換すると消える', async ({ page }) => {
-  // fixture に cutData.ts が存在する場合は削除してから開く（afterEach の git checkout -- で復元）。
-  const cutDataPath = resolve(FIXTURE_DIR, 'src', 'cutData.ts');
-  try { unlinkSync(cutDataPath); } catch { /* 不在なら無視 */ }
+// 変換バナー系4件は cutData.ts を生 fs で unlink/生成し、afterEach で
+// git checkout -- / git clean -fdx により FIXTURE_DIR（sample-project）を巻き戻す。
+//
+// 根本原因（実測・フルスイート時のみ再現）: webServer は全 worker で単一プロセス共有であり、
+// server 側の watchProject() は開いているプロジェクトの cutData.ts を chokidar で監視して
+// 「外部更新」を検知する。この4テストが sample-project 上で行う生 unlink / git checkout /
+// git clean はどれも selfWrite 経由ではない外部変更として watchProject に見えるため、
+// default project は複数 worker が異なる spec ファイルを並列実行しており、その瞬間に
+// 別の worker が同じ sample-project を開いていると（render-button.spec.ts の保存フロー、
+// timeline-speed-stretch.spec.ts の .tl-kept-segment 読み取り等）、無関係なそのテストの
+// 足元で cutData.ts が消えたり戻ったりし、外部更新の検知・再読込に巻き込まれて落ちる。
+// フルスイートでは「どの3件が落ちるか」が実行順で変わる（実測: 単独実行では100 passed、
+// production 側では代わりに本 describe の最後のテストが落ちた）のはこの共有可変状態の証拠。
+//
+// 対策: この4テストは共有 sample-project を一切 mutate せず、beforeEach で
+// tests/learning-diff.spec.ts と同型の使い捨てコピー（`conv-tmp-*`、.gitignore 済み）へ
+// 隔離する。他 spec が同時に sample-project を開いていても、この4テストの cutData.ts
+// 増減がそちらの watchProject に見えることは無くなる。
+test.describe('変換バナー（cutData.ts 不在系・専用フィクスチャ隔離）', () => {
+  let convId = '';
+  let convDir = '';
 
-  const pageErrors: string[] = [];
-  page.on('pageerror', (err) => {
-    const msg = String(err);
-    if (msg.includes('MediaPlaybackError')) return;
-    pageErrors.push(msg);
+  test.beforeEach(() => {
+    convId = `conv-tmp-${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    convDir = resolve(FIXTURES_ROOT, convId);
+    // 複製元は pristine スナップショット（helpers.ts の PRISTINE_SAMPLE_PROJECT）。
+    // 共有 sample-project から複製すると、他 spec の git checkout/clean と重なった回に
+    // 壊れたコピーができる（実測: 開いたエディタが telopData.ts の読み込みで停止）。
+    cpSync(PRISTINE_SAMPLE_PROJECT, convDir, { recursive: true });
+    // 複製直後に cutData.ts を削除して「不在プロジェクト」の初期状態にする。
+    try { unlinkSync(resolve(convDir, 'src', 'cutData.ts')); } catch { /* 既に無い */ }
   });
 
-  await page.goto('/');
-  const item = page.locator('.home-card', { hasText: 'sample-project' });
-  await expect(item).toBeVisible({ timeout: 15_000 });
-  await item.click();
-
-  // cutData.ts を削除済みのためバナーが出る。
-  // プレビューマウントに依存しないことを確認するため、ここで先にアサートする。
-  const banner = page.locator('.conv-banner');
-  await expect(banner).toBeVisible();
-
-  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
-
-  // バナー表示中もプレビュー領域が潰れていないことを確認する（グリッド退行の検知）。
-  const pvStageBox = await page.locator('.pv-stage').boundingBox();
-  expect(pvStageBox).not.toBeNull();
-  expect(pvStageBox!.height).toBeGreaterThan(250);
-
-  // 変換を実行 → 再読込後にバナーが消える。
-  await page.locator('.conv-banner-btn').click();
-  await expect(banner).toHaveCount(0, { timeout: 15_000 });
-  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
-
-  expect(pageErrors).toEqual([]);
-});
-
-test('変換が失敗するとエラーが表示され、ボタンが再び押せる', async ({ page }) => {
-  // fixture に cutData.ts が存在する場合は削除してから開く（afterEach の git checkout -- で復元）。
-  const cutDataPath = resolve(FIXTURE_DIR, 'src', 'cutData.ts');
-  try { unlinkSync(cutDataPath); } catch { /* 不在なら無視 */ }
-
-  // 変換 API を遮断して失敗パスを再現する。
-  await page.route('**/api/convert-burned-in*', (r) => r.abort());
-
-  await page.goto('/');
-  const item = page.locator('.home-card', { hasText: 'sample-project' });
-  await expect(item).toBeVisible({ timeout: 15_000 });
-  await item.click();
-
-  const banner = page.locator('.conv-banner');
-  await expect(banner).toBeVisible({ timeout: 20_000 });
-
-  await page.locator('.conv-banner-btn').click();
-  await expect(page.locator('.conv-banner-error')).toBeVisible();
-  await expect(page.locator('.conv-banner-btn')).toBeEnabled();
-});
-
-test('変換中に別プロジェクトへ切り替えると、遅れて届いたエラーは表示されない', async ({ page }) => {
-  // fixture に cutData.ts が存在する場合は削除してから開く（afterEach の git checkout -- で復元）。
-  const cutDataPath = resolve(FIXTURE_DIR, 'src', 'cutData.ts');
-  try { unlinkSync(cutDataPath); } catch { /* 不在なら無視 */ }
-
-  // 変換 API を gate で保留し、プロジェクト切替の完了後に失敗を着地させる
-  // （固定 sleep だと遅いマシンで着地が切替より先になり、競合を再現できないまま緑になる）。
-  let releaseConvert!: () => void;
-  const convertGate = new Promise<void>((r) => { releaseConvert = r; });
-  await page.route('**/api/convert-burned-in*', async (r) => {
-    await convertGate;
-    await r.abort();
+  test.afterEach(() => {
+    rmSync(convDir, { recursive: true, force: true });
   });
 
-  await page.goto('/');
-  const sample = page.locator('.home-card', { hasText: 'sample-project' });
-  await expect(sample).toBeVisible({ timeout: 15_000 });
-  await sample.click();
+  test('cutData.ts 不在プロジェクトで変換バナーが出て、変換すると消える', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (err) => {
+      const msg = String(err);
+      if (msg.includes('MediaPlaybackError')) return;
+      pageErrors.push(msg);
+    });
 
-  const banner = page.locator('.conv-banner');
-  await expect(banner).toBeVisible({ timeout: 20_000 });
-  const convertFailed = page.waitForEvent('requestfailed', {
-    predicate: (req) => req.url().includes('/api/convert-burned-in'),
-    timeout: 15_000,
-  });
-  await page.locator('.conv-banner-btn').click();
+    await page.goto('/');
+    const item = page.locator('.home-card', { hasText: convId });
+    await expect(item).toBeVisible({ timeout: 15_000 });
+    await item.click();
 
-  // 別プロジェクトへの切替完了を確認してからエラーを着地させる
-  // （misaligned-project も cutData 無し＝バナーが出る）。
-  // 編集中の切替はサイドバー（.fb-item）経由（ホームはサイドバー非表示だが、ここはエディタ表示中）。
-  const misaligned = page.locator('.fb-item', { hasText: 'misaligned-project' });
-  await misaligned.click();
-  await expect(misaligned).toHaveClass(/active/, { timeout: 20_000 });
-  releaseConvert();
-  await convertFailed;
+    // cutData.ts を削除済みのためバナーが出る。
+    // プレビューマウントに依存しないことを確認するため、ここで先にアサートする。
+    const banner = page.locator('.conv-banner');
+    await expect(banner).toBeVisible();
 
-  // エラー着地後も、切替先のバナーには前プロジェクトのエラーが出ない。
-  await expect(banner).toBeVisible({ timeout: 20_000 });
-  await page.waitForTimeout(300);
-  await expect(page.locator('.conv-banner-error')).toHaveCount(0);
-});
+    await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
 
-test('変換中に別プロジェクトへ切り替えると、変換成功後も切替先に留まる', async ({ page }) => {
-  // fixture に cutData.ts が存在する場合は削除してから開く（afterEach の git checkout -- で復元）。
-  const cutDataPath = resolve(FIXTURE_DIR, 'src', 'cutData.ts');
-  try { unlinkSync(cutDataPath); } catch { /* 不在なら無視 */ }
+    // バナー表示中もプレビュー領域が潰れていないことを確認する（グリッド退行の検知）。
+    const pvStageBox = await page.locator('.pv-stage').boundingBox();
+    expect(pvStageBox).not.toBeNull();
+    expect(pvStageBox!.height).toBeGreaterThan(250);
 
-  // 変換 API を gate で保留し、プロジェクト切替の完了後に成功を着地させる。
-  let releaseConvert!: () => void;
-  const convertGate = new Promise<void>((r) => { releaseConvert = r; });
-  await page.route('**/api/convert-burned-in*', async (r) => {
-    await convertGate;
-    await r.continue();
+    // 変換を実行 → 再読込後にバナーが消える。
+    await page.locator('.conv-banner-btn').click();
+    await expect(banner).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+
+    expect(pageErrors).toEqual([]);
   });
 
-  await page.goto('/');
-  const sample = page.locator('.home-card', { hasText: 'sample-project' });
-  await expect(sample).toBeVisible({ timeout: 15_000 });
-  await sample.click();
+  test('変換が失敗するとエラーが表示され、ボタンが再び押せる', async ({ page }) => {
+    // 変換 API を遮断して失敗パスを再現する。
+    await page.route('**/api/convert-burned-in*', (r) => r.abort());
 
-  const banner = page.locator('.conv-banner');
-  await expect(banner).toBeVisible({ timeout: 20_000 });
-  const convertDone = page.waitForResponse(
-    (res) => res.url().includes('/api/convert-burned-in'),
-    { timeout: 15_000 },
-  );
-  await page.locator('.conv-banner-btn').click();
+    await page.goto('/');
+    const item = page.locator('.home-card', { hasText: convId });
+    await expect(item).toBeVisible({ timeout: 15_000 });
+    await item.click();
 
-  // 別プロジェクトへの切替完了を確認してから成功を着地させる。
-  // 編集中の切替はサイドバー（.fb-item）経由（ホームはサイドバー非表示だが、ここはエディタ表示中）。
-  const misaligned = page.locator('.fb-item', { hasText: 'misaligned-project' });
-  await misaligned.click();
-  await expect(misaligned).toHaveClass(/active/, { timeout: 20_000 });
-  releaseConvert();
-  const convertRes = await convertDone;
-  expect(convertRes.ok()).toBe(true);
+    const banner = page.locator('.conv-banner');
+    await expect(banner).toBeVisible({ timeout: 20_000 });
 
-  // 変換自体は成功している（プロジェクト直下に cutData.ts が生成された）ことを固定した上で、
-  // 成功が着地しても前プロジェクトへ勝手に引き戻されないことを確認する。
-  await expect.poll(() => existsSync(resolve(FIXTURE_DIR, 'cutData.ts')), { timeout: 10_000 }).toBe(true);
-  await page.waitForTimeout(300);
-  await expect(misaligned).toHaveClass(/active/);
-  await expect(page.locator('.fb-item', { hasText: 'sample-project' })).not.toHaveClass(/active/);
+    await page.locator('.conv-banner-btn').click();
+    await expect(page.locator('.conv-banner-error')).toBeVisible();
+    await expect(page.locator('.conv-banner-btn')).toBeEnabled();
+  });
+
+  test('変換中に別プロジェクトへ切り替えると、遅れて届いたエラーは表示されない', async ({ page }) => {
+    // 変換 API を gate で保留し、プロジェクト切替の完了後に失敗を着地させる
+    // （固定 sleep だと遅いマシンで着地が切替より先になり、競合を再現できないまま緑になる）。
+    let releaseConvert!: () => void;
+    const convertGate = new Promise<void>((r) => { releaseConvert = r; });
+    await page.route('**/api/convert-burned-in*', async (r) => {
+      await convertGate;
+      await r.abort();
+    });
+
+    await page.goto('/');
+    const sample = page.locator('.home-card', { hasText: convId });
+    await expect(sample).toBeVisible({ timeout: 15_000 });
+    await sample.click();
+
+    const banner = page.locator('.conv-banner');
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    const convertFailed = page.waitForEvent('requestfailed', {
+      predicate: (req) => req.url().includes('/api/convert-burned-in'),
+      timeout: 15_000,
+    });
+    await page.locator('.conv-banner-btn').click();
+
+    // 別プロジェクトへの切替完了を確認してからエラーを着地させる
+    // （misaligned-project も cutData 無し＝バナーが出る。こちらは静的フィクスチャで
+    // どのテストも書き換えないため共有のままで安全）。
+    // 編集中の切替はサイドバー（.fb-item）経由（ホームはサイドバー非表示だが、ここはエディタ表示中）。
+    const misaligned = page.locator('.fb-item', { hasText: 'misaligned-project' });
+    await misaligned.click();
+    await expect(misaligned).toHaveClass(/active/, { timeout: 20_000 });
+    releaseConvert();
+    await convertFailed;
+
+    // エラー着地後も、切替先のバナーには前プロジェクトのエラーが出ない。
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(300);
+    await expect(page.locator('.conv-banner-error')).toHaveCount(0);
+  });
+
+  test('変換中に別プロジェクトへ切り替えると、変換成功後も切替先に留まる', async ({ page }) => {
+    // 変換 API を gate で保留し、プロジェクト切替の完了後に成功を着地させる。
+    let releaseConvert!: () => void;
+    const convertGate = new Promise<void>((r) => { releaseConvert = r; });
+    await page.route('**/api/convert-burned-in*', async (r) => {
+      await convertGate;
+      await r.continue();
+    });
+
+    await page.goto('/');
+    const sample = page.locator('.home-card', { hasText: convId });
+    await expect(sample).toBeVisible({ timeout: 15_000 });
+    await sample.click();
+
+    const banner = page.locator('.conv-banner');
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    const convertDone = page.waitForResponse(
+      (res) => res.url().includes('/api/convert-burned-in'),
+      { timeout: 15_000 },
+    );
+    await page.locator('.conv-banner-btn').click();
+
+    // 別プロジェクトへの切替完了を確認してから成功を着地させる。
+    // 編集中の切替はサイドバー（.fb-item）経由（ホームはサイドバー非表示だが、ここはエディタ表示中）。
+    const misaligned = page.locator('.fb-item', { hasText: 'misaligned-project' });
+    await misaligned.click();
+    await expect(misaligned).toHaveClass(/active/, { timeout: 20_000 });
+    releaseConvert();
+    const convertRes = await convertDone;
+    expect(convertRes.ok()).toBe(true);
+
+    // 変換自体は成功している（プロジェクト直下に cutData.ts が生成された）ことを固定した上で、
+    // 成功が着地しても前プロジェクトへ勝手に引き戻されないことを確認する。
+    await expect.poll(() => existsSync(resolve(convDir, 'cutData.ts')), { timeout: 10_000 }).toBe(true);
+    await page.waitForTimeout(300);
+    await expect(misaligned).toHaveClass(/active/);
+    await expect(page.locator('.fb-item', { hasText: convId })).not.toHaveClass(/active/);
+  });
 });
 
 test('テロップを選択するとプレビューに操作ボックスが出て、ドラッグできる', async ({ page }) => {
@@ -540,27 +565,41 @@ test('外部で telopData.ts を書き換えると外部更新バナーが出て
   expect(pageErrors).toEqual([]);
 });
 
+/*
+ * このテストは 2.5 秒のあいだ「外部更新バナーが出ないこと」を見る。共有フィクスチャ
+ * sample-project を開いていると、**別 worker の afterEach**（heavy-job-confirm /
+ * motion / per-segment-* / split-newline / 本ファイルの `git checkout -- && git clean -fdx`）
+ * がその窓に入った瞬間、watchProject が sample-project/src/cutData.ts の変更を検知して
+ * バナーを出す（実測: サーバログに `watchProject notified: .../sample-project/src/cutData.ts`）。
+ * 検査したいのは「自分の保存が自分にバナーを出さないか」なので、対象を専用コピーへずらす。
+ */
 test('自分の保存は外部更新バナーを誘発しない', async ({ page, request }) => {
-  await page.goto('/');
-  const item = page.locator('.home-card', { hasText: 'sample-project' });
-  await expect(item).toBeVisible({ timeout: 15_000 });
-  await item.click();
-  await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+  const { id, dir } = createTempProject('self-save-tmp');
+  try {
+    await page.goto('/');
+    const item = page.locator('.home-card', { hasText: id });
+    await expect(item).toBeVisible({ timeout: 15_000 });
+    await item.click();
+    await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
 
-  // GET でプロジェクト現状を取得し、{ project, fingerprint } を PUT ボディとして組み立てる。
-  // GET レスポンスの LoadedProject には save.fingerprint が含まれるため、
-  // これをそのまま SaveRequest として再送できる（内容変更なし = 指紋照合も通る）。
-  const getResp = await request.get('/api/project?id=sample-project');
-  expect(getResp.ok()).toBe(true);
-  const loaded = await getResp.json();
-  const putBody = { project: loaded.project, fingerprint: loaded.save.fingerprint };
-  const putResp = await request.put('/api/project?id=sample-project', { data: putBody });
-  expect(putResp.ok()).toBe(true);
+    // GET でプロジェクト現状を取得し、{ project, fingerprint } を PUT ボディとして組み立てる。
+    // GET レスポンスの LoadedProject には save.fingerprint が含まれるため、
+    // これをそのまま SaveRequest として再送できる（内容変更なし = 指紋照合も通る）。
+    const getResp = await request.get(`/api/project?id=${id}`);
+    expect(getResp.ok()).toBe(true);
+    const loaded = await getResp.json();
+    const putBody = { project: loaded.project, fingerprint: loaded.save.fingerprint };
+    const putResp = await request.put(`/api/project?id=${id}`, { data: putBody });
+    expect(putResp.ok()).toBe(true);
 
-  // chokidar debounce (500ms) + 自己保存ウィンドウ (1500ms) + マージンで 2.5 秒待つ。
-  // この間に外部更新バナーが出てはいけない。
-  await page.waitForTimeout(2_500);
-  await expect(page.locator('.ext-banner')).toHaveCount(0);
+    // chokidar debounce (500ms) + 自己保存ウィンドウ (1500ms) + マージンで 2.5 秒待つ。
+    // この間に外部更新バナーが出てはいけない。
+    await page.waitForTimeout(2_500);
+    await expect(page.locator('.ext-banner')).toHaveCount(0);
+  } finally {
+    await page.close();
+    removeTempProject(dir);
+  }
 });
 
 // misaligned-project フィクスチャのクリーンアップ。
@@ -820,46 +859,26 @@ test('テロップパック: 導入→スタイル選択→全体適用→保存
   await expect(installBtn).toBeVisible();
   await installBtn.click();
 
-  // 導入後、再読込されて同梱スタイル一覧が出る（プレビュー再マウントを待つ）。
+  // 導入後、再読込されて 35 一覧が出る（プレビュー再マウントを待つ）。
   // 導入はアプリ内リロードのため設定タブのまま＝一覧が隠れる。文字起こしタブへ戻ってから選択。
   await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
   await page.locator('.rightdock-tab[data-tab="transcript"]').click();
   await page.locator('.tx-row').first().click();
   await page.locator('.rightdock-tab[data-tab="settings"]').click();
   const cells = page.locator('.ins-style-cell');
-  await expect(cells).toHaveCount(3);
+  await expect(cells).toHaveCount(35);
 
   // スウォッチは IntersectionObserver で遅延マウントするため、まずビューへ入れる。
   await cells.first().scrollIntoViewIfNeeded();
   // スウォッチが実際に描画されている（CellBoundary フォールバックでなく Thumbnail がマウント）。
-  // 同梱スタイルは少数なので全件を実描画で確認する（1件でも描画に失敗したら落とす）。
-  for (let i = 0; i < 3; i += 1) {
-    await cells.nth(i).scrollIntoViewIfNeeded();
-    await expect(page.locator('.ins-style-cell').nth(i).locator('.swatch-fit')).toBeVisible();
-  }
+  await expect(page.locator('.ins-style-cell .swatch-fit').first()).toBeVisible();
 
-  // 既定スコープは「このテロップ」。2番目のスタイルをクリック → アクティブになる（＝ template 反映）。
-  await expect(page.locator('.ins-style-scope button[data-scope="one"]')).toHaveClass(/active/);
+  // 2番目のスタイルをクリック → アクティブになる（＝ template 反映）。
   await cells.nth(1).click();
   await expect(cells.nth(1)).toHaveClass(/active/);
 
-  // スコープを「全テロップ」へ切り替えてから3番目（template=3）を選ぶ → 全テロップへ適用される。
-  // フィクスチャの2件目は元から template=2 のため、2番目のセルで確認すると
-  // 全体適用が効かなくても通ってしまう。元の値と違う3番目を使う。
-  await page.locator('.ins-style-scope button[data-scope="all"]').click();
-  await expect(page.locator('.ins-style-scope button[data-scope="all"]')).toHaveClass(/active/);
-  await cells.nth(2).scrollIntoViewIfNeeded();
-  await cells.nth(2).click();
-  await expect(cells.nth(2)).toHaveClass(/active/);
-
-  // 別のテロップ（元 template=2）にも乗り換わっている＝スコープ all が実際に全件へ効いた。
-  await page.locator('.rightdock-tab[data-tab="transcript"]').click();
-  await page.locator('.tx-row').nth(1).click();
-  await page.locator('.rightdock-tab[data-tab="settings"]').click();
-  await expect(page.locator('.ins-style-cell').nth(2)).toHaveClass(/active/);
-  await expect(page.locator('.ins-style-cell').nth(1)).not.toHaveClass(/active/);
-
-  // 保存。
+  // 全体に適用 → 保存。
+  await page.locator('.ins-style-apply-all').click();
   await expect(page.locator('.tb-save.enabled')).toBeVisible();
   await page.locator('.tb-save.enabled').click();
   await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({ timeout: 10_000 });
@@ -870,9 +889,9 @@ test('テロップパック: 導入→スタイル選択→全体適用→保存
   await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
   await page.locator('.tx-row').first().click();
   await page.locator('.rightdock-tab[data-tab="settings"]').click();
-  await expect(page.locator('.ins-style-cell')).toHaveCount(3);
-  // 保存した template（全体適用で id=3）が再読込後も該当セルに反映されている。
-  await expect(page.locator('.ins-style-cell').nth(2)).toHaveClass(/active/);
+  await expect(page.locator('.ins-style-cell')).toHaveCount(35);
+  // 保存した template（全体適用で id=2）が再読込後も該当セルに反映されている。
+  await expect(page.locator('.ins-style-cell').nth(1)).toHaveClass(/active/);
 
   expect(pageErrors).toEqual([]);
 });
@@ -1570,7 +1589,11 @@ test('磨き込み: じまくクリップがトラック色のフラットなベ
   expect(style.bgImage).toBe('none');
 });
 
-test('右ドック: BGM選択で設定タブへ自動切替・文字起こしへ戻れる・AIタブ・右列のみ', async ({ page }) => {
+// AI タブ由来の検証（埋め込みターミナル表示・右ドック幅）は claude-panel.spec.ts へ移設済み
+// （pty は server 側グローバルシングルトンのため、AI タブを開く spec を default project
+// （複数 worker 並列）に置くと、直列専用の ai-tab-pty project 側テストと writer を奪い合い
+// claude-terminal.spec.ts の C-1 回帰テストがフレークする。playwright.config.ts 参照）。
+test('右ドック: BGM選択で設定タブへ自動切替・文字起こしへ戻れる・右列のみ', async ({ page }) => {
   await page.goto('/');
   const item = page.locator('.home-card', { hasText: 'sample-project' });
   await expect(item).toBeVisible({ timeout: 15_000 });
@@ -1599,11 +1622,9 @@ test('右ドック: BGM選択で設定タブへ自動切替・文字起こしへ
   await expect(page.locator('.rightdock-tab[data-tab="transcript"]')).toHaveClass(/active/);
   await expect(page.locator('.rightdock-body .tx')).toBeVisible();
 
-  // AI タブ → 埋め込みターミナルが見える（feat/simplified-ai-tab: 指示欄は撤去済み）。
-  await page.locator('.rightdock-tab[data-tab="ai"]').click();
-  await expect(page.locator('.rightdock-body .clt')).toBeVisible();
-
-  // 縦動画(sample-project=縦)では右ドックを広めに（>=400px）。
+  // 縦動画(sample-project=縦)では右ドックを広めに（>=400px）。幅は data-orientation 依存で
+  // アクティブなタブの種類には依存しない（styles.css の --rightdock-w）ため、AI タブを
+  // 開かずに文字起こしタブのまま測ってよい。
   const w = await page.locator('.rightdock').evaluate((el) => el.getBoundingClientRect().width);
   expect(w).toBeGreaterThanOrEqual(400);
 });
@@ -2348,14 +2369,13 @@ test('図形シナリオ: 矢印ツール→ドラッグ描画→色・太さ変
 // - <projectDir>/public/main.denoise-backup.mp4  （バックアップ）
 // git clean -fdx はすでに上位の afterEach で実行されているため、明示的な rmSync は
 // 念のための二重保護として記載する（untracked ファイルなので git clean で削除される）。
-const { rmSync, existsSync: fsExistsSync } = await import('node:fs');
 test.afterEach(() => {
   for (const rel of [
     'denoise.json',
     'public/main.denoise-backup.mp4',
   ]) {
     const p = resolve(FIXTURE_DIR, rel);
-    if (fsExistsSync(p)) rmSync(p, { force: true });
+    if (existsSync(p)) rmSync(p, { force: true });
   }
 });
 
@@ -2390,7 +2410,7 @@ test('ノイズ除去: 強さ選択→実行→進捗バナー→完了→再読
   // handleDenoisePost は応答前に ensureBackup を同期実行するため、この時点で存在する。
   // 誤って projectDir 直下に作るとここで失敗する（実 ffmpeg では入力欠落で全滅するバグの早期検知）。
   await expect.poll(
-    () => fsExistsSync(resolve(FIXTURE_DIR, 'public', 'main.denoise-backup.mp4')),
+    () => existsSync(resolve(FIXTURE_DIR, 'public', 'main.denoise-backup.mp4')),
     { timeout: 5_000 },
   ).toBe(true);
 
@@ -2660,7 +2680,7 @@ test('音量正規化: 強さ選択→実行→進捗バナー→完了→再読
   // 回帰ガード（C-1）: バックアップは動画と同じ public/ 配下に作られる。
   // handleNormalizePost は応答前に ensureBackup を同期実行するため、この時点で存在する。
   await expect.poll(
-    () => fsExistsSync(resolve(FIXTURE_DIR, 'public', 'main.normalize-backup.mp4')),
+    () => existsSync(resolve(FIXTURE_DIR, 'public', 'main.normalize-backup.mp4')),
     { timeout: 5_000 },
   ).toBe(true);
 
@@ -2951,11 +2971,18 @@ test('メイン動画レイアウト: 導入で MainVideo が <MainLayout> で�
   await page.locator('.tb-save.enabled').click();
   await expect(page.locator('.tb-unsaved').filter({ hasText: '保存済み' })).toBeVisible({ timeout: 10_000 });
 
+  // 導入前は「カラー補正が書き出しに反映されない」注意書きが出ている（＝未導入の観測点）。
+  await expect(page.locator('#ins-color-unsupported')).toHaveCount(1);
+
   // レイアウトを書き出しに導入 → 再読込（プレビュー再マウント）。
   const installBtn = page.locator('#ins-mainlayout-install');
   await expect(installBtn).toBeEnabled();
   await installBtn.click();
   await expect(page.locator('.pv-stage .__remotion-player')).toBeVisible({ timeout: 20_000 });
+  // 導入完了の観測点。プレビューの可視状態は導入前から真なので完了の合図にならない
+  // （ここで待たずにファイルを読むと、書込前の内容を読んでしまう競走になる）。
+  // 注意書きの消滅は「サーバが導入を終え、案件を読み直した」ことでしか起きない。
+  await expect(page.locator('#ins-color-unsupported')).toHaveCount(0, { timeout: 20_000 });
 
   // afterEach の git clean が戻す前に、install 結果をファイルで確認。
   const mainVideo = readFileSync(join(FIXTURE_DIR, 'src', 'MainVideo.tsx'), 'utf8');
@@ -3292,7 +3319,6 @@ test('テロップ複数選択: Cmd＋クリックで2個選び位置を一括�
 
 // ============================================================================
 // 選択枠実測（measured-overlay・2026-08-19）
-// 設計書: docs/specs/2026-08-19-measured-overlay-box-design.md
 // jsdom では getBoundingClientRect が全ゼロ＝常にフォールバック経路なので、
 // 「実測が効いている」ことを証明できるのはここ（実ブラウザ）だけ。
 // ============================================================================
@@ -3510,7 +3536,6 @@ test('選択枠実測: 図形をプレビューでクリック選択→移動→
 
 // ============================================================================
 // 端ドラッグ自動スクロール（edge-autoscroll）＋ ＋追加メニューの「字幕」
-// 設計書: docs/specs/2026-08-20-edge-autoscroll-add-subtitle-design.md
 // jsdom はレイアウトを持たない（scrollWidth/clientWidth/getBoundingClientRect が
 // 全ゼロ）ため、実レイアウトの上で本当にスクロールするのはここでしか確かめられない。
 // ============================================================================
@@ -3559,8 +3584,29 @@ test('端スクロール: ブロックを右端へドラッグしたまま止め
   await expect.poll(async () => block.evaluate((el) => parseFloat(el.style.left)), { timeout: 10_000 })
     .toBeGreaterThan(leftAtEdge + 100);
 
+  // 端ゾーンから抜けてオートスクロールを止める。
+  // ここを止めずに値を採ると、**採ってから mouse.up() が届くまでの間に rAF がもう一段
+  // 進める**ため、pointerup 後の確定値と一致しない（実測: フルスイート 4 ラン中 1 ランで
+  // 1585 を採った直後に 1600 まで進み、下の等値判定が落ちた）。判定したいのは
+  // 「確定が走って位置が保たれるか」であって「動いている値を一発で捕まえられるか」ではない。
+  await page.mouse.move(bodyBox.x + bodyBox.width / 2, y);
+  // 値が実際に止まったことを確かめてから採る（時間で待たない）。
+  let lastLeft = Number.NaN;
+  await expect
+    .poll(
+      async () => {
+        const now = await block.evaluate((el) => parseFloat(el.style.left));
+        const settledNow = now === lastLeft;
+        lastLeft = now;
+        return settledNow;
+      },
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+
   // 離す直前のドラッグ値。これが pointerup 後も保たれていれば「確定した」証拠になる。
   const leftBeforeUp = await block.evaluate((el) => parseFloat(el.style.left));
+  expect(leftBeforeUp, '端ゾーンを抜けた後も値が動いている').toBe(lastLeft);
   await page.mouse.up();
 
   // 確定（onCommit）が走っていれば、コミット済み state から描き直した後も同じ位置。
@@ -3636,24 +3682,47 @@ test('端スクロール: 右端すれすれのブロックは純クリックで
   expect(bodyBox).not.toBeNull();
   if (bodyBox === null) return;
 
-  // じまく #3（最後尾の字幕）を「右端から 20px の位置」＝端ゾーン（40px）の中へ持ってくる。
-  // content 座標は displayMap 依存なので決め打ちせず style.left を実測して使う。
+  // じまく #3（最後尾の字幕）を「右端から 20px の位置」＝端ゾーン（EDGE_ZONE_PX=40）の
+  // 中へ持ってくる。content 座標は displayMap 依存なので決め打ちせず style.left を実測して使う。
   const block = page.locator('.tl-track-jimaku .tl-telop').nth(2);
   const leftBefore = await block.evaluate((el) => parseFloat(el.style.left));
   expect(leftBefore).toBeGreaterThan(bodyBox.width);
-  await body.evaluate((el, x) => { el.scrollLeft = x; }, leftBefore - bodyBox.width + 20);
+  // 掴む X は**可視域の右端からの固定オフセット**で決める（ブロックの boundingBox から
+  // 決めない）。理由 = 実測した間欠赤の根本原因: 掴む前に scrollLeft が数十 px ドリフト
+  // すると（下記 ①）ブロックが左へ寄り、box 基準の掴み点も一緒に左へ寄って端ゾーン
+  // （右端 40px）の外へ出る。すると端スクロールは仕様どおり発動せず、poll が 10s
+  // タイムアウトして「進まなかった」とだけ言う赤になる（run11: Expected > 6012 /
+  // Received 5912 = 掴み点が右端から 100px の位置だった）。可視域の右端は動かないので、
+  // ここを基準にすればドリフトに依らず必ず端ゾーンの中を掴める。
+  const bodyRight = bodyBox.x + bodyBox.width;
+  const grabX = bodyRight - 16;
+  const scrollForEdge = leftBefore - bodyBox.width + 20;
+  await body.evaluate((el, x) => { el.scrollLeft = x; }, scrollForEdge);
 
   const blockBox = await block.boundingBox();
   expect(blockBox).not.toBeNull();
   if (blockBox === null) return;
   const y = blockBox.y + blockBox.height / 2;
 
+  /** 掴み点の真下に対象ブロックが実在することを確かめる（存在検査）。 */
+  async function expectGrabPointOnBlock(): Promise<void> {
+    const onBlock = await block.evaluate(
+      (el, [px, py]) => {
+        const top = document.elementFromPoint(px as number, py as number);
+        return top !== null && (top === el || el.contains(top));
+      },
+      [grabX, y],
+    );
+    expect(onBlock, '掴み点の下に対象ブロックが居ない（掴めていない検査になる）').toBe(true);
+  }
+
   // --- 1) 純クリック（実移動 2px）では動かない -------------------------------
   // 端ゾーンに居るブロックを選択のためにクリックしただけ。ここで端スクロールが
   // 走ると区間が動いて確定してしまう（2026-08-17 に潰した副作用の復活）。
-  await page.mouse.move(blockBox.x + 4, y);
+  await expectGrabPointOnBlock();
+  await page.mouse.move(grabX, y);
   await page.mouse.down();
-  await page.mouse.move(blockBox.x + 6, y);
+  await page.mouse.move(grabX + 2, y);
   await page.waitForTimeout(500); // rAF を十分に回す時間
   await page.mouse.up();
   // scrollLeft は Chromium 自身のドラッグ時オートスクロールでも動きうるので見ない。
@@ -3661,13 +3730,31 @@ test('端スクロール: 右端すれすれのブロックは純クリックで
   expect(await block.evaluate((el) => parseFloat(el.style.left))).toBe(leftBefore);
 
   // --- 2) しきい値（5px）を超えて動かせば端スクロールが始まり、確定まで通る -----
-  const blockBox2 = await block.boundingBox();
-  expect(blockBox2).not.toBeNull();
-  if (blockBox2 === null) return;
-  const scrollAtGrab = await body.evaluate((el) => el.scrollLeft);
-  await page.mouse.move(blockBox2.x + 4, y);
+  // ①のドラッグ中に Chromium 自身のオートスクロールが scrollLeft を動かしている
+  // ことがある（実測: 負荷の高いランで +84px）。②の前提「ブロックが右端 20px に居る」を
+  // 引き継がず、**組み直してから**測る。まずポインタを中央へ戻してホバー版の端スクロールを
+  // 止め（速度 0）、それから scrollLeft を置き直す。
+  await page.mouse.move(bodyBox.x + bodyBox.width / 2, y);
+  await body.evaluate((el, x) => { el.scrollLeft = x; }, scrollForEdge);
+  expect(
+    await body.evaluate((el) => el.scrollLeft),
+    'scrollLeft の置き直しが効いていない',
+  ).toBe(scrollForEdge);
+
+  await expectGrabPointOnBlock();
+  await page.mouse.move(grabX, y);
   await page.mouse.down();
-  await page.mouse.move(blockBox2.x + 12, y);
+  // 基準値は **pointerdown の後**に採る。掴む直前の move（ボタン 0）でホバー版の端スクロールが
+  // 一瞬走るため、move の前に採ると「ホバー版が進めた分」で緑になりうる（＝ドラッグ版が
+  // 死んでいても通る fail-open）。pointerdown はホバー版を capture phase で止めるので、
+  // ここから先の増分はドラッグ版だけのもの。
+  const scrollAtGrab = await body.evaluate((el) => el.scrollLeft);
+  // 前提の存在検査: まだ右へスクロールする余地があること
+  // （末尾まで来ていると端スクロールは仕様どおり動けず、検査が空振りする）。
+  const room = await body.evaluate((el) => el.scrollWidth - el.clientWidth - el.scrollLeft);
+  expect(room, '右へスクロールする余地が無い（端スクロールの検査にならない）').toBeGreaterThan(100);
+
+  await page.mouse.move(grabX + 8, y);
 
   await expect.poll(async () => body.evaluate((el) => el.scrollLeft), { timeout: 10_000 })
     .toBeGreaterThan(scrollAtGrab + 100);

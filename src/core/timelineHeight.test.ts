@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   MIN_TIMELINE_H,
   DEFAULT_TIMELINE_H,
+  defaultTimelineHeight,
   maxTimelineHeight,
   clampTimelineHeight,
   computeResizeHeight,
@@ -63,4 +64,28 @@ describe('parseStoredHeight', () => {
 it('DEFAULT は 240・MIN は 192（既定は最小より一回り高い）', () => {
   expect(DEFAULT_TIMELINE_H).toBe(240);
   expect(MIN_TIMELINE_H).toBe(192);
+});
+
+describe('defaultTimelineHeight（保存値が無いときの既定・ベースライン §トラック画面外）', () => {
+  it('900 高では 32%（288px）', () => {
+    expect(defaultTimelineHeight(900)).toBe(288);
+  });
+
+  it('小さい画面でも 220px を下回らない', () => {
+    expect(defaultTimelineHeight(600)).toBe(220);
+    expect(defaultTimelineHeight(300)).toBe(220);
+  });
+
+  it('大きい画面でも 460px を超えない', () => {
+    expect(defaultTimelineHeight(2160)).toBe(460);
+  });
+
+  it('固定 240px より高い（下段トラックが画面外に出ないため）', () => {
+    expect(defaultTimelineHeight(900)).toBeGreaterThan(DEFAULT_TIMELINE_H);
+  });
+
+  it('不正な viewport は固定既定へフォールバック', () => {
+    expect(defaultTimelineHeight(0)).toBe(DEFAULT_TIMELINE_H);
+    expect(defaultTimelineHeight(Number.NaN)).toBe(DEFAULT_TIMELINE_H);
+  });
 });

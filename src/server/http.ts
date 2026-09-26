@@ -2,9 +2,12 @@ import type { ServerResponse } from 'node:http';
 
 /** API ハンドラが投げる、HTTP ステータス付きのエラー。 */
 export class HttpError extends Error {
-  constructor(public readonly status: number, message: string) {
-    super(message);
+  /** 中止理由の機械可読コード（省略可）。UI が文言をコードで出し分けるために使う。 */
+  public readonly reason?: string;
+  constructor(public readonly status: number, message: string, options?: { reason?: string; cause?: unknown }) {
+    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'HttpError';
+    this.reason = options?.reason;
   }
 }
 
@@ -24,6 +27,17 @@ export function sendJson(res: ServerResponse, status: number, data: unknown): vo
     'Cache-Control': 'no-store',
   });
   res.end(body);
+}
+
+/**
+ * API の例外を返す形（`{error}` または `{error,reason}`）。本番の配線（plugin.ts）と
+ * テストの簡易サーバが同じ 1 本を呼ぶ（手で複製すると応答形が静かにずれる。Task 19/20 Minor）。
+ */
+export function sendApiError(res: ServerResponse, error: unknown): void {
+  const status = error instanceof HttpError ? error.status : 500;
+  const message = error instanceof Error ? error.message : String(error);
+  const reason = error instanceof HttpError ? error.reason : undefined;
+  sendJson(res, status, reason ? { error: message, reason } : { error: message });
 }
 
 /** テキスト（JS バンドル等）レスポンスを返す。 */

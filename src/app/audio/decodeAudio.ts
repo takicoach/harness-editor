@@ -46,7 +46,18 @@ export async function decodeAudioToMono(url: string): Promise<Float32Array> {
   const arrayBuffer = await res.arrayBuffer();
   const ctx = getAudioContext();
   const audio = await ctx.decodeAudioData(arrayBuffer);
+  durationCache.set(url, audio.duration);
   return audioBufferToMono(audio);
+}
+
+// url ごとにデコード済み音声の長さ（秒）をキャッシュする（波形サンプルとは独立の副産物）。
+// Inspector のソース長超過ヒント（useSourceDurationFrames）が読む。実際の保存時クランプは
+// サーバ側 ffprobe（container 尺・音声トラック非依存）が正で、こちらはあくまで UI ヒント。
+const durationCache = new Map<string, number>();
+
+/** decodeAudioToMono/loadWaveformSamples が成功済みの url の長さ（秒）。未デコード・失敗なら null。 */
+export function getCachedDurationSec(url: string): number | null {
+  return durationCache.get(url) ?? null;
 }
 
 // URL ごとにデコード済みサンプルをキャッシュし、同一 URL の重複デコードを防ぐ。

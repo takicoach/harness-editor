@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from './editorPlayback';
 import type { Rect } from './overlayGeometry';
 import { findMeasureItem, findMeasureRoot, measureItemRect } from './measureBox';
+import type { LegacyMeasurementReader } from '../../preview/native/legacyMeasurement';
+import { nativeMeasurementRect } from './nativeMeasurements';
 
 /** 実測できる対象種別（mainVideo / cutSegment は全画面＝実描画そのものなので対象外）。 */
 export type MeasuredKind = 'telop' | 'image' | 'videoInsert';
@@ -25,6 +27,7 @@ export interface UseMeasuredBoxParams {
   id: number | null;
   /** 現在フレーム購読用（選択対象のみ・rAF 集約で再測する）。 */
   playerRef: RefObject<PlayerRef | null>;
+  readNativeMeasurement?: LegacyMeasurementReader;
 }
 
 /** 2 つの矩形が同値か（量子化済みの値どうしなので厳密比較で足りる）。 */
@@ -56,6 +59,7 @@ export function useMeasuredBox({
   kind,
   id,
   playerRef,
+  readNativeMeasurement,
 }: UseMeasuredBoxParams): MeasuredBox {
   const [rect, setRect] = useState<Rect | null>(null);
   /** 現在保持している実測値の対象キー（対象が変わったら破棄する）。 */
@@ -120,6 +124,13 @@ export function useMeasuredBox({
     const overlay = rootRef.current;
     if (kind === null || id === null || overlay === null) return;
     try {
+      if (readNativeMeasurement) {
+        detachObservers();
+        const snapshot=readNativeMeasurement(kind,id),item=snapshot?.items.find(value=>value.kind===kind&&value.id===id);
+        const next=snapshot&&item?nativeMeasurementRect(snapshot,item,overlay.getBoundingClientRect()):null;
+        setRect(prev=>sameRect(prev,next)?prev:next);
+        return;
+      }
       // overlay（.pv-overlay）の親＝ .pv-stage。Player の描画はこの中にある。
       const scope = overlay.parentElement ?? overlay;
       const root = findMeasureRoot(scope);
@@ -147,7 +158,7 @@ export function useMeasuredBox({
     } catch {
       warnOnce('exception');
     }
-  }, [attachObservers, detachObservers, id, kind, rootRef, warnOnce]);
+  }, [attachObservers, detachObservers, id, kind, rootRef, warnOnce, readNativeMeasurement]);
 
   /** rAF で集約した再測（連続イベントで測定が積み上がらないようにする）。 */
   const schedule = useCallback((): void => {

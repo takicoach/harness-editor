@@ -7,6 +7,8 @@ import { transcribeJobs } from './transcribeApi';
 import { denoiseJobs } from './denoiseApi';
 import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
+import { sequenceTranscriptions } from './sequence/transcriptions';
+import { sequenceExports } from './sequence/exports';
 
 /**
  * 環境（CPU コア数・メモリ）から推奨される重ジョブの最大同時実行数を算出する。
@@ -62,6 +64,8 @@ export function heavyJobCounts(): Array<() => number> {
   return [
     () => renderJobs.activeCount(),
     () => transcribeJobs.activeCount(),
+    () => sequenceTranscriptions.activeCount(),
+    () => sequenceExports.activeCount(),
     () => denoiseJobs.activeCount(),
     () => normalizeJobs.activeCount(),
     () => previewProxyJobs.activeCount(),

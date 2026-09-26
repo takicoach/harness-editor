@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBgmData, formatBgmArray, serializeBgmData } from './bgmData';
+import { parseBgmData, formatBgmArray, serializeBgmData, bgmSourceHasDucking } from './bgmData';
 import type { BgmClip } from './types';
 
 const sample: BgmClip[] = [
@@ -90,5 +90,39 @@ describe('formatBgmArray — ducking', () => {
     };
     const out = formatBgmArray([withDuck]);
     expect(out).toContain('{ start: 0, end: 30 }, { start: 60, end: 90 }');
+  });
+});
+
+describe('bgmSourceHasDucking', () => {
+  it('source が null なら false', () => {
+    expect(bgmSourceHasDucking(null)).toBe(false);
+  });
+
+  it('ducking 有りなら true（formatBgmArray の整形出力）', () => {
+    const withDuck: BgmClip = {
+      id: 1, file: 'a.mp3', startFrame: 0, endFrame: 100, volume: 0.5, fadeInFrames: 0, fadeOutFrames: 0,
+      ducking: { regions: [{ start: 0, end: 30 }], gain: 0.5, attackFrames: 3, releaseFrames: 9 },
+    };
+    const source = `import type { BgmClip } from './types';\nexport const bgmData: BgmClip[] = ${formatBgmArray([withDuck])};\n`;
+    expect(bgmSourceHasDucking(source)).toBe(true);
+  });
+
+  it('ducking 無しなら false', () => {
+    const source = `import type { BgmClip } from './types';\nexport const bgmData: BgmClip[] = ${formatBgmArray([{ ...sample[0]! }])};\n`;
+    expect(bgmSourceHasDucking(source)).toBe(false);
+  });
+
+  it('1 行に潰した形（ducking が行頭に来ない）でも true を検知する（評価済みモジュール判定・整形非依存）', () => {
+    const source =
+      "export const bgmData = [{ id:1, file:'a.mp3', startFrame:0, endFrame:45, volume:0.2, fadeInFrames:0, fadeOutFrames:0, ducking: { gain: 0.3 } }];";
+    expect(bgmSourceHasDucking(source)).toBe(true);
+  });
+
+  it('パース不能（配列でない）なら安全側で true', () => {
+    expect(bgmSourceHasDucking('export const bgmData = 123;')).toBe(true);
+  });
+
+  it('評価失敗（構文エラー）なら安全側で true', () => {
+    expect(bgmSourceHasDucking('export const bgmData = [{{{ syntax error')).toBe(true);
   });
 });

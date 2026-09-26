@@ -4,6 +4,7 @@ import {
   commonFfmpegPaths,
   ffprobeFromFfmpeg,
   resolveFfmpegBin,
+  resolveFfprobeBin,
   type ResolveFfmpegDeps,
 } from './resolveFfmpeg';
 
@@ -151,8 +152,8 @@ describe('ffprobeFromFfmpeg', () => {
 
   it('winget の LosslessCut 同梱 ffmpeg.exe でも同ディレクトリの ffprobe.exe になる', () => {
     expect(
-      ffprobeFromFfmpeg('C:\\Users\\t\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ch.LosslessCut_x\\resources\\ffmpeg.exe'),
-    ).toBe('C:\\Users\\t\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ch.LosslessCut_x\\resources\\ffprobe.exe');
+      ffprobeFromFfmpeg('C:\\Users\\x\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ch.LosslessCut_x\\resources\\ffmpeg.exe'),
+    ).toBe('C:\\Users\\x\\AppData\\Local\\Microsoft\\WinGet\\Packages\\ch.LosslessCut_x\\resources\\ffprobe.exe');
   });
 
   it('大文字 FFMPEG.EXE でも導出できる（大文字小文字を無視）', () => {
@@ -161,5 +162,40 @@ describe('ffprobeFromFfmpeg', () => {
 
   it('ffmpeg で終わらないパスは PATH 上の ffprobe へフォールバックする', () => {
     expect(ffprobeFromFfmpeg('/usr/local/bin/my-encoder')).toBe('ffprobe');
+  });
+
+  // M-4: 版数つきの実行ファイル名（ffmpeg7 / ffmpeg6.exe）でも同じ版の ffprobe を指す。
+  it('版数つきの ffmpeg7 は ffprobe7 になる', () => {
+    expect(ffprobeFromFfmpeg('/opt/homebrew/bin/ffmpeg7')).toBe('/opt/homebrew/bin/ffprobe7');
+    expect(ffprobeFromFfmpeg('ffmpeg7')).toBe('ffprobe7');
+    expect(ffprobeFromFfmpeg('C:\\Tools\\ffmpeg6.exe')).toBe('C:\\Tools\\ffprobe6.exe');
+  });
+});
+
+/**
+ * M-4: ffprobe の解決を 1 か所へ寄せる。
+ * 各所で `bin.replace(/ffmpeg$/, 'ffprobe')` を手写しすると、`ffmpeg.exe` / `ffmpeg7` で
+ * 置換が効かず「PATH の ffprobe」でも「同ディレクトリの ffprobe」でもない文字列を実行してしまう。
+ */
+describe('resolveFfprobeBin', () => {
+  it('解決した ffmpeg から同ディレクトリ・同版の ffprobe を返す', () => {
+    expect(resolveFfprobeBin({ which: (n) => (n === 'ffmpeg' ? '/usr/bin/ffmpeg' : null), env: {} })).toEqual({
+      ok: true,
+      bin: 'ffprobe',
+    });
+    expect(resolveFfprobeBin({ which: () => null, env: { HARNESS_FFMPEG: '/opt/homebrew/bin/ffmpeg7' } })).toEqual({
+      ok: true,
+      bin: '/opt/homebrew/bin/ffprobe7',
+    });
+    expect(resolveFfprobeBin({ which: () => null, env: { HARNESS_FFMPEG: 'C:\\ffmpeg\\bin\\ffmpeg.exe' } })).toEqual({
+      ok: true,
+      bin: 'C:\\ffmpeg\\bin\\ffprobe.exe',
+    });
+  });
+
+  it('ffmpeg が見つからなければ ffmpeg と同じ失敗を返す（無言で "ffprobe" を返さない）', () => {
+    const r = resolveFfprobeBin({ which: () => null, env: {}, platform: 'darwin' });
+    expect(r.ok).toBe(false);
+    expect(r.ok === false ? r.code : '').toBe('ffmpeg-not-found');
   });
 });

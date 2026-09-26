@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler",
+    "paths": { "@harness/frame-runtime": ["./src/captureRuntime/index.ts"] },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "strict": true,
@@ -14,5 +15,10 @@
     "types": ["node", "vite/client"]
   },
   "include": ["src", "tests", "scripts", "vite.config.ts", "playwright.config.ts"],
-  "exclude": ["src/server/__fixtures__/golden"]
+  "exclude": [
+    "src/server/__fixtures__/golden",
+    "src/server/__fixtures__/sample-project",
+    "src/server/__fixtures__/misaligned-project",
+    "src/server/__fixtures__/telop-pack-telop"
+  ]
 }

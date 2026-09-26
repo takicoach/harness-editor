@@ -29,10 +29,14 @@ export function current(history: History): EditState {
 
 /**
  * 新しい状態を履歴へ積む。
+ * - **無変化（現在と参照が同一）なら何もしない。** 各 op は「対象が無い」ときに同一 state を
+ *   返す契約なので、そのまま積むと空の 1 手が redo 分岐を捨て、履歴上限を押し流す。
+ *   参照同一のときだけ弾くので、内容が変わる編集の挙動は従来どおり。
  * - 現在より後の redo 分岐は捨てる。
  * - HISTORY_LIMIT を超えたら最古から切り捨て、index を詰める。
  */
 export function pushState(history: History, next: EditState): History {
+  if (next === current(history)) return history;
   const kept = history.states.slice(0, history.index + 1);
   kept.push(next);
   let states = kept;

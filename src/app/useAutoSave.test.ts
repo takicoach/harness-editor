@@ -135,23 +135,6 @@ describe('useAutoSave', () => {
     document.body.removeChild(textarea);
   });
 
-  it('IME 変換中に state が動いて再レンダーされても、変換が終わるまで blur で保存しない', () => {
-    const save = vi.fn().mockResolvedValue(true);
-    const { rerender } = renderHook(
-      ({ state }) => useAutoSave({ enabled: true, dirty: true, saveStatus: 'idle', state, save }),
-      { initialProps: { state: { v: 1 } } },
-    );
-    window.dispatchEvent(new Event('compositionstart'));
-    // 変換中の onChange で state が変わる（保存 effect が貼り直される）。
-    rerender({ state: { v: 2 } });
-    window.dispatchEvent(new Event('blur'));
-    expect(save).not.toHaveBeenCalled();
-    // 変換が確定してからの blur は保存する。
-    window.dispatchEvent(new Event('compositionend'));
-    window.dispatchEvent(new Event('blur'));
-    expect(save).toHaveBeenCalledTimes(1);
-  });
-
   it('ウィンドウのフォーカスが外れたら静止時間を待たずに保存する', () => {
     const save = vi.fn().mockResolvedValue(true);
     renderHook(() =>
@@ -192,6 +175,76 @@ describe('useAutoSave', () => {
     vi.advanceTimersByTime(499);
     expect(save).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * サイクル 1 レビューの残件。
+ * - composing を effect のローカル変数で持っていたため、再レンダー（編集）で false に戻った
+ * - shouldFireAutoSave が false の理由がテキスト編集中以外だと再スケジュールされず、
+ *   その dirty のまま二度と自動保存が来なかった（fail-silent）
+ */
+describe('useAutoSave — 再レンダーをまたぐ IME と再スケジュール', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('IME 変換中に編集（再レンダー）が入っても変換中の扱いを失わない', () => {
+    const save = vi.fn().mockResolvedValue(true);
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    const { rerender } = renderHook(
+      ({ state }) => useAutoSave({ enabled: true, dirty: true, saveStatus: 'idle', state, save }),
+      { initialProps: { state: { v: 1 } } },
+    );
+    window.dispatchEvent(new Event('compositionstart'));
+    // 変換中に文字が増える＝ state が変わり effect が張り直される。
+    rerender({ state: { v: 2 } });
+    rerender({ state: { v: 3 } });
+
+    vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS * (MAX_AUTO_SAVE_DEFERRALS + 3));
+    expect(save).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('compositionend'));
+    vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS);
+    expect(save).toHaveBeenCalled();
+
+    document.body.removeChild(textarea);
+  });
+
+  it('IME 変換中の離席（blur）でも、再レンダー後に保存を割り込ませない', () => {
+    const save = vi.fn().mockResolvedValue(true);
+    const { rerender } = renderHook(
+      ({ state }) => useAutoSave({ enabled: true, dirty: true, saveStatus: 'idle', state, save }),
+      { initialProps: { state: { v: 1 } } },
+    );
+    window.dispatchEvent(new Event('compositionstart'));
+    rerender({ state: { v: 2 } });
+    window.dispatchEvent(new Event('blur'));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('発火できなかったチェックは必ず次を予約する（フォーカスが外れたら保存される）', () => {
+    const save = vi.fn().mockResolvedValue(true);
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+    renderHook(() =>
+      useAutoSave({ enabled: true, dirty: true, saveStatus: 'idle', state: { v: 1 }, save }),
+    );
+    // 1 回目のチェックは入力欄フォーカスで見送り。
+    vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS);
+    expect(save).not.toHaveBeenCalled();
+    // フォーカスを外すと、予約された次のチェックで保存される。
+    textarea.blur();
+    document.body.removeChild(textarea);
+    vi.advanceTimersByTime(AUTO_SAVE_DELAY_MS);
     expect(save).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,7 +1,7 @@
 // src/server/spawnShell.ts — npm/npx 等の子プロセス spawn 共通ヘルパ。
 // Windows の npm/npx は .cmd のため shell 経由でないと起動できない
 // （Node の CVE-2024-27980 対応で .cmd の直接 spawn は EINVAL になる）ロジックを
-// renderJob.ts と backgroundInstall.ts の両方から使うため共通化。
+// AIツール導入の claudeInstallJob で使用する共通処理（native 新規作成は使用しない）。
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import type { EventEmitter } from 'node:events';

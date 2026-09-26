@@ -15,7 +15,7 @@ import { useThemeValue } from '../layout/useThemeValue';
 import { terminalOptions, terminalTheme } from './claudeTerminalOptions';
 import { terminalColorsFor } from '../../shared/terminalColors';
 import { DEFAULT_AI_TOOL, type AiToolId } from '../../shared/aiToolId';
-import { shouldShowToolSwitcher, usableTools, pickInitialTool, type ToolInfo } from './aiToolSwitcher';
+import { pickInitialTool, toolButtonState, toolButtonHint, CODEX_INSTALL_URL, type ToolInfo } from './aiToolSwitcher';
 
 const TOOL_STORAGE_KEY = 'sme.aiTool';
 
@@ -36,6 +36,13 @@ export function AiTerminal() {
   const [wantTool, setWantTool] = useState<AiToolId>(DEFAULT_AI_TOOL);
   const [notes, setNotes] = useState<string[]>([]);
   const [switching, setSwitching] = useState(false);
+  /** I1: 「再確認」の連打で recheck=1 の GET が複数飛ばないようにする in-flight ガード。 */
+  const [rechecking, setRechecking] = useState(false);
+  /**
+   * I2: 導入中のツール id（無ければ null）。`phase` は「今 wantTool の端末がどの段階か」
+   * を表す別の状態機械で、もう一方のツールが connected 中でも導入進捗はここで独立に追う。
+   */
+  const [installingTool, setInstallingTool] = useState<AiToolId | null>(null);
   /**
    * takeover phase に落ちた理由。'takeover'（別タブがこの端末を奪った）と
    * 'stale'（別タブのツール切替でこの接続が無効になった）は原因が違い、
@@ -73,39 +80,63 @@ export function AiTerminal() {
     if (ev.type === 'restart' || ev.type === 'ws-auth-ok') setError(null);
   }
 
+  /**
+   * ツール一覧を取得し直す。初回取得・導入完了後の反映・「再確認」ボタンの
+   * いずれからも呼ぶ共通経路（申し送り: TTL（5秒）任せにすると
+   * 「導入したのに未導入と出る」に戻るため、導入完了検知の直後に必ず呼ぶ）。
+   *
+   * I1（レビュー指摘）: `recheck=true` は「再確認」ボタン押下時専用。サーバーの
+   * TOOL_CACHE_TTL_MS（5秒）を素通しして毎回実探索させる。初回取得・導入完了後の
+   * 自動反映は通常どおりキャッシュを使う（乱打防止・不要な探索を増やさない）。
+   */
+  async function refreshTools(recheck = false): Promise<void> {
+    const s = await fetchJson<{ tools: ToolInfo[]; current: AiToolId | null; notes: string[] }>(
+      recheck ? '/api/ai/tools?recheck=1' : '/api/ai/tools',
+    );
+    setTools(s.tools);
+    setNotes(s.notes);
+    // サーバーが既に起動しているならそれを正本にする（表示と実体をずらさない）。
+    const initial = s.current ?? pickInitialTool(s.tools, localStorage.getItem(TOOL_STORAGE_KEY));
+    if (initial !== null) { setWantTool(initial); wantToolRef.current = initial; }
+    setActualTool(s.current);
+    const usable = initial !== null && s.tools.some((t) => t.id === initial && t.installed && t.versionOk);
+    dispatch({ type: 'status', installed: usable });
+  }
+
   // 初回: ツール一覧と導入状態を確認。
   useEffect(() => {
     let alive = true;
-    fetchJson<{ tools: ToolInfo[]; current: AiToolId | null; notes: string[] }>('/api/ai/tools')
-      .then((s) => {
-        if (!alive) return;
-        setTools(s.tools);
-        setNotes(s.notes);
-        // サーバーが既に起動しているならそれを正本にする（表示と実体をずらさない）。
-        const initial = s.current ?? pickInitialTool(s.tools, localStorage.getItem(TOOL_STORAGE_KEY));
-        if (initial !== null) { setWantTool(initial); wantToolRef.current = initial; }
-        setActualTool(s.current);
-        const usable = initial !== null && s.tools.some((t) => t.id === initial && t.installed && t.versionOk);
-        dispatch({ type: 'status', installed: usable });
-      })
-      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
+    refreshTools().catch((e) => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
   }, []);
 
-  // installing: 1 秒ポーリング。
+  // 導入中: 1 秒ポーリング。
+  // I2（レビュー指摘）: 以前は `phase==='installing'` にだけ掛かっていたため、片方の
+  // ツールが connected 中はもう一方の導入を始めても phase が 'installing' へ進まず
+  // （claudeTerminalState の install-start は need-install/install-failed からしか
+  // 遷移しない）、このポーリングも進捗の自動反映も起きなかった。`installingTool`
+  // （ツール単位の独立 state）を正にして、現在の全体 phase から切り離す。
   useEffect(() => {
-    if (phase !== 'installing') return;
+    if (installingTool === null) return;
     const t = setInterval(() => {
       fetchJson<{ phase: 'idle' | 'running' | 'done' | 'failed'; log: string[]; error?: string }>(
         '/api/ai/install/status',
       ).then((s) => {
         setInstallLog(s.log.slice(-8));
         if (s.error !== undefined) setError(s.error);
+        if (s.phase === 'done' || s.phase === 'failed') {
+          setInstallingTool(null);
+          // 導入完了は TTL を待たず即座に再検出する（申し送り参照）。
+          if (s.phase === 'done') void refreshTools().catch(() => { /* 次の操作で再試行 */ });
+        }
+        // phase が need-install/installing 側にいる時（従来の単一ツール導入フロー）は
+        // 引き続きここで駆動する。connected 等では nextTerminalPhase が現状維持を返すため
+        // 無害（申し送り: 既存の状態機械はそのまま・拡張しない）。
         dispatch({ type: 'install-status', phase: s.phase });
       }).catch(() => { /* 次のポーリングで再試行 */ });
     }, 1000);
     return () => clearInterval(t);
-  }, [phase]);
+  }, [installingTool]);
 
   // starting: pty ensure → トークン → WS → auth → xterm attach。
   useEffect(() => {
@@ -265,13 +296,31 @@ export function AiTerminal() {
   const currentLabel = (id: AiToolId | null): string =>
     tools.find((t) => t.id === id)?.label ?? (id === null ? 'AI' : id);
 
-  async function handleInstall(): Promise<void> {
+  async function handleInstall(tool: AiToolId): Promise<void> {
+    if (installingTool !== null) return; // Minor 4: 導入中の連打で POST を重複させない
     setError(null);
     try {
-      await putJsonPost('/api/ai/install', { tool: 'claude' });
+      await putJsonPost('/api/ai/install', { tool });
+      setInstallingTool(tool);
+      // 既存の単一ツール導入フロー（need-install/install-failed からの遷移）は
+      // そのまま dispatch で駆動する。connected 等では nextTerminalPhase が現状維持を
+      // 返すため無害（I2 申し送り: 既存の状態機械は拡張しない）。
       dispatch({ type: 'install-start' });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** 「再確認」ボタン。押下中は disabled にして二重送信を防ぐ（Minor 4 と同種のガード）。 */
+  async function handleRecheck(): Promise<void> {
+    if (rechecking) return;
+    setRechecking(true);
+    try {
+      await refreshTools(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRechecking(false);
     }
   }
 
@@ -325,23 +374,54 @@ export function AiTerminal() {
 
   return (
     <div className="clt">
-      {shouldShowToolSwitcher(tools) && (
-        <div className="clt-tools" role="radiogroup" aria-label="使う AI">
-          {usableTools(tools).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="radio"
-              aria-checked={t.id === wantTool}
-              className={t.id === wantTool ? 'clt-tool clt-tool-on' : 'clt-tool'}
-              disabled={switching}
-              onClick={() => void handleSwitchTool(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="clt-tools" role="radiogroup" aria-label="使う AI">
+        {tools.map((t) => {
+          const state = toolButtonState(t);
+          return (
+            <div className="clt-tool-cell" key={t.id}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={t.id === wantTool && state === 'ready'}
+                aria-describedby={`clt-hint-${t.id}`}
+                className={t.id === wantTool && state === 'ready' ? 'clt-tool clt-tool-on' : 'clt-tool'}
+                data-state={state}
+                disabled={switching || state !== 'ready'}
+                onClick={() => void handleSwitchTool(t.id)}
+              >
+                {t.label}
+              </button>
+              <span className="clt-tool-hint" id={`clt-hint-${t.id}`}>
+                {state === 'manual'
+                  ? <>未導入です。<a href={CODEX_INSTALL_URL} target="_blank" rel="noreferrer">導入手順を見る</a></>
+                  : toolButtonHint(t)}
+              </span>
+              {state === 'installable' && installingTool === t.id && (
+                // I2: もう一方が connected 中でも、導入中のツールにはここで進捗を出す
+                // （全体 phase を占有しないため大画面の「導入中…」に頼れない）。
+                <span className="clt-install-progress">
+                  <span className="status-spinner" aria-hidden="true" /> 導入中…
+                </span>
+              )}
+              {state === 'installable' && installingTool !== t.id && (
+                <button
+                  type="button"
+                  className="clt-install-btn"
+                  disabled={installingTool !== null}
+                  onClick={() => void handleInstall(t.id)}
+                >
+                  インストール
+                </button>
+              )}
+              {state === 'unverified' && (
+                <button type="button" className="btn-ghost" disabled={rechecking} onClick={() => void handleRecheck()}>
+                  再確認
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
       {wantTool === 'codex' && (
         <p className="clt-note">
           初回だけ Codex が英語で確認を出します（このフォルダを信頼しますか）。Enter を押せば進めます。
@@ -357,17 +437,14 @@ export function AiTerminal() {
       )}
       {error !== null && <p className="sme-error">{error}</p>}
       {phase === 'checking' && <p className="hint">AI の状態を確認しています…</p>}
-      {(phase === 'need-install' || phase === 'install-failed') && (
+      {phase === 'need-install' && (
+        <p className="hint">上のボタンから使いたい AI を導入してください。</p>
+      )}
+      {phase === 'install-failed' && (
         <div className="clt-setup">
-          <p>Claude Code がまだ入っていません。ボタン1つで導入できます。</p>
-          <button type="button" className="clt-install-btn" onClick={() => void handleInstall()}>
-            AI と接続する（Claude Code を導入）
-          </button>
-          {phase === 'install-failed' && (
-            <p className="clt-install-manual">
-              うまくいかない場合はターミナルで <code>npm install -g @anthropic-ai/claude-code</code> を実行してください
-            </p>
-          )}
+          <p className="clt-install-manual">
+            導入がうまくいきませんでした。ターミナルで <code>npm install -g @anthropic-ai/claude-code</code> を実行してください
+          </p>
         </div>
       )}
       {phase === 'installing' && (

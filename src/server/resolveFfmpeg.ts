@@ -85,12 +85,30 @@ export function commonFfmpegPaths(
  * ffmpeg のパスから同ディレクトリの ffprobe を導出する。
  * "ffmpeg" → "ffprobe"、"/opt/homebrew/bin/ffmpeg" → 同ディレクトリの ffprobe、
  * "C:\...\ffmpeg.exe" → 同ディレクトリの ffprobe.exe（末尾 .exe を保つ）。
+ * "ffmpeg7"（版数つきの実行ファイル名）→ "ffprobe7"（M-4）。
  * ffmpeg で終わらないパス（ラッパースクリプト等）は PATH 上の 'ffprobe' へフォールバック。
  */
 export function ffprobeFromFfmpeg(ffmpegBin: string): string {
-  return /ffmpeg(\.exe)?$/i.test(ffmpegBin)
-    ? ffmpegBin.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1')
-    : 'ffprobe';
+  const pattern = /ffmpeg(\d+)?(\.exe)?$/i;
+  return pattern.test(ffmpegBin) ? ffmpegBin.replace(pattern, 'ffprobe$1$2') : 'ffprobe';
+}
+
+/**
+ * ffprobe 実行ファイルのパスを解決する（M-4）。
+ *
+ * `resolveFfmpegBin` の結果から `ffprobeFromFfmpeg` で導く**唯一の入口**。
+ * 呼び出し側で `bin.replace(/ffmpeg$/, 'ffprobe')` を手写しすると、`ffmpeg.exe` や
+ * `ffmpeg7` で置換が効かず ffmpeg 自身を ffprobe として実行してしまう。
+ * ffmpeg が見つからない場合は**同じ失敗をそのまま返す**（無言で 'ffprobe' を返さない）。
+ *
+ * **導けるのはパスまで**（C-7 M-6・doc の言い過ぎを訂正）: ffmpeg の隣に ffprobe が
+ * 実在するかどうかまでは見ていない（`ffprobeFromFfmpeg` は名前の置換だけで、
+ * 置換先が見つからなければ `'ffprobe'` を返して PATH 解決に委ねる）。
+ * 実在検査は呼び出し側（実行して失敗する）が担う。
+ */
+export function resolveFfprobeBin(deps: Partial<ResolveFfmpegDeps> = {}): ResolveFfmpegResult {
+  const ffmpeg = resolveFfmpegBin(deps);
+  return ffmpeg.ok ? { ok: true, bin: ffprobeFromFfmpeg(ffmpeg.bin) } : ffmpeg;
 }
 
 /**

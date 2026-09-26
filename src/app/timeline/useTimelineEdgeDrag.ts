@@ -48,6 +48,7 @@ interface UseTimelineEdgeDragOptions<Id, H extends EdgeHandle, O> {
 }
 
 interface UseTimelineEdgeDragResult<H, O> {
+  cancelDrag: () => void;
   drag: DragState<H> | null;
   /** ドラッグ開始時点の原本区間（DragTooltip の originFrame 算出用）。 */
   originRef: { current: { start: number; end: number } };
@@ -129,5 +130,5 @@ export function useTimelineEdgeDrag<Id, H extends EdgeHandle, O>(
     dragHook.beginDrag(handle, e, originFrame);
   }
 
-  return { drag: dragHook.drag, originRef, live, onHandleDown };
+  return { drag: dragHook.drag, originRef, live, onHandleDown, cancelDrag: dragHook.cancelDrag };
 }

@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
 import { render, fireEvent, cleanup } from '@testing-library/react';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from './editorPlayback';
 import type { EditorShape } from '../../core/types';
 import { initialEditState, type EditState } from '../edit/editState';
 import { PreviewOverlay } from './PreviewOverlay';

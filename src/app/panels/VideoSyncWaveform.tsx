@@ -43,7 +43,9 @@ export function VideoSyncWaveform({
   onCommit,
 }: VideoSyncWaveformProps) {
   const url = file === '' ? null : assetUrl(projectId, file, assetVersions);
-  const samples = useWaveformSamples(url);
+  // 読み込み中（failed=false）と失敗（failed=true）を分離する（X-2(b)）。
+  // 読み込み中に「取得失敗」と表示すると利用者は故障と誤認する。
+  const { samples, failed: waveformFailed } = useWaveformSamples(url);
   const rootRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const dragRef = useRef<{ startX: number; startIn: number } | null>(null);
@@ -122,7 +124,7 @@ export function VideoSyncWaveform({
       }}
     >
       <Waveform samples={samples} width={width} height={WAVEFORM_HEIGHT} />
-      {samples === null && (
+      {waveformFailed && (
         <div
           style={{
             position: 'absolute',

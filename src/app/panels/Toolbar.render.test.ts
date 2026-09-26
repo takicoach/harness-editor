@@ -4,7 +4,10 @@
 /**
  * Toolbar 書き出しボタンの表示ロジック（describeRenderView / renderPhaseLabel）の
  * ユニットテスト。Toolbar.shape.test.ts と同じく DOM レンダリングを伴わない
- * 純関数の確認に徹する（末尾の書き出し失敗表示のテストのみ実 DOM で検証する）。
+ * 純関数の確認に徹する。
+ * 書き出し中の通知（fastCutFallbackNotice / warning）の表示テストは、通知の置き場を
+ * ツールバー直下のバナー枠へ移した H-3 に合わせて ExportNotices.render.test.tsx へ移設した
+ * （移設先で「2 件同時」「title の実在」を足してある）。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createElement } from 'react';
@@ -69,6 +72,19 @@ describe('warnBadgeLabel（status-ia-4）', () => {
     });
   });
 
+  it('控えがあるだけなら警告色・⚠ を付けず中立の文言にする（戻せることは伝える）', () => {
+    // 更新も警告も 0 件の案件に ⚠ が出たままになるのを避ける（Task 10 レビュー I3）。
+    // 入口としてのバッジは残す（消すと「更新前に戻す」へ到達できない・B10-2）。
+    const view = warnBadgeLabel([], 0, true)!;
+    expect(view.label).toBe('更新前に戻せます');
+    expect(view.label).not.toContain('⚠');
+    expect(view.tone).toBe('info');
+    // 復元に成功すると控えは畳まれ（revertable:false）、バッジ自体が消える。
+    expect(warnBadgeLabel([], 0, false)).toBeNull();
+    // 警告・更新がある側は従来どおり ⚠ のまま（tone は付けない）。
+    expect(warnBadgeLabel([], 1, true)!.tone).toBeUndefined();
+  });
+
   it('バッジは data-testid と aria-label を持ち、更新のみでも「警告」と表示しない', () => {
     const { getByTestId } = render(
       createElement(Toolbar, {
@@ -83,6 +99,28 @@ describe('warnBadgeLabel（status-ia-4）', () => {
     expect(badge.textContent).toBe('⚠ 更新 1 件');
     expect(badge.getAttribute('aria-label')).toContain('部品の更新 1 件');
     expect(badge.textContent).not.toContain('警告');
+  });
+});
+
+describe('確認／仕上げの主操作', () => {
+  it('現在モードを読み上げ可能に示し、仕上げと案件一覧の操作を通知する', () => {
+    const onMode = vi.fn();
+    const onHome = vi.fn();
+    const { getByTestId, getByRole } = render(
+      createElement(Toolbar, {
+        ...toolbarBaseProps,
+        renderState: { status: 'idle' } as RenderState,
+        workspaceMode: 'review',
+        onWorkspaceModeChange: onMode,
+        onGoHome: onHome,
+      }),
+    );
+
+    expect(getByTestId('workspace-mode-review').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(getByTestId('workspace-mode-finish'));
+    expect(onMode).toHaveBeenCalledWith('finish');
+    fireEvent.click(getByRole('button', { name: '案件一覧へ戻る' }));
+    expect(onHome).toHaveBeenCalledOnce();
   });
 });
 
@@ -104,6 +142,63 @@ describe('renderPhaseLabel', () => {
     expect(renderPhaseLabel('preparing', null)).toBe('準備中（初回は数分かかります）');
     expect(renderPhaseLabel('bundling', null)).toBe('バンドル中…');
     expect(renderPhaseLabel('rendering', null)).toBe('書き出し中…');
+  });
+
+  it('capturing（テロップ等の撮影中）は専用文言（M2c）', () => {
+    expect(renderPhaseLabel('capturing', null)).toBe('テロップなどを描画中…');
+    // 撮影中は ffmpeg の進捗がまだ出ないが、直前ジョブの percent が残っていても phase を優先する。
+    expect(renderPhaseLabel('capturing', 40)).toBe('テロップなどを描画中…');
+  });
+
+  it('capturing で capture 見積り判明後は「約N分・M枚」を添える（I-3）', () => {
+    // 枚数は撮影 run 総数 capturedTotal（C-1）。distinctFrames（一意シグネチャ数）ではない。
+    expect(renderPhaseLabel('capturing', null, { distinctFrames: 118, capturedTotal: 120, estimatedMs: 60_000 })).toBe(
+      'テロップなどを描画中…（約1分・120枚）',
+    );
+    // 分は四捨五入。0分にはせず最低1分にする（「約0分」は誤解を招くため）。
+    expect(renderPhaseLabel('capturing', null, { distinctFrames: 2, capturedTotal: 3, estimatedMs: 4_000 })).toBe(
+      'テロップなどを描画中…（約1分・3枚）',
+    );
+    expect(renderPhaseLabel('capturing', null, { distinctFrames: 499, capturedTotal: 500, estimatedMs: 150_000 })).toBe(
+      'テロップなどを描画中…（約3分・500枚）',
+    );
+  });
+
+  it('capturing で capturedFrames が判明していれば「n/N枚・残り約M分」を出す（M2d T3・分母は capturedTotal）', () => {
+    expect(
+      renderPhaseLabel('capturing', null, {
+        distinctFrames: 9,
+        capturedTotal: 10,
+        estimatedMs: 60_000,
+        capturedFrames: 3,
+      }),
+    ).toBe('テロップなどを描画中…（3/10枚・残り約1分）');
+    // distinctFrames に到達しても最終ではない（分母は capturedTotal）。
+    expect(
+      renderPhaseLabel('capturing', null, {
+        distinctFrames: 9,
+        capturedTotal: 10,
+        estimatedMs: 68.23,
+        capturedFrames: 9,
+      }),
+    ).toBe('テロップなどを描画中…（9/10枚・残り約1分）');
+  });
+
+  it('capturing で残り 0 枚（capturedFrames===capturedTotal）は「まもなく完了」（M-1）', () => {
+    expect(
+      renderPhaseLabel('capturing', null, {
+        distinctFrames: 9,
+        capturedTotal: 10,
+        estimatedMs: 0,
+        capturedFrames: 10,
+      }),
+    ).toBe('テロップなどを描画中…（10/10枚・まもなく完了）');
+  });
+
+  it('capturing で capturedFrames 未指定なら従来文言のまま（回帰ガード）', () => {
+    expect(renderPhaseLabel('capturing', null, { distinctFrames: 118, capturedTotal: 120, estimatedMs: 60_000 })).toBe(
+      'テロップなどを描画中…（約1分・120枚）',
+    );
   });
 
   it('未知の phase かつ percent null は「書き出し中…」にフォールバック', () => {
@@ -183,6 +278,34 @@ describe('describeRenderView', () => {
     });
   });
 
+  it('running の warning は帯の view に載せない（描くのは ExportNotices・E-2）', () => {
+    // H-3 で Toolbar が running の warning を描くのをやめた。view に載せたままだと
+    // 「ここに出ている＝表示される」と誤読させるデッドフィールドになるため落とした。
+    // 警告そのものが消えていないことは ExportNotices 側で固定している
+    // （ExportNotices.render.test.tsx「退避通知だけ・警告だけ・両方、をこの順で並べる」）。
+    const withWarning: RenderState = {
+      status: 'running',
+      phase: 'rendering',
+      percent: 30,
+      startedAt: 0,
+      warning: '互換(Remotion)経路でやり直しています',
+    };
+    expect(describeRenderView(withWarning)).toEqual({
+      kind: 'running',
+      label: '書き出し中 30%',
+      percent: 30,
+      showBar: true,
+    });
+    expect(describeRenderView(withWarning)).not.toHaveProperty('warning');
+  });
+
+  it('done の warning は帯が実際に描くので view に載る', () => {
+    expect(describeRenderView({ status: 'done', warning: '音声が無音でした' })).toEqual({
+      kind: 'done',
+      warning: '音声が無音でした',
+    });
+  });
+
   it('done', () => {
     expect(describeRenderView({ status: 'done' })).toEqual({ kind: 'done' });
   });
@@ -199,6 +322,7 @@ describe('describeRenderView', () => {
     });
   });
 });
+
 
 describe('書き出し失敗の表示と再試行（status-ia-2）', () => {
   it('renderErrorHint は既知の code を非エンジニア向けの文にする・未知は null', () => {

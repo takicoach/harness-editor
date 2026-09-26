@@ -217,7 +217,7 @@ describe('DELETE /api/material', () => {
 });
 
 describe('DELETE /api/project', () => {
-  it('ハーネス形式のプロジェクトでないディレクトリは 400', async () => {
+  it('ハーネス形式の案件でないディレクトリは 400', async () => {
     mkdirSync(join(root, 'plain'), { recursive: true });
     writeFileSync(join(root, 'plain', 'a.txt'), 'A', 'utf8');
     const r = await call('DELETE', '/api/project?id=plain');
@@ -243,9 +243,9 @@ describe('DELETE /api/project', () => {
    * `findBusyJobs` 自体の述語は projectBusy.test.ts が持つ。ここで確かめるのは
    * 「plugin.ts が実際にその登録簿を全部渡しているか」＝結線漏れの検出で、
    * 種別を 1 つ足したのに DELETE 経路へ繋ぎ忘れる事故（jobRegistries.ts の正本化で
-   * 構造的に防いでいる 5 種＋別経路の aiInstruction）を 1 件でループ検証する。
+   * 構造的に防いでいる登録簿＋別経路の aiInstruction）を 1 件でループ検証する。
    */
-  it('実行中のジョブ・AI 指示があれば 409 busy でディスクに残る（登録簿 6 種）', async () => {
+  it('実行中のジョブ・AI 指示があれば 409 busy でディスクに残る（登録簿 7 種）', async () => {
     const arm: Record<string, () => void> = {
       ...Object.fromEntries(
         Object.entries(PROJECT_JOB_MANAGERS).map(([name, manager]) => [
@@ -262,7 +262,7 @@ describe('DELETE /api/project', () => {
       },
     };
     expect(Object.keys(arm)).toEqual([
-      'render', 'transcribe', 'denoise', 'normalize', 'previewProxy', 'aiInstruction',
+      'render', 'transcribe', 'nativeTranscribe', 'nativeRender', 'denoise', 'normalize', 'previewProxy', 'aiInstruction',
     ]);
 
     for (const [name, makeBusy] of Object.entries(arm)) {

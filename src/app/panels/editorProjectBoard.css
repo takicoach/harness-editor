@@ -1,0 +1,73 @@
+.home-agent-guide,
+.home-board-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg-1);
+  font-size: 12px;
+}
+
+.home-agent-guide { justify-content: space-between; }
+.home-board-notice { border-color: var(--warn-fg); }
+
+.home-card-agent {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+  font-size: 12px;
+}
+
+.home-card-agent > div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+}
+
+.home-card-agent span { color: var(--fg-1); }
+.home-card-agent strong { min-width: 0; color: var(--fg-0); font-weight: 600; }
+.home-card-agent small { grid-column: 2; color: var(--fg-1); font-size: 12px; }
+.home-card-agent .tone-active,
+.home-card-agent .tone-saved,
+.home-card-agent .tone-warning,
+.home-card-agent .tone-error { color: var(--fg-0); }
+.home-card-agent strong[class*="tone-"]:not(.tone-idle)::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px;
+  border-radius: 50%; background: currentColor; vertical-align: middle;
+}
+.home-card-agent .tone-active::before { background: var(--accent); }
+.home-card-agent .tone-saved::before { background: var(--accent-4); }
+.home-card-agent .tone-warning::before,
+.home-card-agent .tone-error::before { background: var(--warn-fg); }
+
+.home-card-open-tab {
+  justify-self: start;
+  color: var(--fg-0);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.home-card-review-link {
+  grid-column: 2;
+  justify-self: start;
+  color: var(--fg-0);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.home-card-open-tab:focus-visible,
+.home-card-review-link:focus-visible { outline: 2px solid var(--fg-0); outline-offset: 2px; }
+
+@media (max-width: 800px) {
+  .home-agent-guide { align-items: flex-start; flex-direction: column; gap: 4px; }
+}

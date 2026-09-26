@@ -1,6 +1,8 @@
 // Harness Editor コアの公開 API。Plan 2（エディタアプリ）はここから import する。
 export * from './types';
 export { loadProject, serializeProject, type ProjectFiles } from './project';
+export * from './mainAudio';
+export { parseMainAudioData, serializeMainAudioData } from './mainAudioData';
 export {
   normalizeCutRegions,
   applyCuts,
@@ -29,6 +31,7 @@ export { buildWordChips } from './wordChips';
 export { validateProject } from './validation';
 export { parseVideoConfig, parseVideoConfigStatic } from './videoConfig';
 export { parseTranscript } from './transcript';
+export { createScriptDocument, parseScriptDocumentData, serializeScriptDocumentData } from './scriptDocumentData';
 export { parseProjectConfig } from './projectConfig';
 export { parseTelopData, serializeTelopData, formatTelopArray } from './telopData';
 export { parseCutData, serializeCutData, formatCutArray } from './cutData';

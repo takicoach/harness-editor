@@ -53,19 +53,20 @@ const Title: React.FC<TitleProps> = ({ segment }) => {
     >
       <div
         style={{
-          background: 'linear-gradient(90deg, #B20AFD 0%, #087FFF 100%)',
+          background: 'linear-gradient(90deg, #E8CE9A 0%, #D4B97A 50%, #B8954C 100%)',
           padding: '8px 5px',
+          borderRadius: 4,
           display: 'inline-block',
+          boxShadow: '0 4px 16px rgba(20, 46, 35, 0.25)',
         }}
       >
         <p
           style={{
-            color: '#ffffff',
+            color: '#142E23',
             fontSize: TELOP_CONFIG.titleFontSize,
             fontWeight: 800,
             fontFamily: '"Noto Sans JP", sans-serif',
             margin: 0,
-            textShadow: '2px 2px 8px rgba(0, 0, 0, 0.5)',
             lineHeight: 1.2,
             transform: 'skewX(-8deg)',
             whiteSpace: 'nowrap',

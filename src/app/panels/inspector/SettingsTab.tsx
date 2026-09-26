@@ -1,3 +1,4 @@
+import { AssetTimingSection, useAssetTimingDisplay } from './AssetTimingSection';
 import { useState, useEffect } from 'react';
 import { cutOrderingOf } from '../../../core/cutOrder';
 import { playbackToOriginal, originalToPlayback } from '../../../core/cutEngine';
@@ -5,34 +6,29 @@ import { formatClock, frameToSec, parseSecField } from '../../../shared/format';
 import type { EditorTelop, TelopStyle } from '../../../core/types';
 import type { EditState } from '../../edit/editState';
 import {
+  setTelopTemplate,
   setTelopStyle,
   setTelopHighlight,
   setTelopTiming,
   setTelopPosition,
   setTelopScale,
   setTelopManual,
-  applyTelopTemplateForScope,
+  setAllTelopTemplates,
   setAllTelopPositions,
   removeTelop,
   setTelopMotion,
-  type TelopStyleScope,
 } from '../../edit/telopSettingsOps';
 import { MotionSettings } from './MotionSettings';
 import { setTelopText } from '../../edit/textOps';
 import type { InstallKind, InstallErrors } from '../../install';
 import { TELOP_PACK } from '../../../server/telopPack/manifest';
 import { resolveTemplate } from '../../../core/telopTemplate';
-import type { TelopComponent } from '../../../preview/loadTelopComponent';
+import type { NativeTelopRevision } from '../../../preview/nativeTelopCache';
 import { swatchSampleText } from '../../../core/telopSwatch';
 import { TelopStyleGrid } from '../TelopStyleGrid';
 import { TelopPositionFields } from './TelopPositionFields';
+import { TELOP_KEYFRAMES_UNSUPPORTED } from '../../../shared/motionKeys';
 import { InstallCtaButton } from './shared';
-
-/** スタイルの適用範囲トグル（選ぶ「前」に決める）。 */
-const STYLE_SCOPES: { id: TelopStyleScope; label: string }[] = [
-  { id: 'one', label: 'このテロップ' },
-  { id: 'all', label: '全テロップ' },
-];
 
 const STYLES: { id: TelopStyle; label: string }[] = [
   { id: 'normal', label: '通常' },
@@ -42,28 +38,87 @@ const STYLES: { id: TelopStyle; label: string }[] = [
 ];
 
 interface SettingsTabProps {
+  projectId: string;
   telop: EditorTelop;
   state: EditState;
   fps: number;
   telopPackInstalled: boolean;
-  videoInsertInstalled: boolean;
+  /** テロップのキーフレームが書き出しへ反映されるか（未指定＝対応済み扱い）。 */
+  keyframesSupported?: boolean;
   bgmInstalled: boolean;
   /** 導入中の機能種別（null なら非導入中）。 */
   installing: InstallKind | null;
   /** kind 別の導入エラー。 */
   installErrors: InstallErrors;
   dirty: boolean;
-  telopComponent: TelopComponent | null;
+  componentRevision: NativeTelopRevision | null;
   previewWidth: number;
   previewHeight: number;
   onInstall: (kind: InstallKind) => void;
   onEdit: (next: EditState) => void;
 }
 
+/** 見出しに出すテロップ名の最大文字数（status-ia-9）。 */
+const TELOP_TITLE_MAX = 14;
+
+/**
+ * インスペクタ見出しのテロップ名（純関数・status-ia-9）。
+ *
+ * 内部 id（旧「テロップ #100」）は利用者にとって手がかりにならない。本文の先頭を出し、
+ * 本文が空のテロップだけ「（文字なしのテロップ）」にする。
+ */
+export function telopHeadingLabel(text: string, max = TELOP_TITLE_MAX): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine === '') return '（文字なしのテロップ）';
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`;
+}
+
+/** テロップ見出しの時計表示（純関数・status-ia-8）。 */
+export interface TelopClockCaption {
+  /** 再生（カット後）基準の「開始 〜 終了」。入力欄と同じ基準。確定できないなら null。 */
+  playback: string | null;
+  /** 原本（カット前）基準。再生基準と同じなら null（併記しない）。 */
+  original: string | null;
+  /** 再生上の時刻を出せない理由（出せるときは null）。 */
+  note: string | null;
+}
+
+/**
+ * 見出しの時計を再生（カット後）基準に統一し、ずれているときだけ原本を併記する（status-ia-8）。
+ *
+ * 従来は見出しが原本基準・入力欄が再生基準で、カットを増やすほど同じパネル内で
+ * 数字が食い違っていた。基準を書かずに 2 つの時刻を並べない。
+ */
+export function telopClockCaption(
+  shownStart: number,
+  shownEnd: number,
+  originalStart: number,
+  originalEnd: number,
+  fps: number,
+  /**
+   * 両端とも再生フレームへ射影できたか（= playbackStart/End が共に非 null）。
+   * false のとき shownStart / shownEnd には原本フレームが混ざるので、
+   * 再生基準として出さない（開始 > 終了の逆転した範囲や、断りの無い原本時刻が出る）。
+   */
+  timingResolved = true,
+): TelopClockCaption {
+  const original = `${formatClock(frameToSec(originalStart, fps))} 〜 ${formatClock(frameToSec(originalEnd, fps))}`;
+  if (!timingResolved) {
+    return {
+      playback: null,
+      original,
+      note: 'カット区間にかかっているため再生上の時刻は確定できません',
+    };
+  }
+  const playback = `${formatClock(frameToSec(shownStart, fps))} 〜 ${formatClock(frameToSec(shownEnd, fps))}`;
+  return { playback, original: original === playback ? null : original, note: null };
+}
+
 /**
  * テロップ（字幕・装飾の両方）の設定タブ。右ドックの「設定」タブで Inspector 経由で表示する。
  */
-export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsertInstalled, bgmInstalled, installing, installErrors, dirty, telopComponent, previewWidth, previewHeight, onInstall, onEdit }: SettingsTabProps) {
+export function SettingsTab({ projectId, telop, state, fps, telopPackInstalled, keyframesSupported = true, bgmInstalled, installing, installErrors, dirty, componentRevision, previewWidth, previewHeight, onInstall, onEdit }: SettingsTabProps) {
+  const timing = useAssetTimingDisplay();
   // 表示タイミングは再生（カット後）フレームでユーザーに見せる。
   const playbackStart = originalToPlayback(telop.originalStart, state.cutRegions, cutOrderingOf(state));
   const playbackEnd = originalToPlayback(telop.originalEnd, state.cutRegions, cutOrderingOf(state), 'end');
@@ -73,6 +128,8 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
   // テロップの端がカット区間に落ちているとき playbackStart/End が null になる。
   // その場合は shownEnd が原本フレームのままなので commitTiming が誤射影するため入力を禁止する。
   const timingEditable = playbackStart !== null && playbackEnd !== null;
+  // 見出しの時計も入力欄と同じ再生（カット後）基準にする（status-ia-8）。
+  const clock = timing ? { playback: timing.label, original: null, note: null } : telopClockCaption(shownStart, shownEnd, telop.originalStart, telop.originalEnd, fps, timingEditable);
   const position = telop.position ?? { x: 0, y: 0 };
   const scale = telop.scale ?? 1;
 
@@ -81,10 +138,6 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
   // 入力値・表示は秒（小数点2桁）。コミット時に secToFrame で再生フレームへ戻す。
   const [startStr, setStartStr] = useState(frameToSec(shownStart, fps).toFixed(2));
   const [endStr, setEndStr] = useState(frameToSec(shownEnd, fps).toFixed(2));
-
-  // スタイルの適用範囲。既定は「このテロップ」（意図しない一括書き換えを起こさない側）。
-  // 別要素（効果音・画像など）を選んでこのタブが消えると既定へ戻る。
-  const [styleScope, setStyleScope] = useState<TelopStyleScope>('one');
 
   // 外部要因（テロップ選択変更・Undo/Redo・カット変更による再射影）で
   // shownStart / shownEnd が変わったらローカル state を同期する。
@@ -102,10 +155,16 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
     <>
       <div className="ins-section">
         <div className="ins-label">
-          <span>テロップ #{telop.id}</span>
+          <span title={telop.text}>{telopHeadingLabel(telop.text)}</span>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-          {formatClock(frameToSec(telop.originalStart, fps))} 〜 {formatClock(frameToSec(telop.originalEnd, fps))}
+        <div className="ins-telop-clock" data-testid="telop-clock">
+          {clock.playback !== null && <div className="ins-telop-clock-main">{clock.playback}</div>}
+          {clock.original !== null && (
+            <div className={clock.playback === null ? 'ins-telop-clock-main' : 'ins-telop-clock-sub'}>
+              カット前: {clock.original}
+            </div>
+          )}
+          {clock.note !== null && <div className="ins-telop-clock-sub">{clock.note}</div>}
         </div>
       </div>
 
@@ -115,6 +174,7 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
           <div className="ins-label"><span>文字</span></div>
           <textarea
             className="tx-text-edit"
+            data-testid="ins-telop-text"
             value={telop.text}
             rows={2}
             onChange={(e) => onEdit(setTelopText(state, telop.id, e.target.value))}
@@ -155,35 +215,17 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
           </div>
         ) : (
           <>
-            {/* 適用範囲は「選ぶ前」に決める。選んだ後に別ボタンで全体適用する形だと、
-                押し忘れて1枚だけ変わったことに気づけない。 */}
-            <div className="seg ins-style-scope">
-              {STYLE_SCOPES.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  data-scope={s.id}
-                  className={styleScope === s.id ? 'active' : ''}
-                  onClick={() => setStyleScope(s.id)}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-            <p className="ins-style-scope-hint">
-              {styleScope === 'all'
-                ? 'スタイルを選ぶと、すべてのテロップに適用されます（Cmd/Ctrl+Z で戻せます）'
-                : 'スタイルを選ぶと、このテロップだけに適用されます'}
-            </p>
-            {telopComponent ? (
+            {componentRevision ? (
               <TelopStyleGrid
-                telopComponent={telopComponent}
+                key={projectId}
+                projectId={projectId}
+                componentRevision={componentRevision}
                 previewWidth={previewWidth}
                 previewHeight={previewHeight}
                 fps={fps}
                 sampleText={swatchSampleText(telop.text)}
                 currentTemplate={resolveTemplate(telop.template, TELOP_PACK.length)}
-                onSelect={(id) => onEdit(applyTelopTemplateForScope(state, telop.id, id, styleScope))}
+                onSelect={(id) => onEdit(setTelopTemplate(state, telop.id, id))}
               />
             ) : (
               <div className="ins-style-list">
@@ -192,36 +234,26 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
                     key={e.id}
                     type="button"
                     className={'ins-style-item' + (resolveTemplate(telop.template, TELOP_PACK.length) === e.id ? ' active' : '')}
-                    onClick={() => onEdit(applyTelopTemplateForScope(state, telop.id, e.id, styleScope))}
+                    onClick={() => onEdit(setTelopTemplate(state, telop.id, e.id))}
                   >
                     {e.name}
                   </button>
                 ))}
               </div>
             )}
+            <button
+              type="button"
+              className="ins-style-apply-all"
+              onClick={() => onEdit(setAllTelopTemplates(state, resolveTemplate(telop.template, TELOP_PACK.length)))}
+            >
+              このスタイルを全体に適用
+            </button>
           </>
         )}
       </div>
 
-      <div className="ins-section">
-        <div className="ins-label"><span>サブ動画機能</span></div>
-        {!videoInsertInstalled ? (
-          <div className="ins-pack-cta">
-            <p>サブ動画（インサート動画）をプレビューに表示できます。</p>
-            <InstallCtaButton
-              kind="videoInsert"
-              label="サブ動画機能を導入"
-              className="ins-video-install"
-              installing={installing}
-              installErrors={installErrors}
-              dirty={dirty}
-              onInstall={onInstall}
-            />
-          </div>
-        ) : (
-          <p className="ins-pack-hint">サブ動画機能は導入済みです。</p>
-        )}
-      </div>
+      {/* サブ動画機能の導入 CTA は選択非依存の常設ゾーンへ移設済み（B-3 R-5）。
+          テロップ非関連の機能をテロップ設定タブ内に閉じ込めない。Inspector.tsx を参照。 */}
 
       <div className="ins-section">
         <div className="ins-label"><span>BGM 機能</span></div>
@@ -243,7 +275,7 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
         )}
       </div>
 
-      {/* style / highlight は旧 Telop.tsx 用。パック導入後は Ren アダプタが読まない（描画に
+      {/* style / highlight は旧 Telop.tsx 用。パック導入後はスタイルアダプタが読まない（描画に
           影響しない no-op 編集になる）ため、未導入時のみ表示する。 */}
       {!telopPackInstalled && (
         <>
@@ -277,7 +309,7 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
         </>
       )}
 
-      <div className="ins-section">
+<AssetTimingSection>
         <div className="ins-label"><span>表示する時間（秒）</span></div>
         {!timingEditable && (
           <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 6px' }}>
@@ -332,7 +364,7 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
             />
           </div>
         </div>
-      </div>
+      </AssetTimingSection>
 
       <div className="ins-section">
         <div className="ins-label">
@@ -361,6 +393,10 @@ export function SettingsTab({ telop, state, fps, telopPackInstalled, videoInsert
       <MotionSettings
         idPrefix="ins-telop"
         motion={telop.motion}
+        base={{ x: position?.x ?? 0, y: position?.y ?? 0, scale, opacity: 1, rotation: 0 }}
+        keyframeSupport={{ supported: keyframesSupported, message: TELOP_KEYFRAMES_UNSUPPORTED }}
+        durationFrames={timing ? timing.end - timing.start : telop.originalEnd - telop.originalStart}
+        fps={fps}
         onChange={(m) => onEdit(setTelopMotion(state, telop.id, m))}
       />
 

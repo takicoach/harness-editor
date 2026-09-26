@@ -1,7 +1,13 @@
-import type { CutOrderAnchor, CutRegion, DuckingSettings, EditorProject, EditorBgmClip, EditorImage, EditorSe, EditorShape, EditorTelop, EditorTitle, EditorVideoInsert, MainLayout, SegmentLayout, SceneTransition, TelopPosition } from '../../core/types';
+import type { CutOrderAnchor, CutRegion, DuckingSettings, EditorProject, EditorBgmClip, EditorImage, EditorSe, EditorShape, EditorTelop, EditorTitle, EditorVideoInsert, ElementAnim, MainLayout, SegmentLayout, SceneTransition, TelopPosition } from '../../core/types';
 import { DEFAULT_DUCKING } from './duckingSettings';
 import { DEFAULT_MAIN_LAYOUT } from '../../core/mainLayout';
+import { DEFAULT_MAIN_AUDIO, mainAudioSettingsEqual, type MainAudioSettings } from '../../core/mainAudio';
+import { DEFAULT_COLOR_GRADE as DEFAULT_COLOR_GRADE_LOCAL, defaultColorGrade, type ColorGrade } from '../../core/colorGrade';
 import type { LayoutKeyframe } from '../../core/layoutKeyframes';
+import { clampTelopX } from '../../preview/telopLayout';
+import { cutOrderingOf } from '../../core/cutOrder';
+import type { ScriptDocument } from '../../core/scriptAlignment';
+import { sameTimelinePlacement } from '../../core/timelinePlacement';
 
 /** インスペクタ・タイムラインで選択中の対象。一度に 1 つだけ。 */
 export type Selection =
@@ -22,13 +28,15 @@ export type Selection =
  * Undo/Redo はこのオブジェクト全体をスナップショットして履歴へ積む。
  */
 export interface EditState {
+  /** 撮影台本。既存の履歴・保存と同じ寿命で保持する。 */
+  scriptDocument?: ScriptDocument | null;
   /** 原本フレームアンカーのテロップ（編集の正）。 */
   telops: EditorTelop[];
   /** 原本タイムラインから削除する区間。 */
   cutRegions: CutRegion[];
   /**
-   * 再生順アンカー（cutData.ts の配列順スナップショット・読み取り専用）。
-   * カット並び替え編集の順序はここから再導出する（cutRegions は原素材順しか表せない）。
+   * 再生順アンカー（cutData.ts の配列順スナップショット・編集対象）。
+   * カット並び替えの順序はここから再導出する（cutRegions は原素材順しか表せない）。
    * 未設定なら従来どおり原素材順（恒等順列）。
    */
   cutOrder?: CutOrderAnchor[];
@@ -92,6 +100,10 @@ export interface EditState {
    * 2 点以上あればカット区間に縛られずメイン動画レイアウトをこれで連続補間駆動する。
    */
   layoutKeyframes: LayoutKeyframe[];
+  /** カラー補正（動画全体で一律・未設定＝無補正）。mainLayout と同じく任意。 */
+  colorGrade?: ColorGrade;
+  /** 元動画の音声設定。完成座標のフェードを含み、保存/Undoの対象。 */
+  mainAudio?: MainAudioSettings;
 }
 
 /**
@@ -101,29 +113,181 @@ export interface EditState {
  */
 /**
  * タイトル一本化（読み込み時マイグレーション）で使う変換テンプレート。
- * 旧タイトル帯は紫グラデのため、近い id5「白文字紫シャドウ」を既定スタイルにする。
+ * 旧タイトル帯（プロジェクト側 `src/Title/Title.tsx`）は金グラデ
+ * （#E8CE9A → #D4B97A → #B8954C）の帯なので、既定は金系にする。
+ *
+ * 2026-09-04 まで id5「白文字紫シャドウ」だった。「旧タイトル帯は紫グラデ」という
+ * 前提が実物と食い違っており、章タイトルが紫で書き出されていた。
+ *
+ * **2つの番号体系がある**（2026-09-06 判明・B-1 恒久対応）:
+ * - `src/server/telopPack/`（導入式の追加パック）の id 番号は 1..35 の独自体系（id32=GoldGradBg）
+ * - project-template 標準（`テロップテンプレート/telopStyles.ts`）は製品の番号体系
+ * テロップパック未導入のプロジェクトへ id32 を書くと、標準側の `getTemplateConfig` が
+ * 知らない番号になり style フォールバック（既定＝金ではないスタイル）に落ちて
+ * **タイトルが金でなくなる**。パック導入有無で出し分ける。
+ *
+ * 2026-09-16（T15b）まで id7「金文字明朝」だった。案件テンプレートが製品の92種
+ * （本体15＋拡張77）になり、**7 は欠番**になったため（欠番は 7 / 10 / 54）、
+ * 指定しても暗黙のフォールバックに落ちるだけになった。
  */
-export const TITLE_CONVERT_TEMPLATE = 5;
+// project-template が同梱する 92 種のうち id80「立体ゴールド押し出し文字」。
+// 旧 id7「金文字明朝」からの置き換え根拠:
+//   - 金であること … 本変換が守りたいのはここ（Title.tsx の帯は #E8CE9A→#B8954C の金）。
+//   - 背景を持たないこと … 旧 id7 と同じく `background.enabled:false` / padding 0。帯を持つ
+//     スタイル（83〜86 の金枠など）にすると `TITLE_BAND_PADDING_X` から出す左寄せの見積りが
+//     大きく外れ、変換後の位置がずれる。
+//   - 太い表示用書体であること … Title.tsx の帯は fontWeight 800 のゴシック。旧 id7 の明朝は
+//     「7 種の中で唯一の金」だから選ばれたもので、帯の字形に寄せた結果ではない。
+// 80 は同梱済み書体（Dela Gothic One）で描ける。
+export const TITLE_CONVERT_TEMPLATE_BASE = 80;
+export const TITLE_CONVERT_TEMPLATE_PACK = 32; // telopPack 導入済みプロジェクト用の id32「金グラデ背景」。
 
 /**
  * 旧タイトルを装飾テロップへ変換する（タイトル機能のテロップ一本化）。
- * 文字・表示区間はそのまま、配置は上・左（旧タイトルの左上配置を踏襲）、スタイルは紫シャドウ。
+ * 文字・表示区間はそのまま、配置は画面上部の中央、スタイルは金グラデ背景。
  * manual:true で装飾テロップ扱いになり、位置/サイズ/スタイルを自由に編集できる。
  * テロップ描画経路に乗るため、保存後は telopData として書き出しにも自動で一致する。
+ *
+ * position の x が 0 なのは「画面内に必ず収まる x はこれだけ」だから（2026-09-04 の不具合）。
+ * position の transform は AbsoluteFill（フレーム全面）へ掛かるので `translate(x%)` の
+ * 100% は「フレーム幅」であり要素幅ではない。テロップ本体はその中で中央寄せされるため、
+ * x=-1 は「本体の中心を左端へ動かす」＝左半分が画面外になる。本体の幅は文字数依存で
+ * 変換時には分からないので、どんな文字列でも収まる唯一の値である 0 を使う。
+ * 左寄せしたい場合は変換後に利用者がドラッグで詰める（テロップと同じ操作）。
+ *
+ * y=-1 は「上端の余白＝下端の余白」の対称配置（telopVCoeff の設計）なので、
+ * 縦方向は幅に依存せず常に画面内に収まる。
  */
-export function titleToTelop(title: EditorTitle, id: number): EditorTelop {
+/**
+ * 変換時に「元のタイトル帯と同じ見え方」へ寄せるための材料。
+ * 大きさ（scale）は titleFontSize/telopFontSize、左寄せ（position.x）は帯の実測幅から出す。
+ */
+export interface TitleConvertScale {
+  /** TELOP_CONFIG.titleFontSize（元のタイトル帯のフォント）。 */
+  titleFontSize: number | null | undefined;
+  /** TELOP_CONFIG.fontSize（テロップ本体のフォント）。 */
+  telopFontSize: number | null | undefined;
+  /** TELOP_CONFIG.titleLeft（元のタイトルの左端オフセット px）。無ければ左寄せしない。 */
+  titleLeft?: number | null;
+  /** 合成幅（px）。無ければ左寄せしない。 */
+  compWidth?: number | null;
+  /**
+   * 帯の中の文字の実描画幅（px）を返す。ブラウザでのみ測れる。
+   * null / 未指定なら左寄せせず中央（x=0）に置く＝はみ出さない側へ倒す。
+   */
+  measureTextWidth?: (text: string, fontSize: number) => number | null;
+  /**
+   * テロップパック（`src/server/telopPack/`）導入済みか（`loadProjectFiles` の
+   * `telopPackInstalled`）。true なら id32「金グラデ背景」、false/未指定なら
+   * project-template 標準の id80「立体ゴールド押し出し文字」を使う
+   * （{@link TITLE_CONVERT_TEMPLATE_BASE}）。
+   */
+  telopPackInstalled?: boolean;
+}
+
+/**
+ * 変換先テンプレ（GoldGradBg）の帯の左右パディング（px）。
+ * `padding: "0 24px"` に対応する。テンプレの意匠に結合しているので、
+ * 変換先テンプレを変えるときはここも見直す。
+ */
+const TITLE_BAND_PADDING_X = 24;
+
+/**
+ * 帯の左端を titleLeft に載せる position.x を出す。
+ *
+ * position.x は帯の**中心**を動かす（transform は AbsoluteFill＝フレーム全面に掛かり、
+ * その中で帯は中央寄せされる）。x=1 で中心がフレーム幅の半分だけ動くので、
+ * 左端 = (compW - bandW)/2 + x*(compW/2) を titleLeft に解く。
+ *
+ * 幅が測れない・帯がフレームより広い場合は 0（中央）を返す。
+ * 中央なら左右の見切れが対称になり、どちらか片側だけ切れて読めなくなる事故を避けられる。
+ */
+function titleConvertX(text: string, scale: number, s: TitleConvertScale): number {
+  const { titleLeft, compWidth, measureTextWidth } = s;
+  const telopFont = s.telopFontSize;
+  if (measureTextWidth === undefined) return 0;
+  if (typeof titleLeft !== 'number' || typeof compWidth !== 'number') return 0;
+  if (typeof telopFont !== 'number' || !Number.isFinite(compWidth) || compWidth <= 0) return 0;
+  const textWidth = measureTextWidth(text, telopFont);
+  if (typeof textWidth !== 'number' || !Number.isFinite(textWidth) || textWidth < 0) return 0;
+  const bandWidth = (textWidth + TITLE_BAND_PADDING_X * 2) * scale;
+  if (bandWidth >= compWidth) return 0; // フレームより広い＝どこへ置いても切れる
+  const half = compWidth / 2;
+  const x = (titleLeft + bandWidth / 2 - half) / half;
+  // 帯がフレームからはみ出さない範囲へ収める（titleLeft が大きすぎる設定への保険）。
+  // telopLayout.clampTelopX と同式（正本を一本化。手でのコピーで乖離させない）。
+  return clampTelopX(x, compWidth, bandWidth);
+}
+
+/**
+ * タイトル→装飾テロップ変換の縮小率。
+ * テロップはタイトルよりフォントが大きい（C0123 実測: テロップ 136px / タイトル 42px）ため、
+ * 縮めずに画面上部へ動かすと帯が上端からはみ出す（実測: 高さ 170px・top -71px）。
+ * どちらか読めなければ undefined（縮小しない＝従来どおり）。
+ */
+function titleConvertScale(s: TitleConvertScale | undefined): number | undefined {
+  if (s === undefined) return undefined;
+  const { titleFontSize: t, telopFontSize: e } = s;
+  if (typeof t !== 'number' || typeof e !== 'number') return undefined;
+  if (!Number.isFinite(t) || !Number.isFinite(e) || t <= 0 || e <= 0) return undefined;
+  if (t === e) return undefined; // 等倍は scale を持たせない（無駄な差分を作らない）
+  return t / e;
+}
+
+export function titleToTelop(
+  title: EditorTitle,
+  id: number,
+  fontSizes?: TitleConvertScale,
+): EditorTelop {
+  const scale = titleConvertScale(fontSizes);
+  const x = fontSizes === undefined ? 0 : titleConvertX(title.text, scale ?? 1, fontSizes);
+  const template = fontSizes?.telopPackInstalled === true
+    ? TITLE_CONVERT_TEMPLATE_PACK
+    : TITLE_CONVERT_TEMPLATE_BASE;
   return {
     id,
     originalStart: title.originalStart,
     originalEnd: title.originalEnd,
+    ...(title.timelinePlacement ? { timelinePlacement: { ...title.timelinePlacement } } : {}),
     text: title.text,
     manual: true,
-    position: { x: -1, y: -1 },
-    template: TITLE_CONVERT_TEMPLATE,
+    position: { x, y: -1 },
+    template,
+    ...(scale === undefined ? {} : { scale }),
   };
 }
 
-export function createEditState(project: EditorProject, ducking: DuckingSettings = DEFAULT_DUCKING): EditState {
+/**
+ * 変換先テンプレ（GoldGradBg）が使うフォント。左寄せ量の実測に使う。
+ * テンプレ側の `fontStyle: italic` / `fontWeight: 800` / fontFamily と揃える必要がある
+ * （ここがズレると測った幅と実際の描画幅が食い違い、左端が揃わない）。
+ */
+const TITLE_BAND_FONT_FAMILY = '"Noto Sans JP", "Hiragino Kaku Gothic ProN", sans-serif';
+
+let measureCanvas: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * 帯の中の文字の実描画幅（px）。ブラウザでのみ測れる（Node・テストでは null）。
+ * 文字幅は文字種で大きく違う（CJK ≒1.0em / ASCII ≒0.55em）ため、文字数からの概算にはしない。
+ * フォント未読込のときはフォールバック書体で測ることになるが、CJK は代替書体でも
+ * 字幅がほぼ同じで、さらに呼び出し側がフレーム内へクランプするので画面外には出ない。
+ */
+function measureTitleTextWidth(text: string, fontSize: number): number | null {
+  if (typeof document === 'undefined') return null;
+  if (measureCanvas === undefined) {
+    measureCanvas = document.createElement('canvas').getContext('2d');
+  }
+  if (measureCanvas === null) return null;
+  measureCanvas.font = `italic 800 ${fontSize}px ${TITLE_BAND_FONT_FAMILY}`;
+  const w = measureCanvas.measureText(text).width;
+  return Number.isFinite(w) ? w : null;
+}
+
+export function createEditState(
+  project: EditorProject,
+  ducking: DuckingSettings = DEFAULT_DUCKING,
+  telopPackInstalled = false,
+): EditState {
   const baseTelops = project.telops.map((t) => ({ ...t }));
   const cutRegions = project.cutRegions.map((r) => ({ ...r }));
   const se = project.se.map((s) => ({ ...s }));
@@ -135,7 +299,22 @@ export function createEditState(project: EditorProject, ducking: DuckingSettings
   // タイトル一本化: 既存タイトルを装飾テロップへ自動変換して telops へ統合する。
   // 新規 id は既存テロップの最大 id の続きから振る（衝突回避）。
   const baseMaxTelopId = baseTelops.reduce((max, t) => Math.max(max, t.id), 0);
-  const convertedTitles = project.titles.map((t, i) => titleToTelop(t, baseMaxTelopId + 1 + i));
+  // 縮小率はプロジェクトの TELOP_CONFIG 実値から出す（フォーマットごとに違うため定数化しない）。
+  const titleFontSizes: TitleConvertScale = {
+    titleFontSize: project.videoConfig.titleStyle?.fontSize,
+    telopFontSize: project.videoConfig.telopFontSize,
+    titleLeft: project.videoConfig.titleStyle?.left,
+    compWidth: project.videoConfig.resolution?.width,
+    // 実測（measureTitleTextWidth）はテロップパックの GoldGradBg フォント
+    // （italic 800 Noto Sans JP）を前提にしている。パック未導入で id7「金文字明朝」
+    // （normal 600・明朝体）へ落とすときに同じ実測を使うと帯幅を見誤るため、
+    // その場合は測らせず中央（x=0・常に画面内）へ倒す。
+    measureTextWidth: telopPackInstalled ? measureTitleTextWidth : undefined,
+    telopPackInstalled,
+  };
+  const convertedTitles = project.titles.map((t, i) =>
+    titleToTelop(t, baseMaxTelopId + 1 + i, titleFontSizes),
+  );
   const telops = [...baseTelops, ...convertedTitles];
   const maxTelopId = telops.reduce((max, t) => Math.max(max, t.id), 0);
   const maxSeId = se.reduce((max, s) => Math.max(max, s.id), 0);
@@ -147,7 +326,7 @@ export function createEditState(project: EditorProject, ducking: DuckingSettings
   return {
     telops,
     cutRegions,
-    // 並び替え（再生順）は編集対象ではないが、写像の再導出に必要なので状態へ持ち回す。
+    // 並び替え（再生順）を編集・保存し、写像の再導出にも使う。
     cutOrder: project.cutOrder,
     originalTotalFrames: project.videoConfig.durationFrames,
     se,
@@ -175,6 +354,9 @@ export function createEditState(project: EditorProject, ducking: DuckingSettings
     mainLayout: project.mainLayout ?? DEFAULT_MAIN_LAYOUT,
     segmentLayouts: { ...(project.segmentLayouts ?? {}) },
     layoutKeyframes: (project.layoutKeyframes ?? []).map((k) => ({ ...k })),
+    colorGrade: { ...(project.colorGrade ?? defaultColorGrade()) },
+    mainAudio: { ...(project.mainAudio ?? DEFAULT_MAIN_AUDIO) },
+    scriptDocument: project.scriptDocument ? structuredClone(project.scriptDocument) : null,
   };
 }
 
@@ -211,6 +393,8 @@ export function initialEditState(project: Pick<EditorProject, 'mainSpeed' | 'seg
     mainLayout: DEFAULT_MAIN_LAYOUT,
     segmentLayouts: {},
     layoutKeyframes: [],
+    colorGrade: defaultColorGrade(),
+    mainAudio: { ...DEFAULT_MAIN_AUDIO },
   };
 }
 
@@ -298,6 +482,17 @@ function sameSpeedMap(a: Record<number, number>, b: Record<number, number>): boo
   return ak.every((k) => a[Number(k)] === b[Number(k)]);
 }
 
+/** cutOrderの表現差（undefinedと恒等anchor列）を、実際の再生順で比較する。 */
+function sameCutOrder(a: EditState, b: EditState): boolean {
+  const ax = cutOrderingOf(a).segments;
+  const bx = cutOrderingOf(b).segments;
+  if (ax.length !== bx.length) return false;
+  return ax.every((segment, index) => {
+    const other = bx[index];
+    return other !== undefined && segment.originalStart === other.originalStart && segment.originalEnd === other.originalEnd;
+  });
+}
+
 /** MainLayout の深い等値比較（未設定は既定とみなす）。 */
 function sameMainLayout(a: MainLayout | undefined, b: MainLayout | undefined): boolean {
   const x = a ?? DEFAULT_MAIN_LAYOUT;
@@ -310,6 +505,18 @@ function sameMainLayout(a: MainLayout | undefined, b: MainLayout | undefined): b
     (x.rotation ?? 0) === (y.rotation ?? 0) &&
     !!x.flipH === !!y.flipH &&
     !!x.flipV === !!y.flipV
+  );
+}
+
+/** カラー補正の等値比較（未設定は無補正扱い）。 */
+function sameColorGrade(a: ColorGrade | undefined, b: ColorGrade | undefined): boolean {
+  const x = a ?? DEFAULT_COLOR_GRADE_LOCAL;
+  const y = b ?? DEFAULT_COLOR_GRADE_LOCAL;
+  return (
+    x.brightness === y.brightness &&
+    x.contrast === y.contrast &&
+    x.saturation === y.saturation &&
+    x.temperature === y.temperature
   );
 }
 
@@ -372,8 +579,35 @@ function sameMotion(
     a.preset === b.preset &&
     a.intensity === b.intensity &&
     sameMotionState(a.from, b.from) &&
-    sameMotionState(a.to, b.to)
+    sameMotionState(a.to, b.to) &&
+    sameMotionKeys(a.keys, b.keys)
   );
+}
+
+/**
+ * キーフレーム列（F-1）の等値比較。
+ *
+ * keys を見落とすと、キーを打つ・動かす・消す編集が dirty にならず、
+ * 保存済み表示のまま離脱・再読込で黙って消える（Codex レビュー P1・実測で再現）。
+ * preset/from/to が同じでもキーだけ違う編集は日常的に起こるので、
+ * 長さと全フィールド（t と MotionState）を突合する。
+ */
+function sameMotionKeys(
+  a: import('../../core/motion').MotionKey[] | undefined,
+  b: import('../../core/motion').MotionKey[] | undefined,
+): boolean {
+  if (a === b) return true;
+  const xs = a ?? [];
+  const ys = b ?? [];
+  if (xs.length !== ys.length) return false;
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i];
+    const y = ys[i];
+    if (x === undefined || y === undefined) return false;
+    if (x.t !== y.t) return false;
+    if (!sameMotionState(x, y)) return false;
+  }
+  return true;
 }
 
 function sameMotionState(
@@ -390,6 +624,7 @@ function sameMotionState(
 
 function sameTelop(a: EditorTelop, b: EditorTelop): boolean {
   return (
+    sameTimelinePlacement(a.timelinePlacement, b.timelinePlacement) &&
     a.id === b.id &&
     a.originalStart === b.originalStart &&
     a.originalEnd === b.originalEnd &&
@@ -410,25 +645,50 @@ function sameCutRegion(a: CutRegion, b: CutRegion): boolean {
   return a.start === b.start && a.end === b.end;
 }
 
-/** EditorSe の永続化フィールドを比較する。 */
+/**
+ * ElementAnim（登場・退場アニメ）の等値比較。
+ * 両方未指定なら等しい（＝呼び出し側の既定に任せる状態が一致）。片方だけ指定は不一致。
+ */
+function sameElementAnim(a: ElementAnim | undefined, b: ElementAnim | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return a.kind === b.kind && a.frames === b.frames && a.direction === b.direction;
+}
+
+/**
+ * EditorSe の永続化フィールドを比較する。
+ * 区間長（originalEnd）とフェード長も seData.ts へ書かれるため必ず含める
+ * ——落とすと SE の伸縮・フェード編集が dirty にならず黙って消える。
+ * フェードは未指定と 0 が同義（seData.ts が 0 を書かない）なので既定へ寄せて比べる。
+ */
 function sameSe(a: EditorSe, b: EditorSe): boolean {
   return (
+    sameTimelinePlacement(a.timelinePlacement, b.timelinePlacement) &&
     a.id === b.id &&
     a.originalStart === b.originalStart &&
+    a.originalEnd === b.originalEnd &&
     a.file === b.file &&
-    a.volume === b.volume
+    a.volume === b.volume &&
+    (a.fadeInFrames ?? 0) === (b.fadeInFrames ?? 0) &&
+    (a.fadeOutFrames ?? 0) === (b.fadeOutFrames ?? 0)
   );
 }
 
 /** EditorImage の永続化フィールドを比較する。 */
 function sameImage(a: EditorImage, b: EditorImage): boolean {
   return (
+    sameTimelinePlacement(a.timelinePlacement, b.timelinePlacement) &&
     a.id === b.id &&
     a.originalStart === b.originalStart &&
     a.originalEnd === b.originalEnd &&
     a.file === b.file &&
     a.type === b.type &&
     a.scale === b.scale &&
+    samePosition(a.position, b.position) &&
+    (a.opacity ?? 1) === (b.opacity ?? 1) &&
+    (a.rotation ?? 0) === (b.rotation ?? 0) &&
+    sameElementAnim(a.enter, b.enter) &&
+    sameElementAnim(a.exit, b.exit) &&
     sameMotion(a.motion, b.motion)
   );
 }
@@ -436,6 +696,7 @@ function sameImage(a: EditorImage, b: EditorImage): boolean {
 /** EditorVideoInsert の永続化フィールドを比較する。 */
 function sameVideoInsert(a: EditorVideoInsert, b: EditorVideoInsert): boolean {
   return (
+    sameTimelinePlacement(a.timelinePlacement, b.timelinePlacement) &&
     a.id === b.id &&
     a.originalStart === b.originalStart &&
     a.originalEnd === b.originalEnd &&
@@ -443,13 +704,16 @@ function sameVideoInsert(a: EditorVideoInsert, b: EditorVideoInsert): boolean {
     a.sourceInFrame === b.sourceInFrame &&
     samePosition(a.position, b.position) &&
     a.scale === b.scale &&
-    a.playbackRate === b.playbackRate
+    a.playbackRate === b.playbackRate &&
+    sameElementAnim(a.enter, b.enter) &&
+    sameElementAnim(a.exit, b.exit)
   );
 }
 
 /** EditorShape の永続化フィールドを比較する。 */
 function sameShape(a: EditorShape, b: EditorShape): boolean {
   return (
+    sameTimelinePlacement(a.timelinePlacement, b.timelinePlacement) &&
     a.id === b.id &&
     a.originalStart === b.originalStart &&
     a.originalEnd === b.originalEnd &&
@@ -467,6 +731,7 @@ function sameShape(a: EditorShape, b: EditorShape): boolean {
 /** EditorBgmClip の永続化フィールドを比較する。 */
 function sameBgmClip(a: EditorBgmClip, b: EditorBgmClip): boolean {
   return (
+    sameTimelinePlacement(a.timelinePlacement, b.timelinePlacement) &&
     a.id === b.id &&
     a.originalStart === b.originalStart &&
     a.originalEnd === b.originalEnd &&
@@ -504,6 +769,7 @@ export function samePersistedContent(a: EditState, b: EditState): boolean {
     if (ra === undefined || rb === undefined) return false;
     if (!sameCutRegion(ra, rb)) return false;
   }
+  if (!sameCutOrder(a, b)) return false;
   for (let i = 0; i < a.se.length; i++) {
     const sa = a.se[i];
     const sb = b.se[i];
@@ -532,7 +798,7 @@ export function samePersistedContent(a: EditState, b: EditState): boolean {
     const ta = a.titles[i];
     const tb = b.titles[i];
     if (ta === undefined || tb === undefined) return false;
-    if (ta.id !== tb.id || ta.originalStart !== tb.originalStart || ta.originalEnd !== tb.originalEnd || ta.text !== tb.text) return false;
+    if (!sameTimelinePlacement(ta.timelinePlacement, tb.timelinePlacement) || ta.id !== tb.id || ta.originalStart !== tb.originalStart || ta.originalEnd !== tb.originalEnd || ta.text !== tb.text) return false;
   }
   for (let i = 0; i < a.shapes.length; i++) {
     const sa = a.shapes[i];
@@ -544,7 +810,8 @@ export function samePersistedContent(a: EditState, b: EditState): boolean {
     const ta = a.sceneTransitions[i];
     const tb = b.sceneTransitions[i];
     if (ta === undefined || tb === undefined) return false;
-    if (ta.id !== tb.id || ta.at !== tb.at || ta.kind !== tb.kind || ta.durationFrames !== tb.durationFrames || ta.color !== tb.color) return false;
+    // direction（slide/wipe の向き）も書き出しへ載るため比較に含める。
+    if (ta.id !== tb.id || ta.at !== tb.at || ta.kind !== tb.kind || ta.durationFrames !== tb.durationFrames || ta.color !== tb.color || ta.direction !== tb.direction) return false;
   }
   if (a.ducking.enabled !== b.ducking.enabled || a.ducking.strength !== b.ducking.strength) return false;
   if (a.mainSpeed !== b.mainSpeed) return false;
@@ -552,6 +819,9 @@ export function samePersistedContent(a: EditState, b: EditState): boolean {
   if (!sameMainLayout(a.mainLayout, b.mainLayout)) return false;
   if (!sameSegmentLayoutMap(a.segmentLayouts, b.segmentLayouts)) return false;
   if (!sameLayoutKeyframeList(a.layoutKeyframes, b.layoutKeyframes)) return false;
+  if (!sameColorGrade(a.colorGrade, b.colorGrade)) return false;
+  if (!mainAudioSettingsEqual(a.mainAudio, b.mainAudio)) return false;
+  if (JSON.stringify(a.scriptDocument ?? null) !== JSON.stringify(b.scriptDocument ?? null)) return false;
   return true;
 }
 
@@ -565,9 +835,10 @@ export function toEditorProject(state: EditState, base: EditorProject): EditorPr
     videoConfig: base.videoConfig,
     projectConfig: base.projectConfig,
     transcript: base.transcript,
+    scriptDocument: state.scriptDocument === undefined ? base.scriptDocument : state.scriptDocument,
     telops: state.telops,
     cutRegions: state.cutRegions,
-    cutOrder: base.cutOrder,
+    cutOrder: state.cutOrder ?? base.cutOrder,
     se: state.se,
     images: state.images,
     videoInserts: state.videoInserts,
@@ -589,5 +860,7 @@ export function toEditorProject(state: EditState, base: EditorProject): EditorPr
     mainLayout: state.mainLayout,
     segmentLayouts: state.segmentLayouts,
     layoutKeyframes: state.layoutKeyframes,
+    colorGrade: state.colorGrade,
+    mainAudio: state.mainAudio,
   };
 }

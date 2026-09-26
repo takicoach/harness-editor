@@ -7,18 +7,18 @@ import { loadStore } from './store';
 
 let storeHome: string;
 let root: string;
-const originalHome = process.env.HARNESS_LEARNING_HOME;
+const originalHome = process.env.SUPERMOVIE_LEARNING_HOME;
 
 beforeEach(() => {
   storeHome = mkdtempSync(join(tmpdir(), 'sm-store-'));
   root = mkdtempSync(join(tmpdir(), 'sm-proj-'));
-  process.env.HARNESS_LEARNING_HOME = storeHome;
+  process.env.SUPERMOVIE_LEARNING_HOME = storeHome;
 });
 afterEach(() => {
   rmSync(storeHome, { recursive: true, force: true });
   rmSync(root, { recursive: true, force: true });
-  if (originalHome === undefined) delete process.env.HARNESS_LEARNING_HOME;
-  else process.env.HARNESS_LEARNING_HOME = originalHome;
+  if (originalHome === undefined) delete process.env.SUPERMOVIE_LEARNING_HOME;
+  else process.env.SUPERMOVIE_LEARNING_HOME = originalHome;
 });
 
 describe('runCli', () => {

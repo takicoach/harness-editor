@@ -56,6 +56,7 @@ export function splitTelopAt(
   leftText: string,
   rightText: string,
 ): EditState {
+  if (!Number.isFinite(atFrame)) return state; // NaN は splitSegment を素通りして区間端が NaN になる
   const index = state.telops.findIndex((t) => t.id === telopId);
   if (index === -1) return state;
   const telop = state.telops[index];

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   MATERIAL_KINDS,
   assetUrl,
@@ -11,6 +11,7 @@ import { useAudioClips } from '../audio/useAudioClips';
 import { normalizedVolumeFromSamples } from '../audio/loudness';
 import { Waveform } from '../timeline/Waveform';
 import { TrashIcon } from '../icons/TrashIcon';
+import { MATERIAL_UPLOAD_ACCEPT } from '../uploadMaterial';
 
 interface MaterialLibraryProps {
   kind: MaterialKind;
@@ -62,6 +63,7 @@ export function MaterialLibrary({
   onOpenTrash,
 }: MaterialLibraryProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   // OS ファイルをドラッグで重ねている間のハイライト。dragenter/leave は子要素間の
   // 出入りでも発火するため、カウンタで実際の出入りだけを判定する。
   const [dragDepth, setDragDepth] = useState(0);
@@ -144,6 +146,16 @@ export function MaterialLibrary({
         )}
       </div>
 
+      {onDropFiles !== undefined && <>
+        <input ref={fileInput} type="file" hidden multiple accept={MATERIAL_UPLOAD_ACCEPT}
+          aria-label="取り込む素材ファイル" onChange={event => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            // Allow retrying the same file after a failed upload or cancellation.
+            event.currentTarget.value = '';
+            if (files.length > 0) onDropFiles(files);
+          }} />
+        <button type="button" className="ml-import" onClick={() => fileInput.current?.click()}>素材を読み込む</button>
+      </>}
       {rows.length === 0 ? (
         <div className="ml-empty">
           <p className="ml-empty-title">{meta.emptyTitle}</p>
@@ -155,7 +167,11 @@ export function MaterialLibrary({
               void fetch(
                 `/api/materials/open-folder?id=${encodeURIComponent(projectId)}&kind=${encodeURIComponent(kind)}`,
                 { method: 'POST' },
-              ).catch(() => {});
+              ).catch((err: unknown) => {
+                // Finder を開くだけの補助操作。失敗しても編集は継続できるため UI はブロックしないが、
+                // 無言で消すと「なぜ開かないのか」が分からなくなるので console には残す。
+                console.warn('[material-library] open-folder failed:', err);
+              });
             }}
           >
             フォルダを開く
@@ -227,7 +243,8 @@ export function MaterialLibrary({
           {rows.map((row, i) => {
             const url = assetUrl(projectId, row.assetPath, assetVersions);
             const playing = playingPath === url;
-            const samples = audioClips[i]?.samples ?? null;
+            const samples = audioClips[i]?.clip?.samples ?? null;
+            const decodeFailed = audioClips[i]?.failed ?? false;
             const auditionVolume = samples !== null
               ? normalizedVolumeFromSamples(samples, kind === 'bgm' ? 'bgm' : 'se')
               : undefined;
@@ -238,7 +255,14 @@ export function MaterialLibrary({
                 onPointerDown={(e) => onDragStart?.(kind, row.file, e)}
                 onClick={() => { setSelected(row.file); onAudition(url, auditionVolume); }}
               >
-                <Waveform samples={samples} width={120} height={20} className="ml-row-wave" />
+                <span className="ml-row-wave-wrap">
+                  <Waveform samples={samples} width={120} height={20} className="ml-row-wave" />
+                  {decodeFailed && (
+                    <span className="ml-row-wave-error" title="音声を読み込めませんでした（破損ファイル・非対応形式の可能性）">
+                      波形なし
+                    </span>
+                  )}
+                </span>
                 <span className="ml-row-name">{row.file}</span>
                 <span className="ml-row-state">{playing ? '再生中' : ''}</span>
                 <span

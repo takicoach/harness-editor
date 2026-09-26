@@ -7,11 +7,13 @@ import { resolveStatusView, statusLabel, formatRelativeTime } from './projectSta
 
 interface FolderBrowserProps {
   open: boolean;
+  disabled?: boolean;
   projects: ProjectSummary[];
   activeId: string | null;
   error: string | null;
   onPick: (id: string) => void;
-  onToggle: () => void;
+  /** 渡されたときだけ畳む／開くボタンを描く。native は自前のヘッダーが持つので渡さない。 */
+  onToggle?: () => void;
   /** ホーム（プロジェクト未選択）へ戻る。未指定またはプロジェクト未選択時はボタン非表示。 */
   onGoHome?: () => void;
 }
@@ -36,27 +38,30 @@ function workingClass(p: ProjectSummary, now: number): string {
   return resolveStatusView(p, now).spinner ? ' fb-working' : ' fb-working stale';
 }
 
-export function FolderBrowser({ open, projects, activeId, error, onPick, onToggle, onGoHome }: FolderBrowserProps) {
+export function FolderBrowser({ open, disabled=false, projects, activeId, error, onPick, onToggle, onGoHome }: FolderBrowserProps) {
   const now = useLiveNow();
   if (!open) {
     return (
       <div className="fb">
         <div className="fb-head">
-          <button className="fb-collapse" onClick={onToggle} title="フォルダを開く">
-            <Icon name="panel-left-open" size={15} />
-          </button>
+          {onToggle !== undefined && (
+            <button className="fb-collapse" onClick={onToggle} title="フォルダを開く">
+              <Icon name="panel-left-open" size={15} />
+            </button>
+          )}
         </div>
         <div className="fb-mini">
           {projects.slice(0, 8).map((p) => (
             <button
               key={p.id}
               className={'fb-mini-item' + (activeId === p.id ? ' active' : '') + workingClass(p, now)}
+              disabled={disabled}
               onClick={() => onPick(p.id)}
               title={p.activityLabel !== undefined ? `${p.name} — ${resolveStatusView(p, now).label}` : p.name}
             >
               <div className={'fb-thumb' + (p.orientation === 'h' ? ' h' : p.orientation === 'sq' ? ' sq' : '')}>
-                {p.videoFile !== null ? (
-                  <VideoThumb src={`/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile)}`} />
+                {p.videoAssetId || p.videoFile !== null ? (
+                  <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({id:p.id,asset:p.videoAssetId})}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
                 ) : (
                   <div className="fb-thumb-inner" />
                 )}
@@ -80,20 +85,22 @@ export function FolderBrowser({ open, projects, activeId, error, onPick, onToggl
             <Icon name="home" size={15} />
           </button>
         )}
-        <button className="fb-collapse" onClick={onToggle} title="サイドバーを畳む">
-          <Icon name="panel-left-close" size={15} />
-        </button>
+        {onToggle !== undefined && (
+          <button className="fb-collapse" onClick={onToggle} title="サイドバーを畳む">
+            <Icon name="panel-left-close" size={15} />
+          </button>
+        )}
       </div>
       <div className="fb-list">
         <div className="fb-section-title">
-          <span>ハーネス形式のプロジェクト</span>
+          <span>動画プロジェクト</span>
           <span className="fb-counts">{projects.length} 件</span>
         </div>
         {error && <div className="sme-warnings sme-error">{error}</div>}
         {!error && projects.length === 0 && (
           <div className="sme-center">
             <p>プロジェクトが見つかりません</p>
-            <p className="hint">HARNESS_PROJECT_ROOT にハーネス形式のプロジェクトのある場所を指定してください</p>
+            <p className="hint">プロジェクトを新しく作成するか、動画プロジェクトのあるフォルダを選んでください</p>
           </div>
         )}
         {projects.map((p) => {
@@ -103,12 +110,14 @@ export function FolderBrowser({ open, projects, activeId, error, onPick, onToggl
           <div
             key={p.id}
             className={'fb-item' + (activeId === p.id ? ' active' : '') + workingClass(p, now)}
-            onClick={() => onPick(p.id)}
+            role="button" tabIndex={disabled?-1:0} aria-label={p.name} aria-disabled={disabled} aria-current={activeId===p.id?'true':undefined}
+            onClick={() => {if(!disabled)onPick(p.id);}}
+            onKeyDown={event=>{if(!disabled&&(event.key==='Enter'||event.key===' ')){event.preventDefault();event.stopPropagation();onPick(p.id);}}}
             title={working ? `${p.name} — ${view.label}` : p.name}
           >
             <div className={'fb-thumb' + (p.orientation === 'h' ? ' h' : p.orientation === 'sq' ? ' sq' : '')}>
-              {p.videoFile !== null ? (
-                <VideoThumb src={`/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile)}`} />
+              {p.videoAssetId || p.videoFile !== null ? (
+                <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({id:p.id,asset:p.videoAssetId})}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
               ) : (
                 <div className="fb-thumb-inner" />
               )}

@@ -14,11 +14,19 @@ export function versionToken(size: number, mtimeMs: number): string {
  * ファイルの指紋（size + mtimeMs）を算出する。
  * ファイルが存在しなければ null（cutData.ts 不在を表現する）。
  * relPath はクライアントへ返す相対パス（プロジェクトディレクトリ基準）。
+ * existsSync 通過後に対象が消える/権限エラーになるレースが起きても statSync の
+ * 例外で呼び出し元（loadProjectFromDir 等）を巻き込んで落とさない。フォールバックは
+ * 「不在」と同じ扱い＝ null（呼び出し側は versionToken を付けず従来 URL のまま配信する）。
  */
 export function fingerprintFile(absPath: string, relPath: string): FileFingerprint | null {
   if (!existsSync(absPath)) return null;
-  const st = statSync(absPath);
-  return { relPath, size: st.size, mtimeMs: st.mtimeMs };
+  try {
+    const st = statSync(absPath);
+    return { relPath, size: st.size, mtimeMs: st.mtimeMs };
+  } catch (err) {
+    console.warn('[sme] ファイル指紋の取得に失敗:', absPath, err);
+    return null;
+  }
 }
 
 /**

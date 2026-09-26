@@ -1,0 +1,23 @@
+.ai-request-panel { padding: 20px 16px; overflow: auto; min-height: 0; color: var(--fg-0); }
+.ai-request-heading, .ai-request-actions, .ai-request-record-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ai-request-panel h3 { font-size: 14px; margin: 0; font-weight: 650; }
+.ai-request-heading span, .ai-request-record-head time, .ai-request-record small { color: var(--fg-2); font-size: 11px; }
+.ai-request-help, .ai-request-empty { color: var(--fg-2); font-size: 12px; line-height: 1.7; }
+.ai-request-panel label { display: block; font-size: 12px; margin: 18px 0 8px; }
+.ai-request-panel textarea { width: 100%; min-height: 100px; resize: vertical; padding: 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-0); color: var(--fg-0); font: inherit; font-size: 13px; line-height: 1.7; }
+.ai-request-actions { flex-wrap: wrap; margin-top: 10px; }
+.ai-request-actions button { min-height: 34px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--fg-0); font: inherit; font-size: 12px; cursor: pointer; }
+.ai-request-actions .ai-request-send { background: var(--accent); color: var(--accent-on); border-color: var(--accent); }
+.ai-request-actions button:disabled { opacity: .5; cursor: default; }
+.ai-request-error { font-size: 12px; line-height: 1.7; color: var(--danger, #c75848); }
+.ai-request-terminal { height: 360px; min-height: 260px; display: flex; flex-direction: column; border: 1px solid var(--border); margin-top: 16px; }
+.ai-request-history { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 18px; }
+.ai-request-activity { margin-top: 14px; }
+.ai-request-activity button { min-height: 36px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 4px; background: transparent; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+.ai-request-activity button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.ai-request-record { padding: 16px 0; border-top: 1px solid var(--border); }
+.ai-request-record-head strong { font-size: 12px; }
+.ai-request-record[data-state="failed"] .ai-request-record-head strong { color: var(--danger, #c75848); }
+.ai-request-record p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.7; margin: 9px 0; }
+.ai-request-reply { border-left: 2px solid var(--border-strong); padding-left: 12px; margin: 12px 0; }
+.ai-request-reply span { color: var(--fg-2); font-size: 11px; }

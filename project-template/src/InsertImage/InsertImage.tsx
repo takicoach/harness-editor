@@ -1,58 +1,16 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Img, staticFile } from 'remotion';
+import { useCurrentFrame, interpolate, Img, staticFile } from '@harness/frame-runtime';
 import type { ImageSegment } from './types';
+// 2点アニメ／キーフレームの補間は自己完結コピー（本体 core/motion.ts と同式）。
+import { sampleImageMotion, type Motion, type MotionFull } from './imageMotion';
+import { animStyleAt, DEFAULT_FADE } from './elementAnim';
+
+// HARNESS_STANDARD_IMAGE_RENDERING_V1: plain と明示的な出入りアニメに対応。
 
 interface InsertImageProps {
   segment: ImageSegment & { imageUrl?: string };
 }
 
-
-// ── 2点アニメ（Harness Editor の core/motion.ts と同式・自己完結） ──
-type MotionState = { x?: number; y?: number; scale?: number; opacity?: number; rotation?: number };
-type Motion = {
-  preset: 'zoomIn' | 'zoomOut' | 'panLeft' | 'panRight' | 'fadeIn' | 'custom';
-  intensity?: number;
-  from?: MotionState;
-  to?: MotionState;
-};
-type MotionFull = { x: number; y: number; scale: number; opacity: number; rotation: number };
-const mclamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
-
-function clampMotionFull(s: MotionFull): MotionFull {
-  return {
-    x: mclamp(s.x, -1.5, 1.5),
-    y: mclamp(s.y, -1.5, 1.5),
-    scale: mclamp(s.scale, 0.05, 8),
-    opacity: mclamp(s.opacity, 0, 1),
-    rotation: mclamp(s.rotation, -360, 360),
-  };
-}
-
-function sampleImageMotion(motion: Motion, base: MotionFull, frame: number, duration: number): MotionFull {
-  const k = mclamp(motion.intensity ?? 0.5, 0, 1);
-  let from: MotionFull = { ...base };
-  let to: MotionFull = { ...base };
-  if (motion.preset === 'zoomIn') to = { ...to, scale: base.scale * (1 + 0.8 * k) };
-  if (motion.preset === 'zoomOut') from = { ...from, scale: base.scale * (1 + 0.8 * k) };
-  if (motion.preset === 'panLeft') { from = { ...from, x: base.x + 0.4 * k }; to = { ...to, x: base.x - 0.4 * k }; }
-  if (motion.preset === 'panRight') { from = { ...from, x: base.x - 0.4 * k }; to = { ...to, x: base.x + 0.4 * k }; }
-  if (motion.preset === 'fadeIn') from = { ...from, opacity: 0 };
-  const apply = (target: MotionFull, o: MotionState | undefined): MotionFull => ({
-    x: o?.x ?? target.x, y: o?.y ?? target.y, scale: o?.scale ?? target.scale,
-    opacity: o?.opacity ?? target.opacity, rotation: o?.rotation ?? target.rotation,
-  });
-  from = clampMotionFull(apply(from, motion.from));
-  to = clampMotionFull(apply(to, motion.to));
-  const p = duration <= 0 ? 1 : mclamp(frame / duration, 0, 1);
-  const t = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-  return clampMotionFull({
-    x: from.x + (to.x - from.x) * t,
-    y: from.y + (to.y - from.y) * t,
-    scale: from.scale + (to.scale - from.scale) * t,
-    opacity: from.opacity + (to.opacity - from.opacity) * t,
-    rotation: from.rotation + (to.rotation - from.rotation) * t,
-  });
-}
 
 export const InsertImage: React.FC<InsertImageProps> = ({ segment }) => {
   const frame = useCurrentFrame();
@@ -64,12 +22,9 @@ export const InsertImage: React.FC<InsertImageProps> = ({ segment }) => {
   // src は editor プレビューでは segment.imageUrl、最終 render では staticFile。
   const src = segment.imageUrl ?? staticFile(`images/${segment.file}`);
 
-  const fade = interpolate(
-    localFrame,
-    [0, 8, duration - 8, duration],
-    [0, 1, 1, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
+  const plain = segment.type === 'plain';
+  const defaultAnim = plain ? { kind: 'none' as const, frames: 0 } : DEFAULT_FADE;
+  const anim = animStyleAt(localFrame, duration, segment.enter ?? defaultAnim, segment.exit ?? defaultAnim);
   // ユーザー配置＋2点アニメ: motion があれば区間の進行度で位置/大きさ/不透明度/回転を補間する。
   const baseState: MotionFull = {
     x: segment.position?.x ?? 0,
@@ -80,8 +35,8 @@ export const InsertImage: React.FC<InsertImageProps> = ({ segment }) => {
   };
   const motion = (segment as { motion?: Motion }).motion;
   const sampled = motion ? sampleImageMotion(motion, baseState, localFrame, duration) : baseState;
-  // ユーザー不透明度（補間済み）をフェードに乗算。暗幕には掛けない。
-  const opacity = fade * sampled.opacity;
+  // 出入りは外側、ユーザー不透明度は画像だけへ適用する。
+  const opacity = anim.opacity * sampled.opacity;
   const pos = { x: sampled.x, y: sampled.y };
   const userScale = sampled.scale;
   const placement = `translate(${(pos.x * 100) / 2}%, ${(pos.y * 100) / 2}%) rotate(${sampled.rotation}deg) scale(${userScale})`;
@@ -95,7 +50,9 @@ export const InsertImage: React.FC<InsertImageProps> = ({ segment }) => {
     : 1;
 
   return (
-    <>
+    // Keep inner image/shade ordering local to this track. A positive outer
+    // z-index escapes later video/shape/scene layers and disagrees with export.
+    <div style={{ position: 'absolute', inset: 0, transform: anim.transform, zIndex: 0 }}>
       {/* overlay の暗幕は配置レイヤーの外＝全画面・背面（画像と一緒に動かない）。 */}
       {segment.type === 'overlay' && (
         <div
@@ -103,7 +60,7 @@ export const InsertImage: React.FC<InsertImageProps> = ({ segment }) => {
             position: 'absolute',
             top: 0, left: 0, width: '100%', height: '100%',
             backgroundColor: 'rgba(0, 0, 0, 0.7)',
-            opacity: fade,
+            opacity: anim.opacity,
             zIndex: 50,
           }}
         />
@@ -111,30 +68,51 @@ export const InsertImage: React.FC<InsertImageProps> = ({ segment }) => {
       <div
         style={{
           position: 'absolute',
-          top: 0, left: 0, width: '100%', height: '100%',
-          transform: placement,
+          // plain は最終サイズで画像を描く。全画面に拡大して transform で
+          // 縮めると、撮影ブラウザで小さい原画像の輪郭が大きくぼける。
+          // 中心座標から左上を直接求める。奇数サイズの translate(-50%) は
+          // 別レイヤの再標本化で輪郭をぼかすため、配置には使わない。
+          top: plain ? `${(1 + pos.y - userScale) * 50}%` : 0,
+          left: plain ? `${(1 + pos.x - userScale) * 50}%` : 0,
+          width: plain ? `${userScale * 100}%` : '100%',
+          height: plain ? `${userScale * 100}%` : '100%',
+          transform: plain ? `rotate(${sampled.rotation}deg)` : placement,
           transformOrigin: '50% 50%',
           opacity,
           zIndex: 50,
-          display: segment.type === 'overlay' ? 'flex' : 'block',
+          display: segment.type === 'photo' || plain ? 'block' : 'flex',
           justifyContent: 'center',
-          alignItems: 'center',
+          // 図解・overlay とも上部ゾーンに置き、胸元テロップ帯（bottomOffset 540）と人物を隠さない
+          alignItems: 'flex-start',
+          paddingTop: segment.type === 'photo' || plain ? 0 : 100,
+          boxSizing: 'border-box',
         }}
       >
-        {segment.type === 'overlay' ? (
-          <Img src={src} style={{ maxWidth: '80%', maxHeight: '80%', objectFit: 'contain' }} />
-        ) : (
+        {segment.type === 'photo' || plain ? (
           <Img
             src={src}
             style={{
               width: '100%',
               height: '100%',
-              objectFit: segment.type === 'infographic' ? 'contain' : 'cover',
-              transform: `scale(${kenBurns})`,
+              objectFit: plain ? 'contain' : 'cover',
+              transform: plain ? undefined : `scale(${kenBurns})`,
+            }}
+          />
+        ) : (
+          <Img
+            src={src}
+            style={{
+              maxWidth: '78%',
+              maxHeight: '52%',
+              objectFit: 'contain',
+              borderRadius: 28,
+              border: '3px solid #D4B97A',
+              boxShadow: '0 12px 40px rgba(20, 46, 35, 0.35)',
+              backgroundColor: '#ffffff',
             }}
           />
         )}
       </div>
-    </>
+    </div>
   );
 };

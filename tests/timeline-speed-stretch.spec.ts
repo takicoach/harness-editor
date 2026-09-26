@@ -1,9 +1,14 @@
 import { test, expect } from '@playwright/test';
-import { openEditor } from './helpers';
+import { openEditor, useTempProject } from './helpers';
 
 // これらのテストはファイルを保存しない（速度はメモリ上のみ変更）ため、
 // afterEach でのファイル削除は不要。git clean は行わない
 // （per-segment-speed.spec.ts が保存した speedData.ts を誤って削除する競合を防ぐ）。
+
+// 共有 sample-project は smoke / heavy-job-confirm の afterEach が git checkout/clean で
+// 巻き戻すため、その窓に重なると読み込みが壊れる（helpers.ts の useTempProject 参照）。
+// このファイルは保存を伴わない読み取り専用の検証なので、専用コピーへ隔離するだけで足りる。
+const projectId = useTempProject('speed-stretch-tmp');
 
 test('区間を 0.5x にすると帯が広がり、完成尺が増える', async ({ page }) => {
   const pageErrors: string[] = [];
@@ -13,7 +18,7 @@ test('区間を 0.5x にすると帯が広がり、完成尺が増える', async
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // タイムラインの残す区間帯が出る（cutData.ts に 2 区間があるため）
   const band = page.locator('.tl-kept-segment').first();
@@ -63,7 +68,7 @@ test('区間を 2x にすると帯が縮まる', async ({ page }) => {
     pageErrors.push(msg);
   });
 
-  await openEditor(page);
+  await openEditor(page, projectId());
 
   // タイムラインの残す区間帯を取得して初期幅を記録する
   const band = page.locator('.tl-kept-segment').first();

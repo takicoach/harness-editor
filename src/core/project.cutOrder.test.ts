@@ -11,7 +11,6 @@ import { TELOP_DATA_SOURCE } from './__fixtures__/telopData.fixture';
 import { CUT_DATA_SOURCE } from './__fixtures__/cutData.fixture';
 import {
   CUT_DATA_REORDERED_SOURCE,
-  EXPECTED_PLAYBACK_ORDER,
   VIDEO_CONFIG_REORDERED_SOURCE,
 } from './__fixtures__/cutDataReordered.fixture';
 
@@ -80,10 +79,8 @@ describe('カット並び替え: 保存（往復）', () => {
   it('load→save で cutData.ts の並び順・再生フレームが保存される', () => {
     const project = loadProject(REORDERED_FILES);
     const out = serializeProject(project);
-    // 原素材上で隣接する区間（3-4 / 7-8-9 / 10-11）は削除区間モデルで融合するため
-    // 14 → 10 区間になる（本変更以前からの非破壊モデルの仕様）。
-    // 並び順・再生フレーム・総尺は完全に保存される。
-    expect(playbackOrderOf(out.cutDataSource)).toEqual(EXPECTED_PLAYBACK_ORDER);
+    // 明示された14区間は、原素材上で順方向に隣接していても分割境界を保つ。
+    expect(playbackOrderOf(out.cutDataSource)).toEqual(playbackOrderOf(CUT_DATA_REORDERED_SOURCE));
     expect(out.cutDataSource).toContain('CUT_DURATION_FRAMES = 3272');
     expect(out.cutDataSource).toContain('ORIGINAL_DURATION_FRAMES = 11228');
   });
@@ -103,9 +100,9 @@ describe('カット並び替え: 保存（往復）', () => {
     const out = serializeProject(edited);
     const cuts = parseCutData(out.cutDataSource);
     // 分割された 2 区間は元の再生位置（5・6 番目）に留まり、後続はそのまま。
-    expect(cuts.map((c) => c.originalStart)).toEqual([
-      378, 1756, 1929, 2661, 602, 800, 4517, 5299, 8629, 10836, 10959,
-    ]);
+    const expectedStarts = parseCutData(CUT_DATA_REORDERED_SOURCE).flatMap(segment =>
+      segment.originalStart === 602 ? [602, 800] : [segment.originalStart]);
+    expect(cuts.map((c) => c.originalStart)).toEqual(expectedStarts);
     // 再生フレームは並び順で連続している。
     expect(cuts[0]!.playbackStart).toBe(0);
     for (let i = 1; i < cuts.length; i++) {
@@ -148,7 +145,7 @@ describe('カット並び替え: プレビュー再生モデル', () => {
         playbackStart: s.playbackStart,
         playbackEnd: s.playbackEnd,
       })),
-    ).toEqual(EXPECTED_PLAYBACK_ORDER);
+    ).toEqual(playbackOrderOf(CUT_DATA_REORDERED_SOURCE));
     expect(model.playbackDurationInFrames).toBe(3272);
   });
 

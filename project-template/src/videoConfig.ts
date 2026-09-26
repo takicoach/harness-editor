@@ -1,10 +1,10 @@
 // ==== 動画設定（Single Source of Truth） ====
-// /video-harness:init が自動設定します
+// /supermovie-init が自動設定します
 // format に応じて全コンポーネントが参照する値を一元管理
 
 export type VideoFormat = 'youtube' | 'short' | 'square';
 
-// ---- ここを /video-harness:init が書き換える ----
+// ---- ここを /supermovie-init が書き換える ----
 export const FORMAT: VideoFormat = 'youtube';
 export const FPS = 30;
 export const DURATION_FRAMES = 1500; // placeholder
@@ -34,14 +34,15 @@ const TELOP_CONFIG_MAP = {
     readingSpeed: 5, // 文字/秒
   },
   short: {
-    fontSize: 56,
+    // ショート標準（golf-short-gold 実戦投入値）: 胸元位置 bottomOffset 540 / 84px / 1行10字
+    fontSize: 84,
     titleFontSize: 30,
-    maxCharsPerLine: 12,
+    maxCharsPerLine: 10,
     lineBreakThreshold: 10,
-    maxCharsPerTelop: 24,
-    bottomOffset: 200,
-    titleTop: 60,
-    titleLeft: 30,
+    maxCharsPerTelop: 20,
+    bottomOffset: 540,
+    titleTop: 220, // TikTok/IG 上部UI（タブ・検索）回避のセーフゾーン（2026-08-18 試写FB）
+    titleLeft: 64,
     maxWidth: '92%',
     containerPadding: '0 30px',
     readingSpeed: 4,

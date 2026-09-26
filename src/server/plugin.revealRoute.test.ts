@@ -89,7 +89,7 @@ describe('POST /api/project/reveal', () => {
     expect(openFolder).not.toHaveBeenCalled();
   });
 
-  it('ルート直下でも ハーネス形式のプロジェクトでなければ 400', async () => {
+  it('ルート直下でもハーネス形式の案件でなければ 400', async () => {
     mkdirSync(join(root, 'workdir'), { recursive: true });
     writeFileSync(join(root, 'workdir', 'memo.txt'), 'x');
     const r = await call('POST', '/api/project/reveal?id=workdir');

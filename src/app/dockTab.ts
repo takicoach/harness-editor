@@ -2,7 +2,7 @@ import type { EditState } from './edit/editState';
 import { isDecorationTelop } from '../core/decorationTelop';
 
 /** 右ドックのタブ。settings は選択駆動、transcript/ai はユーザー選択の休息タブ。 */
-export type DockTab = 'transcript' | 'settings' | 'ai';
+export type DockTab = 'transcript' | 'script' | 'settings' | 'ai';
 
 /** 選択中クリップが「設定」を出す対象か（装飾 telop / se / image / videoInsert / bgm / title）。 */
 export function selectionWantsSettings(state: EditState): boolean {

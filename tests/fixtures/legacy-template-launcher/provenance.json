@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "c11b2656785971b3cc31cf4747a827e7c6a66a4f",
+  "scope": "Non-executable original template launcher/config. Only four src files are materialized for native tests with current component/data sources. No whole historical runtime or installable package is restored.",
+  "files": [
+    {
+      "path": "package.json.txt",
+      "sourcePath": "project-template/package.json",
+      "bytes": 946,
+      "sha256": "c3820b83390e2413618273ec9d960572651bd920db93c10d8d0143e039f037c3"
+    },
+    {
+      "path": "remotion.config.ts.txt",
+      "sourcePath": "project-template/remotion.config.ts",
+      "bytes": 219,
+      "sha256": "22afde2fe896405798e2063e1168277328385bc9e2d1327752573d4e00592c89"
+    },
+    {
+      "path": "eslint.config.mjs.txt",
+      "sourcePath": "project-template/eslint.config.mjs",
+      "bytes": 79,
+      "sha256": "7f2ca640409fd597965bedf929073b9a74f143643e1711150c4cac3b6ec5c80d"
+    },
+    {
+      "path": "tsconfig.json.txt",
+      "sourcePath": "project-template/tsconfig.json",
+      "bytes": 333,
+      "sha256": "c1d80a41d620a8ee212416c7da959c121511df8cf84af05eccf6418761ee41a7"
+    },
+    {
+      "path": "src/index.ts.txt",
+      "sourcePath": "project-template/src/index.ts",
+      "bytes": 109,
+      "sha256": "957e481dd33a29b4a55ae0e95dbf763b7e48c37c427ca4bd1275faf34bc07a74"
+    },
+    {
+      "path": "src/Root.tsx.txt",
+      "sourcePath": "project-template/src/Root.tsx",
+      "bytes": 460,
+      "sha256": "6d7cc7064ebe4876b5a26750720014149ef65c451228458a5e41ecfbd5393d00"
+    },
+    {
+      "path": "src/MainVideo.tsx.txt",
+      "sourcePath": "project-template/src/MainVideo.tsx",
+      "bytes": 1266,
+      "sha256": "4fbfc8b7c758f9469a5aec8e310c498987c6c25332bef3f11da116de7183454e"
+    },
+    {
+      "path": "src/index.css.txt",
+      "sourcePath": "project-template/src/index.css",
+      "bytes": 23,
+      "sha256": "42070e0b45bb201b2b838a52aaaa6e965f964e0b542d97f1fe517fe59c4b75a8"
+    }
+  ]
+}

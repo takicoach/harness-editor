@@ -47,6 +47,16 @@ describe('loadProject', () => {
     expect(project.cutRegions).toEqual([{ start: 3000, end: 3600 }]);
   });
 
+  it('mainAudioDataを完成座標設定として読込み、serialize後も往復する', () => {
+    const project = loadProject(files({
+      mainAudioDataSource: 'export const MAIN_AUDIO = { gainDb: 6, muted: false, fadeInFrames: 30, fadeOutFrames: 45 };',
+    }));
+    expect(project.mainAudio).toEqual({ gainDb: 6, muted: false, fadeInFrames: 30, fadeOutFrames: 45 });
+    const sources = serializeProject(project);
+    expect(sources.mainAudioDataSource).toContain('gainDb: 6');
+    expect(loadProject(files({ mainAudioDataSource: sources.mainAudioDataSource })).mainAudio).toEqual(project.mainAudio);
+  });
+
   it('テロップは原本フレームでアンカーされる', () => {
     const project = loadProject(FILES);
     // telopData の id:2 は再生 startFrame:200（カット前）→ 原本も 200
@@ -143,7 +153,7 @@ describe('serializeProject', () => {
     expect(out.telopDataSource).toContain('originalEnd: 450,');
   });
 
-  it('非 flagged テロップ（カットに飲まれていない）には originalStart/originalEnd を含めない', () => {
+  it('一意に逆変換できる非 flagged テロップには originalStart/originalEnd を含めない', () => {
     const project = loadProject({
       ...FILES,
       cutDataSource: null,
@@ -158,6 +168,19 @@ describe('serializeProject', () => {
     const out = serializeProject(projectWithNormalTelop);
     expect(out.telopDataSource).not.toContain('originalStart:');
     expect(out.telopDataSource).not.toContain('originalEnd:');
+  });
+
+  it.each([126, 150])('構成カット後も字幕の原本終了位置 %i を保存・再読込で保持する', originalEnd => {
+    const base = loadProject({ ...FILES, cutDataSource: null });
+    const project = { ...base, cutRegions: [{ start: 0, end: 15 }, { start: 36, end: 102 }, { start: 126, end: base.videoConfig.durationFrames }],
+      cutOrder: [{ originalStart: 15, originalEnd: 36 }, { originalStart: 102, originalEnd: 126 }],
+      telops: [{ id: 1, text: '台本の字幕', originalStart: 30, originalEnd }] };
+    const out = serializeProject(project);
+    const reloaded = loadProject({ ...FILES, telopDataSource: out.telopDataSource, cutDataSource: out.cutDataSource });
+    expect(reloaded.telops).toEqual(project.telops);
+    expect(buildPlaybackModel(reloaded).telops).toEqual(buildPlaybackModel(project).telops);
+    const ranges = (items: Array<{ startFrame: number; endFrame: number }>) => items.map(({ startFrame, endFrame }) => ({ startFrame, endFrame }));
+    expect(ranges(buildPlaybackModel(project).telops)).toEqual(ranges(parseTelopData(out.telopDataSource, project.videoConfig.fps, project.videoConfig.durationFrames)));
   });
 
   it('ラウンドトリップ: 行削除テロップの originalStart/originalEnd が保存後再読込で元の値と一致する（バグ再現）', () => {
@@ -483,7 +506,7 @@ export const insertImageData: ImageSegment[] = [
       const startFrame = Number(match[1]);
       const endFrame = Number(match[2]);
       // 既知挙動: 完全にカット区間に飲まれた画像は縮退（startFrame === endFrame）。
-      // この状態を ハーネス側のレンダラが「不可視区間」として扱う。
+      // この状態をハーネス形式側のレンダラが「不可視区間」として扱う。
       // 将来のリファクタで「flagged 画像は serialize 出力から省略する」へ変更する場合、
       // このテストは更新が必要。
       expect(startFrame).toBe(endFrame);

@@ -22,12 +22,13 @@ interface SeSettingsTabProps {
 
 /** SE 選択時のインスペクタ本体（ファイル・音量・試聴・鳴らす時間・削除）。 */
 export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersions, onEdit }: SeSettingsTabProps) {
+  const timing = useAssetTimingDisplay();
   const audition = useAudition();
   // 再生（カット後）フレームでユーザーに見せる。カット区間内なら null。
   const playbackFrame = originalToPlayback(se.originalStart, state.cutRegions, cutOrderingOf(state));
   const shown = playbackFrame ?? se.originalStart;
   const editable = playbackFrame !== null;
-  // volume 未指定 SE は ハーネス形式の再生既定（volume ?? 1）と一致させる。
+  // volume 未指定 SE はハーネス形式の再生既定（volume ?? 1）と一致させる。
   // 新規追加 SE は addSe が 0.3 を明示するため、ここは「ファイル経由で来た既存 SE」
   // 用のフォールバック。0.3 表示だと初回スライダー操作で実音量がいきなり下がってしまう。
   const volume = se.volume ?? 1;
@@ -70,7 +71,7 @@ export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersi
           <span>効果音 #{se.id}</span>
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-          {`${formatClock(frameToSec(se.originalStart, fps))} — ${formatClock(frameToSec(se.originalEnd, fps))}`}
+          {timing?.label ?? `${formatClock(frameToSec(se.originalStart, fps))} — ${formatClock(frameToSec(se.originalEnd, fps))}`}
         </div>
       </div>
 
@@ -151,7 +152,7 @@ export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersi
         </div>
       </div>
 
-      <div className="ins-section">
+      <AssetTimingSection>
         <div className="ins-label"><span>鳴らす時間（秒）</span></div>
         {!editable && (
           <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: '4px 0 6px' }}>
@@ -176,7 +177,7 @@ export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersi
             />
           </div>
         </div>
-      </div>
+      </AssetTimingSection>
 
       <div className="ins-section">
         <button className="tx-mini-btn" onClick={() => onEdit(removeSe(state, se.id))}>
@@ -186,3 +187,4 @@ export function SeSettingsTab({ se, state, fps, seLibrary, projectId, assetVersi
     </>
   );
 }
+import { AssetTimingSection, useAssetTimingDisplay } from './AssetTimingSection';

@@ -1,18 +1,35 @@
 // Harness Editor コアの型定義。
-// TelopSegment / CutSegment は ハーネス本体のデータ形式に対応する。
+// TelopSegment / CutSegment はハーネス形式の本体のデータ形式に対応する。
 
 import type { LayoutKeyframe } from './layoutKeyframes';
+import type { ColorGrade } from './colorGrade';
+import type { MainAudioSettings } from './mainAudio';
+import type { ScriptDocument } from './scriptAlignment';
+import {
+  BUILTIN_TELOP_ANIMATION_IDS as ANIMATION_IDS_BUILTIN,
+  NEW_TELOP_ANIMATION_IDS as ANIMATION_IDS_NEW,
+  TELOP_ANIMATION_IDS as ANIMATION_IDS_ALL,
+  type TelopAnimationId,
+} from './telopAnimation';
 
 /** テロップのスタイル（ハーネス形式の TelopSegment.style と一致）。 */
 export type TelopStyle = 'normal' | 'emphasis' | 'warning' | 'success';
 
-/** テロップテンプレート番号（テロップパック導入時は 1..TELOP_PACK_COUNT。ハーネス既定は 1..6）。 */
+/** テロップテンプレート番号（テロップパック導入時は 1..30。ハーネス形式の既定は 1..6）。 */
 export type TelopTemplate = number;
 
-/** テロップアニメーション（ハーネス形式の TelopSegment.animation と一致）。 */
-export type TelopAnimation =
-  | 'none' | 'slideIn' | 'fadeOnly' | 'slideFromLeft' | 'fadeBlurFromBottom'
-  | 'slideLeftFadeBlur' | 'fadeFromRight' | 'fadeFromLeft' | 'charByChar';
+/**
+ * テロップアニメーション（カタログ https://telop-catalog.pages.dev/ の 17 種）。
+ * 実体は `src/core/telopAnimation.ts` の共有式領域にある（案件テンプレートへ写す領域なので
+ * そちらが正本）。ここは既存の全画面が参照している名前を保つための再輸出。二重定義しない。
+ */
+export type TelopAnimation = TelopAnimationId;
+/** 既存 9 種（案件テンプレート `Telop.tsx` の `getAnimationConfig` が元から描けるもの）。 */
+export const BUILTIN_TELOP_ANIMATION_IDS = ANIMATION_IDS_BUILTIN;
+/** 新規 8 種（I-1 で `telopAnimationEffect` が描く）。 */
+export const NEW_TELOP_ANIMATION_IDS = ANIMATION_IDS_NEW;
+export const TELOP_ANIMATION_IDS = ANIMATION_IDS_ALL;
+export type {TelopAnimationId, NewTelopAnimationId, TelopEffectInput, TelopEffectOutput} from './telopAnimation';
 
 /** テロップ位置。フレーム中心を原点とした正規化オフセット（-1..1）。 */
 export interface TelopPosition {
@@ -58,19 +75,19 @@ export interface TelopSegment {
   animation?: TelopAnimation;
   position?: TelopPosition;
   scale?: number;
-  /** エディタ拡張（任意）: 2点アニメ（開始→終了の補間）。ハーネス本体のレンダラは無視する。 */
+  /** エディタ拡張（任意）: 2点アニメ（開始→終了の補間）。ハーネス形式の本体のレンダラは無視する。 */
   motion?: import('./motion').Motion;
   /**
    * エディタ拡張（任意）: 完全にカットされたテロップの原本タイムライン区間。
    * 行削除されたテロップは startFrame/endFrame だけでは原本区間を復元できないため、
-   * エディタが原本フレームをここへ書き出す。ハーネス本体のレンダラはこのフィールドを無視する。
+   * エディタが原本フレームをここへ書き出す。ハーネス形式の本体のレンダラはこのフィールドを無視する。
    */
   originalStart?: number;
   originalEnd?: number;
   /**
    * エディタ拡張（任意）: true なら「手動追加（装飾）テロップ」を表す。
    * タイムライン上で字幕（印なし）と別段・別色にするためのフラグ。
-   * ハーネス本体のレンダラはこのフィールドを無視する。
+   * ハーネス形式の本体のレンダラはこのフィールドを無視する。
    */
   manual?: boolean;
 }
@@ -119,7 +136,7 @@ export interface CutOrdering {
 
 /**
  * ハーネス形式の seData.ts が持つ SoundEffect。
- * startFrame はカット後（再生）タイムラインのフレーム。エディタ外では ハーネス側が直接使う。
+ * startFrame はカット後（再生）タイムラインのフレーム。エディタ外ではハーネス形式が直接使う。
  */
 export interface SoundEffect {
   id: number;
@@ -138,6 +155,7 @@ export interface SoundEffect {
  * 再生フレームは projectSe() で都度算出する。
  */
 export interface EditorSe {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   /** 区間の終端（原本フレーム・内部は常に持つ）。 */
@@ -187,13 +205,16 @@ export interface SceneTransition {
   durationFrames: number;
   /** fadeColor のときの色（CSS 色）。他 kind では未指定。 */
   color?: string;
-  /** slide/wipe（Plan 3）の方向。本計画では未使用。 */
+  /**
+   * slide/wipe の方向。未指定は `core/transitionDirection.ts` の
+   * `DEFAULT_SLIDE_DIRECTION`（left）で描く（プレビュー＝書き出しの共通既定）。
+   */
   direction?: SlideDirection;
 }
 
 /**
  * ハーネス形式の insertImageData.ts が持つ ImageSegment。
- * startFrame / endFrame はカット後（再生）タイムラインのフレーム。エディタ外では ハーネス側が直接使う。
+ * startFrame / endFrame はカット後（再生）タイムラインのフレーム。エディタ外ではハーネス形式が直接使う。
  */
 export interface ImageSegment {
   id: number;
@@ -217,7 +238,7 @@ export interface ImageSegment {
 }
 
 /** 挿入画像のタイプ。ハーネス形式の ImageSegment.type と一致。 */
-export type ImageType = 'photo' | 'infographic' | 'overlay';
+export type ImageType = 'plain' | 'photo' | 'infographic' | 'overlay';
 
 /**
  * エディタ内部の画像表現。
@@ -225,6 +246,7 @@ export type ImageType = 'photo' | 'infographic' | 'overlay';
  * 再生フレームは projectImages() で都度算出する。
  */
 export interface EditorImage {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   originalEnd: number;
@@ -247,7 +269,7 @@ export interface EditorImage {
 
 /**
  * ハーネス形式の insertVideoData.ts が持つ VideoInsert（サブ動画インサート＝Bロール）。
- * startFrame / endFrame はカット後（再生）タイムラインのフレーム。エディタ外では ハーネス側が直接使う。
+ * startFrame / endFrame はカット後（再生）タイムラインのフレーム。エディタ外ではハーネス形式が直接使う。
  * sourceInFrame はサブ動画ソース内のイン点（startFrame 時点で再生するサブ動画のフレーム＝同期）。
  * position / scale は上流拡張（任意・未指定なら全画面中央。ImageSegment には無い VideoInsert 固有の拡張）。
  */
@@ -274,6 +296,7 @@ export interface VideoInsert {
  * sourceInFrame はサブ動画ソース自身のフレームなのでメインのカット射影では不変。
  */
 export interface EditorVideoInsert {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   originalEnd: number;
@@ -329,6 +352,7 @@ export interface BgmClip {
  * 再生フレームは projectBgm で都度算出する（stale な再生フレームを持たない）。
  */
 export interface EditorBgmClip {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   originalEnd: number;
@@ -355,6 +379,8 @@ export interface TitleStyle {
   left: number;
   /** フォントサイズ（px）。Title.tsx の TELOP_CONFIG.titleFontSize。 */
   fontSize: number;
+  /** フォント（family 文字列）。未指定の旧案件は capturePage/layers.tsx の既定 family で描く。 */
+  fontFamily?: string;
 }
 
 /** videoConfig.ts から読み取る動画設定。 */
@@ -370,7 +396,7 @@ export interface VideoConfig {
   titleStyle: TitleStyle;
   /**
    * テロップ下端オフセット（px）。TELOP_CONFIG.bottomOffset 由来。
-   * プリセットで値が異なる（標準テンプレート short=200 / golf-short-gold=540）ため、
+   * プリセットで値が異なる（ハーネス形式標準 short=200 / golf-short-gold=540）ため、
    * プレビューの**選択枠アンカー・当たり判定**はこの実値を使う。
    * 読み取れないとき（TELOP_CONFIG 不在・非数値）は null＝標準値へフォールバック。
    * 移動量係数（telopVCoeff）・書き出しと同式の telopTransform は**標準固定のまま**で、
@@ -378,6 +404,15 @@ export interface VideoConfig {
    * 省略可なのは既存のテスト用リテラルとの互換のため（未指定は null と同義）。
    */
   telopBottomOffset?: number | null;
+  /**
+   * テロップ本体のフォントサイズ（px）。TELOP_CONFIG.fontSize 由来。
+   * タイトル→装飾テロップ変換で「元のタイトル帯と同じ大きさ」に縮めるための分母に使う
+   * （titleStyle.fontSize / この値 が縮小率）。テロップは下端固定・フォントが大きいため、
+   * 縮めずに画面上部へ動かすと帯が上端からはみ出す（2026-09-05 の実測: 高さ 170px・top -71px）。
+   * 読み取れないとき（TELOP_CONFIG 不在・非数値・非正）は null＝縮小しない。
+   * 省略可なのは既存のテスト用リテラルとの互換のため（未指定は null と同義）。
+   */
+  telopFontSize?: number | null;
 }
 
 /** project-config.json（任意・参考情報）。 */
@@ -418,6 +453,7 @@ export interface Transcript {
  * 再生フレームは projectTelops() で都度算出する。
  */
 export interface EditorTelop {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   originalEnd: number;
@@ -447,6 +483,7 @@ export interface TitleSegment {
 
 /** エディタ内部のタイトル（原本フレームアンカー）。 */
 export interface EditorTitle {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   originalEnd: number;
@@ -465,6 +502,8 @@ export interface EditorProject {
   videoConfig: VideoConfig;
   projectConfig: ProjectConfig | null;
   transcript: Transcript;
+  /** 案件に保存する撮影台本。undefinedは旧payload、nullは明示削除。 */
+  scriptDocument?: ScriptDocument | null;
   telops: EditorTelop[];
   cutRegions: CutRegion[];
   /**
@@ -516,6 +555,15 @@ export interface EditorProject {
    * 未設定・空/1点なら未使用（従来どおり区間ごと個別指定→区間 motion→base）。
    */
   layoutKeyframes?: LayoutKeyframe[];
+  /**
+   * カラー補正（明るさ・コントラスト・彩度・色温度）。**動画全体で一律**（F-2）。
+   * 未設定・既定（全 0）なら無補正＝従来と 1 画素も変わらない。
+   */
+  colorGrade?: ColorGrade;
+  /** 元動画だけに掛ける音声調整。未設定は無補正。 */
+  mainAudio?: MainAudioSettings;
+  /** mainAudioData.tsの原本。既定値ファイルもimport解決のため無関係保存で保持する。 */
+  mainAudioDataSource?: string | null;
   /** メイン動画 全体一律の速度（倍率・1.0=速度なし）。 */
   mainSpeed: number;
   /** 区間 id → 倍率（個別指定のみ・全体速度に従う区間は載らない）。 */
@@ -527,7 +575,7 @@ export interface EditorProject {
 // ---------------------------------------------------------------------------
 
 /** 図形注釈の種類。 */
-export type ShapeKind = 'arrow' | 'line' | 'rect' | 'ellipse';
+export type ShapeKind = 'arrow' | 'line' | 'rect' | 'ellipse' | 'triangle' | 'angle';
 
 /** 図形の線の太さ（描画時にフレーム高さ比へ換算）。 */
 export type ShapeThickness = 'thin' | 'medium' | 'thick';
@@ -535,7 +583,8 @@ export type ShapeThickness = 'thin' | 'medium' | 'thick';
 /**
  * 図形注釈（再生フレーム基準・プロジェクトの shapeData.ts に出力）。
  * 4 種すべてを 2 点 (x1,y1)-(x2,y2)（正規化 0..1・左上原点）で表す。
- * line/arrow=p1→p2 の線分、rect=2点を対角とする矩形、ellipse=2点の枠に内接する楕円。
+ * line/arrow=p1→p2 の線分、rect=2点を対角とする矩形、ellipse=2点の枠に内接する楕円、
+ * triangle=2点の箱に内接する上向き二等辺三角形、angle=(x1,y1)が頂点・(x2,y2)が端点A・(x3,y3)が端点B。
  */
 export interface ShapeSegment {
   id: number;
@@ -546,6 +595,9 @@ export interface ShapeSegment {
   y1: number;
   x2: number;
   y2: number;
+  /** 分度器（angle）の端点 B。他の kind では未使用。 */
+  x3?: number;
+  y3?: number;
   color: string;
   thickness: ShapeThickness;
   /** 不透明度（0..1、未指定＝1）。 */
@@ -554,6 +606,7 @@ export interface ShapeSegment {
 
 /** 図形注釈（原本フレームアンカー・エディタ内部の編集の正）。 */
 export interface EditorShape {
+  timelinePlacement?: import('./timelinePlacement').TimelinePlacement;
   id: number;
   originalStart: number;
   originalEnd: number;
@@ -562,10 +615,72 @@ export interface EditorShape {
   y1: number;
   x2: number;
   y2: number;
+  /** 分度器（angle）の端点 B。他の kind では未使用。 */
+  x3?: number;
+  y3?: number;
   color: string;
   thickness: ShapeThickness;
   /** 不透明度（0..1、未指定＝1）。 */
   opacity?: number;
+}
+
+/** プレビューで鳴らす 1 つの効果音（カット適用済み）。 */
+export interface SePlayback {
+  id: number;
+  /** カット適用後（再生）の開始フレーム。 */
+  playbackFrame: number;
+  /** カット適用後（再生）の終端フレーム。区間長 = playbackEnd - playbackFrame。 */
+  playbackEnd: number;
+  file: string;
+  volume: number;
+  fadeInFrames?: number;
+  fadeOutFrames?: number;
+}
+
+/** プレビューで描く 1 つの挿入画像（カット適用済み）。 */
+export interface ImagePlayback {
+  id: number;
+  /** カット適用後（再生）の開始フレーム。 */
+  playbackStart: number;
+  /** カット適用後（再生）の終了フレーム（排他的）。 */
+  playbackEnd: number;
+  file: string;
+  type: ImageType;
+  scale: number;
+  /** 中心からの正規化オフセット（未指定＝中央）。サブ動画と同じ意味論。 */
+  position?: TelopPosition;
+  /** ユーザー不透明度（未指定＝1）。 */
+  opacity?: number;
+  /** ユーザー回転角（度、未指定＝0）。 */
+  rotation?: number;
+  /**
+   * 2点アニメ／キーフレーム（未指定＝静止）。実際に動かすのはプロジェクト側の
+   * InsertImage.tsx なので、プレビュー・撮影・Remotion 書き出しは同じ値を渡すだけでよい。
+   */
+  motion?: import('./motion').Motion;
+  /** 登場アニメ（未指定＝InsertImage の既定 fade）。 */
+  enter?: ElementAnim;
+  /** 退場アニメ（未指定＝InsertImage の既定 fade）。 */
+  exit?: ElementAnim;
+}
+
+/** プレビューで描く 1 つのサブ動画（カット適用済み）。 */
+export interface VideoInsertPlayback {
+  id: number;
+  /** カット適用後（再生）の開始フレーム。 */
+  playbackStart: number;
+  /** カット適用後（再生）の終了フレーム（排他的）。 */
+  playbackEnd: number;
+  file: string;
+  sourceInFrame: number;
+  position?: TelopPosition;
+  scale: number;
+  /** 登場アニメ（未指定＝InsertVideo の既定 none）。 */
+  enter?: ElementAnim;
+  /** 退場アニメ（未指定＝InsertVideo の既定 none）。 */
+  exit?: ElementAnim;
+  /** 再生速度（倍率・未指定＝1.0）。 */
+  playbackRate?: number;
 }
 
 /** プロジェクト検証の結果。 */

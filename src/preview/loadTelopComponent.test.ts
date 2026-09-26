@@ -12,4 +12,7 @@ describe('pickTelopExport', () => {
   it('Telop が関数でないモジュールはエラー', () => {
     expect(() => pickTelopExport({ Telop: 123 })).toThrow(/Telop/);
   });
+  it('default-only exports have never satisfied the named Telop contract', () => {
+    expect(() => pickTelopExport({ default: () => null })).toThrow(/Telop/);
+  });
 });

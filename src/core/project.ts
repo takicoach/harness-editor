@@ -1,7 +1,7 @@
 import { cutRegionsFromCutData, playbackTotalFrames } from './cutEngine';
 import {
   buildCutOrdering, cutOrderFromCutData,
-  reorderSe, reorderStartEnd, unreorderSe, unreorderStartEnd,
+  reorderSe, reorderSpanCovering, reorderStartEnd, unreorderSe, unreorderSpanCovering, unreorderStartEnd,
 } from './cutOrder';
 import { parseCutData, serializeCutData } from './cutData';
 import { anchorImages, clampImages, projectImages } from './imageEngine';
@@ -29,6 +29,10 @@ import { collapseStartEnd, uncollapseStartEnd } from './sceneCollapse';
 import { parseSpeedData, serializeSpeedData } from './speedData';
 import { parseMainLayoutFile, serializeMainLayoutData } from './mainLayoutData';
 import { DEFAULT_MAIN_LAYOUT } from './mainLayout';
+import { DEFAULT_COLOR_GRADE } from './colorGrade';
+import { parseMainAudioData, serializeMainAudioData } from './mainAudioData';
+import { DEFAULT_MAIN_AUDIO, mainAudioSettingsEqual } from './mainAudio';
+import { parseScriptDocumentData, serializeScriptDocumentData } from './scriptDocumentData';
 import {
   scaleStartEnd, scaleSe, scaleVideoInserts, unscaleStartEnd, unscaleSe, unscaleVideoInserts,
   scaleStartEndPiecewise, scaleSePiecewise, scaleVideoInsertsPiecewise,
@@ -36,13 +40,17 @@ import {
 } from './speedProject';
 import { clampMainSpeed, resolveSpeedSegments } from './speedEngine';
 import type { EditorProject, SegmentLayout } from './types';
+import { hasTimelinePlacements, independentAssetProject, sourceAnchoredProject, mergePlacedAssets, parseTimelineBindings, restorePlacedAssets, serializeTimelineBindings } from './timelinePlacement';
 
 /** loadProject が受け取るプロジェクトファイルの内容一式。 */
 export interface ProjectFiles {
+  editorTimelineJson?: string | null;
   videoConfigSource: string;
   telopDataSource: string;
   cutDataSource: string | null;
   transcriptJson: string;
+  /** shooting-script.json の内容。ファイル不在または旧呼出しでは null。 */
+  scriptDocumentJson?: string | null;
   projectConfigJson: string | null;
   /** seData.ts の内容。ファイル不在なら null。 */
   seDataSource: string | null;
@@ -62,6 +70,8 @@ export interface ProjectFiles {
   speedDataSource?: string | null;
   /** mainLayoutData.ts の内容。ファイル不在なら null。 */
   mainLayoutDataSource?: string | null;
+  /** mainAudioData.ts の内容。ファイル不在なら null。 */
+  mainAudioDataSource?: string | null;
 }
 
 /** プロジェクトファイル群を EditorProject へ束ねる。 */
@@ -69,13 +79,18 @@ export function loadProject(files: ProjectFiles): EditorProject {
   const videoConfig = parseVideoConfig(files.videoConfigSource);
   // mainSpeed と区間速度マップを先に解決して、各 parse 結果の unscale に使う。
   const { mainSpeed: r, segmentSpeeds: rawSegSpeeds } = parseSpeedData(files.speedDataSource ?? null);
-  const { layout: mainLayout, segmentLayouts: segmentLayoutsRaw, layoutKeyframes: layoutKeyframesRaw } = parseMainLayoutFile(
-    files.mainLayoutDataSource ?? null,
-  );
+  const {
+    layout: mainLayout,
+    segmentLayouts: segmentLayoutsRaw,
+    layoutKeyframes: layoutKeyframesRaw,
+    colorGrade,
+  } = parseMainLayoutFile(files.mainLayoutDataSource ?? null);
+  const mainAudio = parseMainAudioData(files.mainAudioDataSource ?? null);
   const projectConfig = files.projectConfigJson
     ? parseProjectConfig(files.projectConfigJson)
     : null;
   const transcript = parseTranscript(files.transcriptJson);
+  const scriptDocument = files.scriptDocumentJson == null ? null : parseScriptDocumentData(files.scriptDocumentJson);
 
   const cutData = parseCutData(files.cutDataSource);
   // 空の cutData.ts（cutData: []）は「全カット」を意味する。cutDataSource が null
@@ -162,7 +177,7 @@ export function loadProject(files: ProjectFiles): EditorProject {
     cutRegions,
   );
   const bgm = anchorBgm(
-    unreorderStartEnd(
+    unreorderSpanCovering(
       uncollapseStartEnd(
         unscaleSE_(parseBgmData(files.bgmDataSource ?? null)),
         overlaps,
@@ -202,10 +217,11 @@ export function loadProject(files: ProjectFiles): EditorProject {
     computeJoins(videoConfig.durationFrames, cutRegions, ordering),
   );
 
-  return {
+  const project: EditorProject = {
     videoConfig,
     projectConfig,
     transcript,
+    scriptDocument,
     telops,
     cutRegions,
     cutOrder,
@@ -252,11 +268,28 @@ export function loadProject(files: ProjectFiles): EditorProject {
       ...kf,
       originalFrame: Math.min(Math.max(0, kf.originalFrame), Math.max(0, videoConfig.durationFrames)),
     })),
+    // カラー補正は全体一律＝カット・区間・尺のどれにも紐付かないので写像しない。
+    colorGrade,
+    mainAudio,
+    mainAudioDataSource: files.mainAudioDataSource ?? null,
   };
+  const bindings = parseTimelineBindings(files.editorTimelineJson);
+  if (bindings.length > 0) {
+    const fps = videoConfig.fps, duration = videoConfig.durationFrames;
+    project.telops = restorePlacedAssets('telops', telops, parseTelopData(files.telopDataSource, fps, duration), bindings);
+    project.titles = restorePlacedAssets('titles', titles, files.titleDataSource ? parseTitleData(files.titleDataSource, fps, duration) : [], bindings);
+    project.images = restorePlacedAssets('images', images, parseInsertImageData(files.insertImageDataSource, fps), bindings);
+    project.videoInserts = restorePlacedAssets('videoInserts', videoInserts, parseInsertVideoData(files.videoInsertDataSource ?? null, fps), bindings);
+    project.bgm = restorePlacedAssets('bgm', bgm, parseBgmData(files.bgmDataSource ?? null), bindings);
+    project.se = restorePlacedAssets('se', se, parseSeData(files.seDataSource), bindings);
+    project.shapes = restorePlacedAssets('shapes', shapes, parseInsertShapeData(files.shapeDataSource ?? null), bindings);
+  }
+  return project;
 }
 
 /** EditorProject の編集結果を telopData.ts / cutData.ts / seData.ts / insertImageData.ts / insertVideoData.ts / bgmData.ts / titleData.ts / shapeData.ts / transitionData.ts のソースへ書き戻す。 */
 export function serializeProject(project: EditorProject): {
+  editorTimelineJson: string | null;
   telopDataSource: string;
   cutDataSource: string;
   seDataSource: string | null;
@@ -273,7 +306,12 @@ export function serializeProject(project: EditorProject): {
   speedDataSource: string | null;
   /** 完全既定（全画面・黒）なら null（ファイル不要）、それ以外は mainLayoutData.ts ソース。 */
   mainLayoutDataSource: string | null;
+  /** 完全既定なら null（ファイル不要）、それ以外は mainAudioData.ts ソース。 */
+  mainAudioDataSource: string | null;
+  /** 台本がnullならnull、それ以外はstrictなshooting-script.json。 */
+  scriptDocumentJson: string | null;
 } {
+  if (hasTimelinePlacements(project)) return serializeProjectWithPlacements(project);
   const original = project.videoConfig.durationFrames;
   const rate = project.mainSpeed; // 速度最外段スケール係数（下の resolved.map((r)=>...) の r とは別物）
   // 再生順アンカーから並び替えを再導出する（恒等順列なら applyCuts の出力そのもの＝従来と同一）。
@@ -303,14 +341,15 @@ export function serializeProject(project: EditorProject): {
   const { telops, flaggedIds } = clampTelops(project.telops, project.cutRegions);
   const projected = projectTelops(telops, project.cutRegions);
 
-  // flagged（カット区間に完全に飲まれた）テロップにだけ originalStart/originalEnd を付与する。
-  // 再生フレームが潰れていても再読込時に原本区間を復元できるようにする（I-1 修正）。
+  // カットで失われる端点も原本アンカーを保存する。完全に飲まれた場合だけでなく、
+  // 部分的なクランプや末尾境界も再生座標からは一意に逆変換できない。
   const flaggedSet = new Set(flaggedIds);
-  const projectedWithOriginalPlayback = projected.map((seg) => {
-    if (!flaggedSet.has(seg.id)) return seg;
-    // 原本区間は project.telops（未加工の原本アンカー＝正）から引く。clamp 後の値ではない。
-    const source = project.telops.find((t) => t.id === seg.id);
+  const recovered = anchorTelops(projected, project.cutRegions);
+  const projectedWithOriginalPlayback = projected.map((seg, index) => {
+    const source = project.telops[index];
     if (source === undefined) return seg;
+    if (!flaggedSet.has(seg.id) && recovered[index]?.originalStart === source.originalStart
+      && recovered[index]?.originalEnd === source.originalEnd) return seg;
     return { ...seg, originalStart: source.originalStart, originalEnd: source.originalEnd };
   });
   // 単調再生フレーム → 並び替え後の再生フレーム → 最終フレームへ写す
@@ -394,7 +433,7 @@ export function serializeProject(project: EditorProject): {
     project.videoConfig.fps,
     project.ducking,
   );
-  const bgmCollapsed = collapseStartEnd(reorderStartEnd(bgmPlayback, ordering), overlaps);
+  const bgmCollapsed = collapseStartEnd(reorderSpanCovering(bgmPlayback, ordering), overlaps);
 
   // トランジションを原本フレームから再生フレームへ射影してから直列化する。
   // transitionData は再生座標のまま据え置き（at は overlaps の定義元）。
@@ -424,6 +463,7 @@ export function serializeProject(project: EditorProject): {
     speedSegs ? scaleVideoInsertsPiecewise(items, speedSegs) : scaleVideoInserts(items, rate);
 
   return {
+    editorTimelineJson: null,
     // 速度スケール: uniform (usePiecewise=false) は既存 scaleStartEnd(_, rate) と同一＝バイト同値。
     // 個別指定ありのとき区分線形 scaleSE_/scaleSe_/scaleVI_ を使う。
     // cut/transition は不変（速度非依存）。
@@ -453,6 +493,43 @@ export function serializeProject(project: EditorProject): {
       project.mainLayout ?? DEFAULT_MAIN_LAYOUT,
       project.segmentLayouts ?? {},
       project.layoutKeyframes ?? [],
+      project.colorGrade ?? DEFAULT_COLOR_GRADE,
     ),
+    mainAudioDataSource: (() => {
+      const settings = project.mainAudio ?? DEFAULT_MAIN_AUDIO;
+      // 未変更なら既存sourceをbyte単位で保つ。MAIN_AUDIO以外のexportやimport利用を
+      // 無関係な保存で壊さず、将来settingsが変わった場合だけ正典sourceへ再生成する。
+      if (project.mainAudioDataSource !== undefined && project.mainAudioDataSource !== null) {
+        const existing = parseMainAudioData(project.mainAudioDataSource);
+        if (mainAudioSettingsEqual(existing, settings)) return project.mainAudioDataSource;
+      }
+      return serializeMainAudioData(settings);
+    })(),
+    scriptDocumentJson: project.scriptDocument == null
+      ? null
+      : serializeScriptDocumentData(project.scriptDocument),
+  };
+}
+
+/** Both paths reuse the legacy serializers; only independent assets use an identity clock. */
+function serializeProjectWithPlacements(project: EditorProject): ReturnType<typeof serializeProject> {
+  const source = serializeProject(sourceAnchoredProject(project));
+  const independent = serializeProject(independentAssetProject(project));
+  const fps = project.videoConfig.fps, duration = project.videoConfig.durationFrames;
+  const telops = (text: string) => parseTelopData(text, fps, duration);
+  const titles = (text: string | null) => text ? parseTitleData(text, fps, duration) : [];
+  const images = (text: string | null) => parseInsertImageData(text, fps);
+  const videos = (text: string | null) => parseInsertVideoData(text, fps);
+  return {
+    ...source,
+    editorTimelineJson: serializeTimelineBindings(project),
+    telopDataSource: serializeTelopData(project.telopDataSource, mergePlacedAssets(project.telops, telops(source.telopDataSource), telops(independent.telopDataSource))),
+    titleDataSource: source.titleDataSource === null && independent.titleDataSource === null ? null
+      : serializeTitleData(project.titleDataSource ?? TITLE_DATA_TEMPLATE, mergePlacedAssets(project.titles, titles(source.titleDataSource), titles(independent.titleDataSource))),
+    insertImageDataSource: serializeInsertImageData(project.insertImageDataSource, mergePlacedAssets(project.images, images(source.insertImageDataSource), images(independent.insertImageDataSource))),
+    videoInsertDataSource: serializeInsertVideoData(project.videoInsertDataSource ?? null, mergePlacedAssets(project.videoInserts ?? [], videos(source.videoInsertDataSource), videos(independent.videoInsertDataSource))),
+    bgmDataSource: serializeBgmData(mergePlacedAssets(project.bgm ?? [], parseBgmData(source.bgmDataSource, { includeDerivedDucking: true }), parseBgmData(independent.bgmDataSource, { includeDerivedDucking: true })), project.bgmDataSource ?? null),
+    seDataSource: serializeSeData(project.seDataSource, mergePlacedAssets(project.se, parseSeData(source.seDataSource), parseSeData(independent.seDataSource))),
+    shapeDataSource: serializeInsertShapeData(project.shapeDataSource ?? null, mergePlacedAssets(project.shapes ?? [], parseInsertShapeData(source.shapeDataSource), parseInsertShapeData(independent.shapeDataSource))),
   };
 }

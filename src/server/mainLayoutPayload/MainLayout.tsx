@@ -1,7 +1,60 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, useCurrentFrame } from '@harness/frame-runtime';
 import type { CutSegmentLite, Layout, SegmentLayout } from './types';
 import { layoutSegmentRanges, effectiveLayoutAtFrame, type LayoutKeyframe } from './layoutSegments';
+import {
+  colorGradeFilterId,
+  colorGradeMatrixValues,
+  colorWheelTransfers,
+  isIdentityColorWheels,
+  isIdentityColorGrade,
+  type ColorGrade,
+  type ColorGradeScope,
+} from './colorGrade';
+
+/**
+ * カラー補正レイヤ（F-2）。無補正なら children をそのまま返す（既存案件の絵が 1 画素も変わらない）。
+ *
+ * SuperMovie Editor のプレビュー（EditorComposition の MainVideoColorGrade）と
+ * **同一の DOM 構造・同一の filter 文字列**を組む。
+ * `src/preview/colorGradeDomParity.test.tsx` が両者の DOM を突き合わせて固定する。
+ */
+export const ColorGradeLayer: React.FC<{
+  grade?: ColorGrade;
+  /** 対象レイヤ（filter id を分ける）。未指定＝メイン動画。 */
+  scope?: ColorGradeScope;
+  children: React.ReactNode;
+}> = ({ grade, scope = 'main', children }) => {
+  if (grade === undefined || isIdentityColorGrade(grade)) return <>{children}</>;
+  const id = colorGradeFilterId(scope);
+  const transfers = colorWheelTransfers(grade);
+  return (
+    <AbsoluteFill data-sme-color-grade={scope}>
+      {/*
+        色温度に相当する CSS filter 関数が無いため、4 つの補正を 1 枚の色行列へ畳んで
+        feColorMatrix で当てる。既定の linearRGB へ落ちないよう sRGB を明示する。
+      */}
+      <svg aria-hidden="true" width={0} height={0} style={{ position: 'absolute' }}>
+        <filter id={id} colorInterpolationFilters="sRGB">
+          <feColorMatrix type="matrix" values={colorGradeMatrixValues(grade)} />
+          {!isIdentityColorWheels(grade.wheels) && <>
+            <feComponentTransfer>
+              <feFuncR type="linear" slope={transfers[0].slope} intercept={transfers[0].intercept} />
+              <feFuncG type="linear" slope={transfers[1].slope} intercept={transfers[1].intercept} />
+              <feFuncB type="linear" slope={transfers[2].slope} intercept={transfers[2].intercept} />
+            </feComponentTransfer>
+            <feComponentTransfer>
+              <feFuncR type="gamma" amplitude={transfers[0].amplitude} exponent={transfers[0].exponent} offset={0} />
+              <feFuncG type="gamma" amplitude={transfers[1].amplitude} exponent={transfers[1].exponent} offset={0} />
+              <feFuncB type="gamma" amplitude={transfers[2].amplitude} exponent={transfers[2].exponent} offset={0} />
+            </feComponentTransfer>
+          </>}
+        </filter>
+      </svg>
+      <AbsoluteFill style={{ filter: `url(#${id})` }}>{children}</AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
 
 /** 恒等（全画面・変形なし）か。背景は不問（縮小・移動が無く見えないため）。 */
 export function isIdentityLayout(l: Layout): boolean {
@@ -71,6 +124,8 @@ interface Props {
   layoutKeyframes?: LayoutKeyframe[];
   /** シーン転換（transitionData）。overlap 系（crossfade/slide/wipe）があれば base 降格＝プレビュー一致。未指定＝無し。 */
   transitions?: TransitionLite[];
+  /** カラー補正（全体一律・未指定/既定なら素通し＝従来と同一描画）。 */
+  colorGrade?: ColorGrade;
   children: React.ReactNode;
 }
 
@@ -82,17 +137,20 @@ interface Props {
  * 恒等なら children 素通し。非恒等なら背景 AbsoluteFill + transform AbsoluteFill で包む。
  * メイン動画レイヤーだけを変形（他レイヤーは外＝全画面）。
  */
-export const MainLayout: React.FC<Props> = ({ layout, segmentLayouts, cutData, mainSpeed = 1, segmentSpeeds = {}, layoutKeyframes = [], transitions, children }) => {
+export const MainLayout: React.FC<Props> = ({ layout, segmentLayouts, cutData, mainSpeed = 1, segmentSpeeds = {}, layoutKeyframes = [], transitions, colorGrade, children }) => {
   const frame = useCurrentFrame();
   const frameAware = isFrameAwareLayout(cutData, segmentLayouts, layoutKeyframes, transitions);
   const effective = frameAware
     ? effectiveLayoutAtFrame(frame, layout, segmentLayouts ?? {}, layoutSegmentRanges(cutData!, mainSpeed, segmentSpeeds), cutData!, layoutKeyframes)
     : layout;
-  if (isIdentityLayout(effective)) return <>{children}</>;
+  // カラー補正はメイン動画の映像だけに掛ける（＝変形の内側）。外側に掛けると
+  // 縮小時に見える背景色まで補正され、プレビューと書き出しで背景の扱いが割れる余地ができる。
+  const graded = <ColorGradeLayer grade={colorGrade}>{children}</ColorGradeLayer>;
+  if (isIdentityLayout(effective)) return graded;
   return (
     <AbsoluteFill style={{ backgroundColor: effective.background }}>
       <AbsoluteFill style={{ transform: layoutTransform(effective), transformOrigin: 'center' }}>
-        {children}
+        {graded}
       </AbsoluteFill>
     </AbsoluteFill>
   );

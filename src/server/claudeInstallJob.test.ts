@@ -3,25 +3,21 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import * as nodeChildProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createInstallJob } from './claudeInstallJob';
 import { findTool, clearToolCache } from './aiToolBin';
 import { AI_TOOLS } from './aiTools';
 
-// findTool の検出キャッシュ無効化配線を検証する3テスト用（Minor 1 対応）: deps.which を
-// 注入するとキャッシュを迂回する仕様になったため（aiToolBin.ts）、ここでは既定経路
-// （deps 無し）でキャッシュが効くこと／導入完了・失敗・error で無効化されることを
-// execFileSync の呼び出し回数で検証する。vi.spyOn は ESM の named export を再定義できず
-// 失敗するため、vi.mock で実体をラップした vi.fn に差し替える（spawn は実体のまま使うので
-// このファイルの他のテスト（実プロセス起動）の挙動は変わらない）。
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
-});
-
-/** 実バイナリを起動しないための偽アダプタ（binName が存在しないので which が即 null を返す）。 */
-const FAKE_FIND_TOOL = { ...AI_TOOLS.claude, binName: 'sme-nonexistent-bin-for-install-cache-test' };
+/**
+ * findTool の検出キャッシュ無効化配線を検証する3テスト用。
+ * Important 7: 以前は「注入するとキャッシュを迂回する」仕様に合わせて**注入無し**で
+ * 回していたため、既定の探索経路が実際の `which` と**ログインシェル（zsh -lc）**を
+ * 起動していた。キャッシュ迂回は明示フラグ `bypassCache` になったので、探索関数を
+ * 注入したまま（外部プロセスを一切起動せずに）キャッシュの効き方を数えられる。
+ */
+function findStub(): { which: ReturnType<typeof vi.fn>; knownDirs: string[]; loginShell: () => Promise<string | null> } {
+  return { which: vi.fn(async (): Promise<string | null> => null), knownDirs: [], loginShell: async () => null };
+}
 
 describe('claudeInstallJob', () => {
   let dir: string;
@@ -62,13 +58,11 @@ describe('claudeInstallJob', () => {
   it('導入完了（終了コード 0）で aiToolBin の検出キャッシュを無効化する（Important 2 配線）', async () => {
     dir = mkdtempSync(join(tmpdir(), 'sme-install-'));
     clearToolCache();
-    const execSpy = vi.mocked(nodeChildProcess.execFileSync);
-    execSpy.mockClear();
-    // 1回目: キャッシュに載る。2回目: TTL 内なので which（execFileSync）は再実行されない
-    // （キャッシュが効いている）。
-    findTool(FAKE_FIND_TOOL, dir);
-    findTool(FAKE_FIND_TOOL, dir);
-    expect(execSpy).toHaveBeenCalledTimes(1);
+    const find = findStub();
+    // 1回目: キャッシュに載る。2回目: TTL 内なので探索し直さない（キャッシュが効いている）。
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    expect(find.which).toHaveBeenCalledTimes(1);
 
     const job = createInstallJob({
       spawnImpl: () => spawn(process.execPath, ['-e', 'process.exit(0)']),
@@ -77,9 +71,9 @@ describe('claudeInstallJob', () => {
     await new Promise((r) => setTimeout(r, 1000));
     expect(job.status().phase).toBe('done');
 
-    // 導入完了直後: TTL 満了を待たずキャッシュが無効化され、which が再実行される。
-    findTool(FAKE_FIND_TOOL, dir);
-    expect(execSpy).toHaveBeenCalledTimes(2);
+    // 導入完了直後: TTL 満了を待たずキャッシュが無効化され、探索が再実行される。
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    expect(find.which).toHaveBeenCalledTimes(2);
   });
 
   /**
@@ -90,11 +84,10 @@ describe('claudeInstallJob', () => {
   it('導入失敗（非 0 終了）でも検出キャッシュを無効化する（Minor 2）', async () => {
     dir = mkdtempSync(join(tmpdir(), 'sme-install-'));
     clearToolCache();
-    const execSpy = vi.mocked(nodeChildProcess.execFileSync);
-    execSpy.mockClear();
-    findTool(FAKE_FIND_TOOL, dir);
-    findTool(FAKE_FIND_TOOL, dir);
-    expect(execSpy).toHaveBeenCalledTimes(1);
+    const find = findStub();
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    expect(find.which).toHaveBeenCalledTimes(1);
 
     const job = createInstallJob({
       spawnImpl: () => spawn(process.execPath, ['-e', 'process.exit(1)']),
@@ -103,18 +96,17 @@ describe('claudeInstallJob', () => {
     await new Promise((r) => setTimeout(r, 1000));
     expect(job.status().phase).toBe('failed');
 
-    findTool(FAKE_FIND_TOOL, dir);
-    expect(execSpy).toHaveBeenCalledTimes(2);
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    expect(find.which).toHaveBeenCalledTimes(2);
   });
 
-  it("子プロセスの 'error' イベントでも検出キャッシュを無効化する（Minor 2）", () => {
+  it("子プロセスの 'error' イベントでも検出キャッシュを無効化する（Minor 2）", async () => {
     dir = mkdtempSync(join(tmpdir(), 'sme-install-'));
     clearToolCache();
-    const execSpy = vi.mocked(nodeChildProcess.execFileSync);
-    execSpy.mockClear();
-    findTool(FAKE_FIND_TOOL, dir);
-    findTool(FAKE_FIND_TOOL, dir);
-    expect(execSpy).toHaveBeenCalledTimes(1);
+    const find = findStub();
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    expect(find.which).toHaveBeenCalledTimes(1);
 
     const proc = makeFakeProc(9999);
     const job = createInstallJob({ spawnImpl: () => proc });
@@ -122,8 +114,8 @@ describe('claudeInstallJob', () => {
     proc.emit('error', new Error('spawn ENOENT'));
     expect(job.status().phase).toBe('failed');
 
-    findTool(FAKE_FIND_TOOL, dir);
-    expect(execSpy).toHaveBeenCalledTimes(2);
+    await findTool(AI_TOOLS.claude, { editorDir: dir, ...find });
+    expect(find.which).toHaveBeenCalledTimes(2);
   });
 });
 

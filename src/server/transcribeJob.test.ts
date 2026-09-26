@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { spawn as nodeSpawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { Readable } from 'node:stream';
 import { TranscribeJobManager, type FakeProcess, type TranscribeJobEvent } from './transcribeJob';
@@ -6,12 +7,31 @@ import { TranscribeJobManager, type FakeProcess, type TranscribeJobEvent } from 
 function makeFakeProcess(): FakeProcess {
   const proc = new EventEmitter() as FakeProcess;
   const stdout = new EventEmitter() as unknown as Readable;
+  const stderr = new EventEmitter() as unknown as Readable;
   proc.stdout = stdout;
+  proc.stderr = stderr;
   proc.kill = vi.fn(() => true);
   return proc;
 }
 
 describe('TranscribeJobManager', () => {
+  it('retains synchronous interpreter-resolution failure as one terminal event and allows retry after discard',()=>{
+    let fail=true;const proc=makeFakeProcess(),events:TranscribeJobEvent[]=[];
+    const mgr=new TranscribeJobManager({spawn:()=>{if(fail)throw new Error('Python 3.10 以上が見つかりません');return proc;}});
+    mgr.subscribe('p1',event=>events.push(event));
+    const job=mgr.start('p1',{backupPath:'/private/retained-backup'});
+    expect(job.phase).toBe('failed');expect(job.backupPath).toBe('/private/retained-backup');expect(mgr.get('p1')).toBe(job);
+    expect(events).toHaveLength(1);expect(events[0]).toMatchObject({phase:'failed',error:{code:'python-spawn-failed'}});
+    mgr.discard('p1');fail=false;expect(mgr.start('p1',{backupPath:null}).phase).toBe('starting');
+  });
+  it('does not overwrite a new job started by a synchronous failure subscriber',()=>{
+    let calls=0;const proc=makeFakeProcess();
+    const mgr=new TranscribeJobManager({spawn:()=>{if(calls++===0)throw new Error('resolution failed');return proc;}});
+    mgr.subscribe('p1',event=>{if(event.phase==='failed'){mgr.discard('p1');mgr.start('p1',{backupPath:'new'});}});
+    const previous=mgr.start('p1',{backupPath:'previous'});
+    expect(previous.phase).toBe('failed');expect(mgr.get('p1')).toMatchObject({phase:'starting',backupPath:'new'});
+    expect(calls).toBe(2);expect(mgr.cancel('p1')).toBe(true);expect(proc.kill).toHaveBeenCalledTimes(1);
+  });
   it('start で job を登録し phase=starting で初期化する', () => {
     const mgr = new TranscribeJobManager({ spawn: () => makeFakeProcess() });
     const job = mgr.start('p1', { backupPath: '/tmp/bak.json' });
@@ -59,7 +79,6 @@ describe('TranscribeJobManager', () => {
     const last = events.at(-1);
     expect(last?.phase).toBe('failed');
     expect(last?.error?.code).toBe('python-spawn-failed');
-    expect(last?.error?.message).toContain('HARNESS_PYTHON');
     expect(last?.error?.message).toContain('SUPERMOVIE_PYTHON');
     // 終了状態は保持される（SSE が観測する前に消さない）。snapshot も failed のまま。
     expect(mgr.exists('p1')).toBe(true);
@@ -101,4 +120,47 @@ describe('TranscribeJobManager', () => {
     proc.stdout.emit('data', Buffer.from('ding-model"}\n'));
     expect(events.map((e) => e.phase)).toEqual(['loading-model']);
   });
+
+  it(
+    'stderr を大量に出す実子プロセスでもハングしない（stderr drain 回帰テスト・A-1）',
+    async () => {
+      // mlx-whisper/openai-whisper のモデルロード進捗・tqdm・警告を模して、
+      // OS パイプバッファ（macOS で 64KB 程度）を大きく超える stderr を実際に書かせる。
+      // Node の process.stderr.write はパイプに対して非同期（Node のドキュメント通り）で
+      // 即座には子プロセスをブロックしないため、Python (mlx-whisper/openai-whisper) の
+      // 同期 write と同じブロッキング挙動を fs.writeSync(fd=2, ...) で再現する。
+      // stderr に listener が無いと子プロセスの write が本当にブロックし、
+      // stdout の completed イベントが永遠に来ない（実測: 5MB 未 drain で 3秒超ハング）。
+      const size = 5_000_000;
+      const script =
+        `require('fs').writeSync(2, 'x'.repeat(${size}));` +
+        `process.stdout.write(JSON.stringify({phase:'completed'})+'\\n');`;
+      const realProc = nodeSpawn(process.execPath, ['-e', script], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }) as unknown as FakeProcess;
+
+      const mgr = new TranscribeJobManager({ spawn: () => realProc });
+      const completed = new Promise<void>((resolve) => {
+        mgr.subscribe('p1', (ev) => {
+          if (ev.phase === 'completed') resolve();
+        });
+      });
+      mgr.start('p1', { backupPath: null });
+
+      try {
+        await Promise.race([
+          completed,
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('timeout: stderr が drain されずハングした')),
+              4000,
+            ),
+          ),
+        ]);
+      } finally {
+        mgr.cancel('p1');
+      }
+    },
+    8000,
+  );
 });

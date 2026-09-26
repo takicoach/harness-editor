@@ -1,5 +1,6 @@
+import { globalStoreDir } from './paths';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadStore, saveStore, appendHistory } from './store';
@@ -8,18 +9,18 @@ import type { HistoryRecord, StoreSnapshot } from './types';
 
 let storeHome: string;
 let projectRoot: string;
-const originalHome = process.env.HARNESS_LEARNING_HOME;
+const originalHome = process.env.SUPERMOVIE_LEARNING_HOME;
 
 beforeEach(() => {
   storeHome = mkdtempSync(join(tmpdir(), 'sm-store-'));
   projectRoot = mkdtempSync(join(tmpdir(), 'sm-proj-'));
-  process.env.HARNESS_LEARNING_HOME = storeHome;
+  process.env.SUPERMOVIE_LEARNING_HOME = storeHome;
 });
 afterEach(() => {
   rmSync(storeHome, { recursive: true, force: true });
   rmSync(projectRoot, { recursive: true, force: true });
-  if (originalHome === undefined) delete process.env.HARNESS_LEARNING_HOME;
-  else process.env.HARNESS_LEARNING_HOME = originalHome;
+  if (originalHome === undefined) delete process.env.SUPERMOVIE_LEARNING_HOME;
+  else process.env.SUPERMOVIE_LEARNING_HOME = originalHome;
 });
 
 describe('loadStore', () => {
@@ -84,5 +85,23 @@ describe('appendHistory', () => {
     expect(JSON.parse(readFileSync(join(projectRoot, '.learning/history', files[0]!), 'utf8'))).toEqual(
       record,
     );
+  });
+});
+
+describe('globalStoreDir の解決順（新名を正・旧名を fallback）', () => {
+  it('HARNESS_LEARNING_HOME > SUPERMOVIE_LEARNING_HOME > 既存 ~/.video-harness-learning > 既存 ~/.supermovie-learning > 新名既定', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lh-'));
+    const r = (env: Record<string, string | undefined>) => globalStoreDir(env, home);
+    expect(r({ HARNESS_LEARNING_HOME: '/x/new', SUPERMOVIE_LEARNING_HOME: '/x/old' })).toBe('/x/new');
+    expect(r({ SUPERMOVIE_LEARNING_HOME: '/x/old' })).toBe('/x/old');
+    // どちらのフォルダも無ければ新名が既定（作らない）
+    expect(r({})).toBe(join(home, '.video-harness-learning'));
+    // 旧名だけがあれば旧名を読む（製品スキルは旧名へ書く）
+    mkdirSync(join(home, '.supermovie-learning'));
+    expect(r({})).toBe(join(home, '.supermovie-learning'));
+    // 新名があれば新名が勝つ
+    mkdirSync(join(home, '.video-harness-learning'));
+    expect(r({})).toBe(join(home, '.video-harness-learning'));
+    rmSync(home, { recursive: true, force: true });
   });
 });

@@ -49,6 +49,9 @@ function isValidPersistedRecord(value: unknown): value is PersistedRecord {
   if (typeof r.projectId !== 'string' || r.projectId === '') return false;
   if (typeof r.projectDir !== 'string') return false;
   if (typeof r.text !== 'string') return false;
+  if ((r.requestId !== undefined || r.requestCreatedAt !== undefined)
+    && (typeof r.requestId !== 'string' || !/^[a-zA-Z0-9-]{16,128}$/.test(r.requestId)
+      || !Number.isSafeInteger(r.requestCreatedAt))) return false;
   if (typeof r.status !== 'string' || !STATUSES.includes(r.status as InstructionStatus)) return false;
   if (r.reply !== null && typeof r.reply !== 'string') return false;
   if (typeof r.createdAt !== 'number' || typeof r.updatedAt !== 'number') return false;

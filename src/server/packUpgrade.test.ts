@@ -1,213 +1,30 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import {
-  PACK_DESCRIPTORS, payloadHash, findDescriptor, isPackStale, isPackInstalled,
-  upgradePack, checkStalePacks, upgradePacks, currentPackVersion,
-} from './packUpgrade';
-import { installVideoInsert } from './installVideoInsert';
-import { installBgm } from './installBgm';
-import { installShape } from './installShape';
-import { installTransition } from './installTransition';
-import { installTelopPack } from './installTelopPack';
-import { TELOP_PACK } from './telopPack/manifest';
-
-const VI = () => findDescriptor('videoInsert');
-
-let proj: string;
-beforeEach(() => {
-  proj = mkdtempSync(join(tmpdir(), 'sme-pu-'));
+import { afterEach,expect,it } from 'vitest';
+import { mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';import {join,dirname} from 'node:path';
+import {PACK_DESCRIPTORS,findDescriptor,payloadHash,currentPackVersion,isPackInstalled,isPackStale,checkStalePacks,upgradePack,upgradePacks} from './packUpgrade';
+import {nativeDataPackVersion,isNativeDataPackId,readNativeDataPackState} from './nativeDataPacks';
+const dirs:string[]=[];const config="export const VIDEO_FILE='main.mp4';export const FPS=30;export const DURATION_FRAMES=300;export const FORMAT='youtube';export const RESOLUTION={width:640,height:360};";
+function fixture(){const d=mkdtempSync(join(tmpdir(),'native-upgrade-'));dirs.push(d);mkdirSync(join(d,'src'));writeFileSync(join(d,'src/videoConfig.ts'),config);return d;}
+function put(dir:string,path:string,source:string){mkdirSync(dirname(join(dir,path)),{recursive:true});writeFileSync(join(dir,path),source);}
+afterEach(()=>{for(const d of dirs.splice(0))rmSync(d,{recursive:true,force:true});});
+const packs=[['bgm','bgm-track','bgmData.ts','export const bgmData=[];'],['videoInsert','insert-video','insertVideoData.ts','export const insertVideoData=[];'],['speed','speed','../speedData.ts','export const MAIN_SPEED=2;export const SEGMENT_SPEEDS={7:1.5};'],['transition','transition','transitionData.ts','export const transitionData=[];'],['shape','insert-shape','shapeData.ts','export const shapeData=[];'],['mainLayout','mainLayout','../mainLayoutData.ts','export const MAIN_LAYOUT={scale:1.2};']] as const;
+it.each(packs)('%s upgrades legacy markers without copying runtime payload or changing existing data',(id,feature,file,source)=>{
+ const dir=fixture(),d=findDescriptor(id),data=join('src',d.packDir,file),mp=join('src',d.packDir,d.markerName);put(dir,data,source);put(dir,mp,JSON.stringify({feature,version:currentPackVersion(id)}));
+ const protectedFiles=['src/MainVideo.tsx','src/Root.tsx','package.json','src/MainVideo.original.bak.tsx',`src/${d.packDir}/custom.tsx`];for(const path of protectedFiles)put(dir,path,'custom '+path);
+ expect(isPackInstalled(d,dir)).toBe(true);expect(isPackStale(d,dir)).toBe(true);expect(checkStalePacks(dir)).toContain(id);
+ expect(upgradePacks(dir,[id]).upgraded).toEqual([id]);expect(isPackStale(d,dir)).toBe(false);expect(readNativeDataPackState(id,dir).status).toBe('ready');
+ const saved=readFileSync(join(dir,data),'utf8');expect(saved.startsWith(source)).toBe(true);if(id!=='mainLayout')expect(saved).toBe(source);
+ for(const path of protectedFiles)expect(readFileSync(join(dir,path),'utf8')).toBe('custom '+path);
+ expect(existsSync(join(dir,'src',d.packDir,'index.ts'))).toBe(false);
 });
-afterEach(() => rmSync(proj, { recursive: true, force: true }));
-
-/** プロジェクトに videoInsert パックを「古い marker（version 無し）」で用意する。 */
-function installVideoInsertOld(): void {
-  const dir = join(proj, 'src', 'InsertVideo');
-  mkdirSync(dir, { recursive: true });
-  // データファイルとユーザー編集の痕跡。
-  writeFileSync(join(dir, 'insertVideoData.ts'), 'export const insertVideoData = [/* user */];', 'utf8');
-  // version 無し marker（旧導入）。
-  writeFileSync(join(dir, 'insert-video.json'), JSON.stringify({ feature: 'insert-video', installedAt: 'editor' }), 'utf8');
-}
-
-describe('payloadHash', () => {
-  it('同一記述子で安定（決定的）', () => {
-    expect(payloadHash(VI())).toBe(payloadHash(VI()));
-  });
-  it('データファイルとテストはハッシュに含めない（除外）', () => {
-    // videoInsertPayload には insertVideoData.ts と InsertVideo.test.tsx がある。
-    const entries = (PACK_DESCRIPTORS.find((d) => d.id === 'videoInsert')!);
-    expect(entries.dataFiles).toContain('insertVideoData.ts');
-    // ハッシュは安定値（16桁hex）。
-    expect(payloadHash(VI())).toMatch(/^[0-9a-f]{16}$/);
-  });
+it('versions of native data packs do not read old runtime payload directories',()=>{
+ for(const d of PACK_DESCRIPTORS.filter(d=>isNativeDataPackId(d.id))){expect(d.payloadDir).toBeUndefined();expect(payloadHash({...d,payloadDir:'/unavailable/old-runtime'})).toBe(currentPackVersion(d.id));if(isNativeDataPackId(d.id))expect(currentPackVersion(d.id)).toBe(nativeDataPackVersion(d.id));}
 });
-
-describe('isPackStale', () => {
-  it('marker 無し（未導入）は古くない', () => {
-    expect(isPackStale(VI(), proj)).toBe(false);
-    expect(isPackInstalled(VI(), proj)).toBe(false);
-  });
-  it('version 無し marker は古い', () => {
-    installVideoInsertOld();
-    expect(isPackInstalled(VI(), proj)).toBe(true);
-    expect(isPackStale(VI(), proj)).toBe(true);
-  });
-  it('現行版を書いた marker は古くない', () => {
-    installVideoInsertOld();
-    // 現行ハッシュへ更新。
-    const mp = join(proj, 'src', 'InsertVideo', 'insert-video.json');
-    writeFileSync(mp, JSON.stringify({ feature: 'insert-video', version: payloadHash(VI()) }), 'utf8');
-    expect(isPackStale(VI(), proj)).toBe(false);
-  });
+it('offers repair for broken markers but never marks broken data current',()=>{
+ const dir=fixture(),d=findDescriptor('bgm');put(dir,'src/Bgm/bgm-track.json','{broken');put(dir,'src/Bgm/bgmData.ts','export const bgmData="bad";');expect(isPackInstalled(d,dir)).toBe(false);expect(checkStalePacks(dir)).toContain('bgm');expect(()=>upgradePacks(dir,['bgm'])).toThrow();expect(isPackStale(d,dir)).toBe(true);expect(readFileSync(join(dir,'src/Bgm/bgmData.ts'),'utf8')).toBe('export const bgmData="bad";');
+ put(dir,'src/Bgm/bgmData.ts','export const bgmData=[];');upgradePacks(dir,['bgm']);expect(isPackStale(d,dir)).toBe(false);
 });
-
-describe('upgradePack', () => {
-  it('部品を再コピーしデータを保持・marker version を更新', () => {
-    installVideoInsertOld();
-    upgradePack(VI(), proj);
-    const dir = join(proj, 'src', 'InsertVideo');
-    // 部品が入る（InsertVideo.tsx）。
-    expect(existsSync(join(dir, 'InsertVideo.tsx'))).toBe(true);
-    // テストは配らない。
-    expect(existsSync(join(dir, 'InsertVideo.test.tsx'))).toBe(false);
-    // データは保持（ユーザー痕跡が残る）。
-    expect(readFileSync(join(dir, 'insertVideoData.ts'), 'utf8')).toContain('/* user */');
-    // marker version が現行へ。
-    expect(isPackStale(VI(), proj)).toBe(false);
-  });
-});
-
-describe('checkStalePacks / upgradePacks', () => {
-  it('古い videoInsert を検出し、更新で消える', () => {
-    installVideoInsertOld();
-    expect(checkStalePacks(proj)).toContain('videoInsert');
-    const r = upgradePacks(proj, ['videoInsert']);
-    expect(r.upgraded).toContain('videoInsert');
-    expect(checkStalePacks(proj)).not.toContain('videoInsert');
-  });
-});
-
-/** install が成立する最小 ハーネス形式プロジェクトを作る（MainVideo にアンカー有り）。 */
-function makeMinimalProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sme-pu-inst-'));
-  mkdirSync(join(dir, 'src'), { recursive: true });
-  writeFileSync(join(dir, 'src', 'videoConfig.ts'), `export const VIDEO_FILE='main.mp4';`, 'utf8');
-  writeFileSync(
-    join(dir, 'src', 'MainVideo.tsx'),
-    `import { AbsoluteFill } from 'remotion';\nimport { CutPlayer } from './CutPlayer';\nimport { TelopPlayer } from './テロップテンプレート';\nexport const MainVideo = () => (<AbsoluteFill><CutPlayer /><TelopPlayer /></AbsoluteFill>);\n`,
-    'utf8',
-  );
-  return dir;
-}
-
-describe('install は marker に現行版を書く（install 直後は stale でない）', () => {
-  it.each([
-    ['videoInsert', installVideoInsert],
-    ['bgm', installBgm],
-    ['shape', installShape],
-    ['transition', installTransition],
-    ['telopPack', installTelopPack],
-  ] as const)('%s', (id, install) => {
-    const dir = makeMinimalProject();
-    try {
-      install(dir);
-      expect(isPackStale(findDescriptor(id), dir)).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('telopPack: 縮小方向の上書きを提示しない（旧35種パック導入済みの保護）', () => {
-  const TELOP_MARKER = ['src', 'テロップテンプレート', 'telop-pack.json'] as const;
-  const TELOP_COMPONENT = ['src', 'テロップテンプレート', 'Telop.tsx'] as const;
-  const SENTINEL = '/* ここは旧パックの描画エンジン（35種対応） */';
-
-  /**
-   * telopPack を導入したうえで marker を任意の count / 古い version へ差し替え、
-   * Telop.tsx にユーザー環境の目印を入れる（＝上書きされたら消える）。
-   */
-  function installTelopWithMarkerCount(count: number | undefined): string {
-    const dir = makeMinimalProject();
-    installTelopPack(dir);
-    const marker: Record<string, unknown> = { pack: 'telop-templates', version: 'stale-old-version' };
-    if (count !== undefined) marker.count = count;
-    writeFileSync(join(dir, ...TELOP_MARKER), JSON.stringify(marker, null, 2), 'utf8');
-    const componentPath = join(dir, ...TELOP_COMPONENT);
-    writeFileSync(componentPath, `${SENTINEL}\n${readFileSync(componentPath, 'utf8')}`, 'utf8');
-    return dir;
-  }
-
-  function withProject(count: number | undefined, body: (dir: string) => void): void {
-    const dir = installTelopWithMarkerCount(count);
-    try {
-      body(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-
-  it('同梱数(3)より多い count=35 の marker は stale としない（更新を提示しない）', () => {
-    expect(TELOP_PACK.length).toBeLessThan(35);
-    withProject(35, (dir) => {
-      expect(isPackStale(findDescriptor('telopPack'), dir)).toBe(false);
-      expect(checkStalePacks(dir)).not.toContain('telopPack');
-    });
-  });
-
-  it('count=35 の marker では「部品の更新」を実行しても Telop.tsx が上書きされない', () => {
-    withProject(35, (dir) => {
-      const r = upgradePacks(dir, checkStalePacks(dir));
-      expect(r.upgraded).not.toContain('telopPack');
-      expect(readFileSync(join(dir, ...TELOP_COMPONENT), 'utf8')).toContain(SENTINEL);
-    });
-  });
-
-  it('count が同梱数と同じなら従来どおり stale（更新できる）', () => {
-    withProject(TELOP_PACK.length, (dir) => {
-      expect(isPackStale(findDescriptor('telopPack'), dir)).toBe(true);
-      expect(checkStalePacks(dir)).toContain('telopPack');
-    });
-  });
-
-  it('count が同梱数より少ない（増加方向）なら従来どおり stale', () => {
-    withProject(1, (dir) => {
-      expect(isPackStale(findDescriptor('telopPack'), dir)).toBe(true);
-    });
-  });
-
-  it('count が無い marker（旧導入）は従来どおり stale', () => {
-    withProject(undefined, (dir) => {
-      expect(isPackStale(findDescriptor('telopPack'), dir)).toBe(true);
-    });
-  });
-
-  it('更新を実行したら marker の count も現在の同梱数へ揃える（縮小判定の材料を古いままにしない）', () => {
-    // count=1（増加方向＝従来どおり stale）で更新すると、部品と marker が現行へ揃う。
-    withProject(1, (dir) => {
-      expect(upgradePacks(dir, checkStalePacks(dir)).upgraded).toContain('telopPack');
-      const marker = JSON.parse(readFileSync(join(dir, ...TELOP_MARKER), 'utf8')) as { count?: number };
-      expect(marker.count).toBe(TELOP_PACK.length);
-      expect(isPackStale(findDescriptor('telopPack'), dir)).toBe(false);
-    });
-  });
-
-  it('縮小防止は telopPack 限定（他パックの count は判定に影響しない）', () => {
-    installVideoInsertOld();
-    const mp = join(proj, 'src', 'InsertVideo', 'insert-video.json');
-    writeFileSync(mp, JSON.stringify({ feature: 'insert-video', count: 999 }), 'utf8');
-    expect(isPackStale(VI(), proj)).toBe(true);
-  });
-});
-
-describe('speed pack (Plan 2)', () => {
-  it('speed パックが登録され version を取得できる', () => {
-    const d = findDescriptor('speed');
-    expect(d.packDir).toBe('Speed');
-    expect(d.markerName).toBe('speed.json');
-    expect(typeof currentPackVersion('speed')).toBe('string');
-    expect(currentPackVersion('speed').length).toBeGreaterThan(0);
-  });
+it('keeps real telop component replacement and its source-based version while preserving data',()=>{
+ const dir=fixture(),d=findDescriptor('telopPack');put(dir,`src/${d.packDir}/${d.markerName}`,JSON.stringify({feature:'telop-pack',version:'old'}));put(dir,`src/${d.packDir}/telopData.ts`,'export const telopData=[]; // user');put(dir,`src/${d.packDir}/Telop.tsx`,'old component');
+ upgradePack(d,dir);expect(readFileSync(join(dir,'src',d.packDir,'Telop.tsx'),'utf8')).toBe(readFileSync(join(d.payloadDir!,'Telop.tsx'),'utf8'));expect(readFileSync(join(dir,'src',d.packDir,'telopData.ts'),'utf8')).toBe('export const telopData=[]; // user');expect(isPackStale(d,dir)).toBe(false);
 });

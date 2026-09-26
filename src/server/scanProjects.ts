@@ -7,21 +7,30 @@ import type { ProjectSummary } from '../shared/types';
 import { resolveProjectSteps } from './projectSteps';
 import { resolveProjectStatus } from './projectStatus';
 import { inspectVideoLink } from './videoLink';
+import { hasSequenceDocument, readSequenceSummary } from './sequence/summary';
 
 const TELOP_DIR = 'テロップテンプレート';
 
 /** videoConfig.ts の読み取り上限。正規の設定ファイルは数 KB。巨大ファイルによる OOM を防ぐ。 */
 const MAX_VIDEO_CONFIG_BYTES = 1024 * 1024;
 
-/** ディレクトリがハーネス形式（旧形式互換）のプロジェクトの体裁を持つか判定する。 */
-export function isHarnessProject(dir: string): boolean {
+/** ディレクトリがハーネス形式の案件の体裁を持つか判定する。 */
+export function isSuperMovieProject(dir: string): boolean {
   return (
+    hasSequenceDocument(dir) ||
+    (
     existsSync(join(dir, 'src', 'videoConfig.ts')) &&
     existsSync(join(dir, 'src', TELOP_DIR, 'telopData.ts'))
+    )
   );
 }
 
 function summarize(name: string, dir: string): ProjectSummary {
+  if (hasSequenceDocument(dir)) {
+    const native = readSequenceSummary(dir);
+    if (!native?.steps) throw new Error('保存された編集内容を読み込めません');
+    return { ...native, id: name, ...resolveProjectStatus(dir, native.steps) };
+  }
   const vcPath = join(dir, 'src', 'videoConfig.ts');
   // 走査は信頼していないプロジェクトも読むため、読み込み前にサイズ上限で DoS（巨大ファイル OOM）を弾く。
   // FIFO・キャラクタデバイスは size=0 で上限を素通りし、readFileSync が書き手を待って
@@ -68,7 +77,7 @@ function summarize(name: string, dir: string): ProjectSummary {
   };
 }
 
-/** ルート直下を走査しハーネス形式のプロジェクトの一覧を返す。 */
+/** ルート直下を走査しハーネス形式の案件の一覧を返す。 */
 export function scanProjects(root: string): ProjectSummary[] {
   let entries: string[];
   try {
@@ -86,7 +95,7 @@ export function scanProjects(root: string): ProjectSummary[] {
     } catch {
       continue;
     }
-    if (!isDir || !isHarnessProject(dir)) continue;
+    if (!isDir || !isSuperMovieProject(dir)) continue;
     try {
       out.push(summarize(name, dir));
     } catch (err) {

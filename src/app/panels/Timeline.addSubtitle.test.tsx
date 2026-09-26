@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
 import { useRef, useState } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { EditorProject, EditorTelop } from '../../core/types';
 import type { EditState } from '../edit/editState';
 import { useEditSession } from '../useEditSession';
@@ -100,7 +100,6 @@ function Harness({ project }: { project: EditorProject }) {
         {state.selection?.kind === 'telop' ? String(state.selection.id) : (state.selection?.kind ?? 'none')}
       </div>
       <Timeline
-        videoDurations={{}}
         session={session}
         baseProject={project}
         playerRef={playerRef}

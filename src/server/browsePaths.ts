@@ -2,7 +2,10 @@ import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { HttpError } from './http';
-import { VIDEO_EXTENSIONS } from './loadProjectFiles';
+import { VIDEO_EXTENSIONS } from '../shared/videoExtensions';
+import { CREATE_MEDIA_EXTENSIONS } from '../shared/createMedia';
+/** 「フォルダから選ぶ」（media=all）の拡張子。作成で受け付ける集合と同じ正本を使う（設計 M5）。 */
+export const BROWSE_MEDIA_EXTENSIONS=CREATE_MEDIA_EXTENSIONS;
 
 /**
  * 外付けストレージ等の動画を symlink で取り込むための「フォルダ走査」。
@@ -127,6 +130,7 @@ export function listDirectory(
     readdir?: (p: string) => string[];
     stat?: (p: string) => { isDirectory(): boolean; isFile(): boolean; size: number };
     realpath?: (p: string) => string;
+    extensions?: readonly string[];
   } = {},
 ): BrowseListing {
   const readdir = deps.readdir ?? ((p: string) => readdirSync(p));
@@ -157,7 +161,7 @@ export function listDirectory(
     }
     if (st.isDirectory()) {
       dirs.push({ name, path: full });
-    } else if (st.isFile() && VIDEO_EXTENSIONS.includes(extname(name).toLowerCase())) {
+    } else if (st.isFile() && (deps.extensions??VIDEO_EXTENSIONS).includes(extname(name).toLowerCase())) {
       files.push({ name, path: full, sizeBytes: st.size });
     }
   }

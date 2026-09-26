@@ -1,8 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync, utimesSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fingerprintFile, fingerprintsMatch } from './fileFingerprint';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, statSync: vi.fn(actual.statSync) };
+});
+
+const mockedStatSync = vi.mocked(statSync);
 
 function withTempFile(content: string, run: (path: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'sme-fp-'));
@@ -29,6 +36,24 @@ describe('fingerprintFile', () => {
 
   it('存在しないファイルは null を返す', () => {
     expect(fingerprintFile('/no/such/file.ts', 'file.ts')).toBeNull();
+  });
+
+  it('存在確認後の stat 失敗（削除競合・権限エラー等）でも例外を投げず null を返す', () => {
+    withTempFile('hello', (path) => {
+      // existsSync は通るが statSync が失敗するレース/権限エラーを模擬。
+      mockedStatSync.mockImplementation(() => {
+        throw new Error('EACCES: permission denied');
+      });
+      try {
+        let result: ReturnType<typeof fingerprintFile> | undefined;
+        expect(() => {
+          result = fingerprintFile(path, 'data.ts');
+        }).not.toThrow();
+        expect(result).toBeNull();
+      } finally {
+        mockedStatSync.mockRestore();
+      }
+    });
   });
 });
 

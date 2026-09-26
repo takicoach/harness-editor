@@ -1,12 +1,38 @@
 import { test, expect } from '@playwright/test';
 import { TERMINAL_FONT_FAMILY } from '../src/app/panels/claudeTerminalOptions';
+import { createTempProject, removeTempProject } from './helpers';
+
+/**
+ * このファイルは共有フィクスチャ `sample-project` を開いて AI タブを操作していたが、
+ * それは **default project 側の render-button.spec.ts / smoke.spec.ts が同じ
+ * sample-project を実書き出しする**のと並列に走る（playwright は project 間を並列実行する）。
+ * 書き出しが running → done へ遷移すると、その瞬間に同じプロジェクトを開いている
+ * **すべてのタブ**で学習差分レビュー（`.diff-review-overlay`・全画面モーダル）が開くため、
+ * AI タブのクリックが overlay に遮られて 60s タイムアウトする
+ * （実測: フルスイート 3 回目で `<div class="diff-review-overlay"> intercepts pointer events`）。
+ * 待ち時間を伸ばしても overlay は閉じないので、**衝突そのものを無くす**:
+ * learning-diff.spec.ts と同じ方式で、テストごとに専用コピーへ隔離する。
+ */
+let projectId = '';
+let projectDir = '';
+
+// 作成・削除はファイルにつき1回だけにする（beforeEach ではなく beforeAll）。
+// ホーム一覧のカードは他 spec も見ているため、テストごとに増減させると
+// 「列の n 枚目」を掴む検査（project-status-dashboard.spec.ts）の足元を揺らす。
+test.beforeAll(() => {
+  ({ id: projectId, dir: projectDir } = createTempProject('ai-term-tmp'));
+});
+
+test.afterAll(() => {
+  removeTempProject(projectDir);
+});
 
 // 偽 claude（SME_CLAUDE_BIN、playwright.config.ts の webServer env で注入）で
 // AI タブの埋め込みターミナルが起動しエコーが往復することを確認する。
 test('AI タブ: 埋め込みターミナルが起動しエコーが往復する', async ({ page }) => {
   await page.goto('/');
   // 既存の claude-panel.spec.ts と同じ手順でプロジェクトを開き AI タブへ。
-  await page.locator('.home-card', { hasText: 'sample-project' }).click();
+  await page.locator('.home-card', { hasText: projectId }).click();
   await expect(page.locator('.pv-stage')).toBeVisible();
   await page.locator('.rightdock-tab[data-tab="ai"]').click();
 
@@ -29,7 +55,7 @@ test('ホーム画面（プロジェクト未選択）では AI の導入確認�
     if (url.includes('/api/ai/') || url.includes('/api/pty/')) aiOrPtyRequests.push(url);
   });
   await page.goto('/');
-  await expect(page.locator('.home-card', { hasText: 'sample-project' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.home-card', { hasText: projectId })).toBeVisible({ timeout: 15_000 });
   // AiTerminal がマウントされていれば mount 直後に /api/ai/tools が飛ぶ。
   // 十分な猶予を置いても一件も飛んでいないことを確認する。
   await page.waitForTimeout(1500);
@@ -42,7 +68,7 @@ test('ホーム画面（プロジェクト未選択）では AI の導入確認�
 // send が `?.` で握り潰される（キー入力が届かない）。
 test('AI タブ: pty exit → 再起動で新接続が生き残り、キー入力が消えない（C-1 回帰）', async ({ page }) => {
   await page.goto('/');
-  await page.locator('.home-card', { hasText: 'sample-project' }).click();
+  await page.locator('.home-card', { hasText: projectId }).click();
   await expect(page.locator('.pv-stage')).toBeVisible();
   await page.locator('.rightdock-tab[data-tab="ai"]').click();
 
@@ -73,14 +99,14 @@ test('AI タブ: pty exit → 再起動で新接続が生き残り、キー入�
 
 test('AI タブ: 2 タブ目を開くと 1 タブ目に takeover 表示が出る', async ({ page, context }) => {
   await page.goto('/');
-  await page.locator('.home-card', { hasText: 'sample-project' }).click();
+  await page.locator('.home-card', { hasText: projectId }).click();
   await expect(page.locator('.pv-stage')).toBeVisible();
   await page.locator('.rightdock-tab[data-tab="ai"]').click();
   await expect(page.getByTestId('claude-terminal')).toContainText('FAKE-CLAUDE READY', { timeout: 15_000 });
 
   const page2 = await context.newPage();
   await page2.goto('/');
-  await page2.locator('.home-card', { hasText: 'sample-project' }).click();
+  await page2.locator('.home-card', { hasText: projectId }).click();
   await expect(page2.locator('.pv-stage')).toBeVisible();
   await page2.locator('.rightdock-tab[data-tab="ai"]').click();
   await expect(page2.getByTestId('claude-terminal')).toBeVisible({ timeout: 15_000 });
@@ -122,7 +148,7 @@ test('AI タブ: 端末フォントが等幅に統一され、罫線・記号で
   });
 
   await page.goto('/');
-  await page.locator('.home-card', { hasText: 'sample-project' }).click();
+  await page.locator('.home-card', { hasText: projectId }).click();
   await expect(page.locator('.pv-stage')).toBeVisible();
   await page.locator('.rightdock-tab[data-tab="ai"]').click();
 

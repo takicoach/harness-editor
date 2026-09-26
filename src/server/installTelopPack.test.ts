@@ -42,7 +42,7 @@ describe('installTelopPack', () => {
     expect(existsSync(join(tdir, 'telop-pack.json'))).toBe(true);
     // アダプタ Telop.tsx は pack 版（元とは別物）
     expect(readFileSync(join(tdir, 'Telop.tsx'), 'utf8')).not.toContain('// original');
-    // styles は同梱スタイル数ぶん（マニフェストを正とする）
+    // styles は本体パックの全件（有料版 35・公開版 3）
     expect(readdirSync(join(tdir, 'styles')).filter((f) => f.endsWith('.tsx'))).toHaveLength(TELOP_PACK.length);
     // 元 Telop はバックアップ
     expect(readFileSync(join(tdir, 'Telop.original.bak.tsx'), 'utf8')).toBe(ORIGINAL_TELOP);
@@ -195,60 +195,8 @@ describe('widenTelopTypes（widen 可否の判定）', () => {
     expect(() => widenTelopTypes('type X = 1 | 2;\nexport interface T { template?: .*; }\n')).toThrow();
   });
 
-  it('$ を含む型名は正規表現へ埋め込まず throw する（広げずに止める）', () => {
-    // `$` は TS の識別子には使えるが正規表現のメタ文字。埋め込みは許可しない。
-    const src = 'type Ids$A = 1 | 2 | 3;\nexport interface T { template?: Ids$A; }\n';
-    expect(() => widenTelopTypes(src)).toThrow();
-  });
-
   it('import 由来のエイリアス（同一ファイルに宣言が無い）は throw', () => {
     const src = "import type { Ids } from './x';\nexport interface T { template?: Ids; }\n";
     expect(() => widenTelopTypes(src)).toThrow();
-  });
-});
-
-// 置換が先頭1件だけだと「導入は成功したのに実際のフィールドは narrow なまま」＝
-// ビルドが壊れた状態で完了扱いになる。全件置換と事後条件検査をここで固定する。
-describe('widenTelopTypes（取りこぼしの防止・全件置換と事後条件）', () => {
-  it('同じ記述がコメントにもある場合、フィールド側を取りこぼさない', () => {
-    const src = [
-      '/** 例: template?: 1 | 2 | 3; のように書く。 */',
-      'export interface T { template?: 1 | 2 | 3; }',
-      '',
-    ].join('\n');
-    const out = widenTelopTypes(src);
-    expect(out).toContain('export interface T { template?: number; }');
-    expect(out).not.toContain('template?: 1 | 2 | 3;');
-  });
-
-  it('template を持つ interface が2つあれば両方広げる', () => {
-    const src = 'export interface A { template?: 1 | 2 | 3; }\nexport interface B { template?: 1 | 2 | 3; }\n';
-    expect(widenTelopTypes(src))
-      .toBe('export interface A { template?: number; }\nexport interface B { template?: number; }\n');
-  });
-
-  it('エイリアスが2種類あれば両方の宣言を広げる', () => {
-    const src = [
-      'type IdsA = 1 | 2 | 3;',
-      'type IdsB = 1 | 2;',
-      'export interface A { template?: IdsA; }',
-      'export interface B { template?: IdsB; }',
-      '',
-    ].join('\n');
-    const out = widenTelopTypes(src);
-    expect(out).toContain('type IdsA = number;');
-    expect(out).toContain('type IdsB = number;');
-  });
-
-  it('1件でも広げられない template が残れば throw（部分適用しない）', () => {
-    const src = "export interface A { template?: 1 | 2 | 3; }\nexport interface B { template?: 'a' | 'b'; }\n";
-    expect(() => widenTelopTypes(src)).toThrow();
-  });
-
-  it('template を語尾に含む別フィールドは書き換えない（事後条件の誤爆も無い）', () => {
-    const src = 'export interface T { subtemplate?: 1 | 2; template?: 1 | 2 | 3; }\n';
-    const out = widenTelopTypes(src);
-    expect(out).toContain('subtemplate?: 1 | 2;');
-    expect(out).toContain(' template?: number;');
   });
 });

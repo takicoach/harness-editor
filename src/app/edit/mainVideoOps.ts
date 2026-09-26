@@ -1,5 +1,18 @@
 import { clampMainSpeed } from '../../core/speedEngine';
 import { DEFAULT_MAIN_LAYOUT, clampLayoutPos, clampLayoutScale, clampRotation, isIdentityMainLayout } from '../../core/mainLayout';
+import {
+  DEFAULT_COLOR_GRADE,
+  clampColorGradeValue,
+  defaultColorGrade,
+  isIdentityColorGrade,
+  normalizeColorWheel,
+  normalizeColorWheels,
+  isIdentityColorWheels,
+  type ColorWheelName,
+  type ColorWheelValue,
+  type ColorGradeField,
+  type ColorGrade,
+} from '../../core/colorGrade';
 import type { MainLayout, TelopPosition } from '../../core/types';
 import type { EditState } from './editState';
 
@@ -76,4 +89,46 @@ export function resetMainLayout(state: EditState): EditState {
     ...state,
     mainLayout: { position: { x: 0, y: 0 }, scale: 1, background: DEFAULT_MAIN_LAYOUT.background, rotation: 0, flipH: false, flipV: false },
   };
+}
+
+/** 現在のカラー補正（未設定＝無補正）を返すヘルパ。 */
+export function currentColorGrade(state: EditState): ColorGrade {
+  return state.colorGrade ?? DEFAULT_COLOR_GRADE;
+}
+
+/**
+ * カラー補正の 1 項目を設定する（-100..100 でクランプ・非有限と同値は no-op）。
+ * 全体一律なので区間・選択に依存しない（F-2 の設計判断）。
+ */
+export function setColorGradeField(
+  state: EditState,
+  field: ColorGradeField,
+  value: number,
+): EditState {
+  if (!Number.isFinite(value)) return state;
+  const cur = currentColorGrade(state);
+  const next = clampColorGradeValue(value);
+  if (cur[field] === next) return state;
+  return { ...state, colorGrade: { ...cur, [field]: next } };
+}
+
+/** カラー補正を無補正へ戻す（既に無補正なら参照不変）。 */
+export function setColorWheel(state: EditState, name: ColorWheelName, value: ColorWheelValue): EditState {
+  if (![value.x, value.y, value.level].every(Number.isFinite)) return state;
+  const cur = currentColorGrade(state);
+  const wheels = normalizeColorWheels(cur.wheels);
+  const next = normalizeColorWheel(value);
+  if (Object.keys(next).every(k => next[k as keyof ColorWheelValue] === wheels[name][k as keyof ColorWheelValue])) return state;
+  wheels[name] = next;
+  const { wheels: _previous, ...basic } = cur;
+  return { ...state, colorGrade: isIdentityColorWheels(wheels) ? basic : { ...basic, wheels } };
+}
+
+/** カラー補正を無補正へ戻す（既に無補正なら参照不変）。 */
+export function resetColorGrade(state: EditState): EditState {
+  if (isIdentityColorGrade(state.colorGrade)) {
+    // 既定オブジェクトが入っているだけの状態も no-op にする（dirty を立てない）。
+    return state;
+  }
+  return { ...state, colorGrade: defaultColorGrade() };
 }

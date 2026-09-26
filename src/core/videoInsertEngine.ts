@@ -35,30 +35,6 @@ export function projectVideoInserts(items: EditorVideoInsert[], regions: CutRegi
   });
 }
 
-/**
- * クリップが**実際に再生される**尺（フレーム）。カット適用後の再生座標で測る。
- *
- * サブ動画のソース消費量は「原本尺 × 速度」ではなく「**再生尺** × 速度」。
- * クリップの内側にカット区間があると原本尺より再生尺のほうが短くなるため、
- * 原本尺で計算すると素材超過を過大評価して誤警告・過剰クランプになる。
- * 射影は `projectVideoInserts` と同じ式を使う（表示と判定を食い違わせない）。
- */
-export function videoInsertPlaybackSpan(
-  originalStart: number,
-  originalEnd: number,
-  regions: CutRegion[],
-): number {
-  const start = Math.max(
-    0,
-    originalToPlayback(originalStart, regions) ?? originalToPlayback(originalStart - 1, regions) ?? 0,
-  );
-  const end = Math.max(
-    0,
-    originalToPlayback(originalEnd, regions) ?? originalToPlayback(originalEnd - 1, regions) ?? 0,
-  );
-  return Math.max(0, end - start);
-}
-
 export interface VideoInsertClampResult {
   videoInserts: EditorVideoInsert[];
   /** カット区間に完全に飲まれた（範囲外になった）クリップの ID。 */
@@ -104,4 +80,123 @@ export function videoInsertInCutRegion(
   const startIn = originalToPlayback(originalStart, regions) === null;
   const endIn = originalToPlayback(Math.max(originalStart, originalEnd - 1), regions) === null;
   return startIn && endIn;
+}
+
+/**
+ * サブ動画クリップが消費するソースフレーム数。表示長（originalEnd-originalStart）× 再生速度。
+ * InsertVideo.tsx のコメント通り、消費ソース量は「尺 × rate」で決まる（endAt を明示しない設計）。
+ */
+export function consumedSourceFrames(v: Pick<EditorVideoInsert, 'originalStart' | 'originalEnd' | 'playbackRate' | 'timelinePlacement'>): number {
+  const rate = v.playbackRate ?? 1;
+  const duration = v.timelinePlacement ? v.timelinePlacement.endFrame - v.timelinePlacement.startFrame : v.originalEnd - v.originalStart;
+  return Math.round(duration * rate);
+}
+
+/**
+ * sourceInFrame + 消費ソースフレーム数 が sourceLengthFrames を超える量（フレーム）。
+ * 超えていなければ 0。sourceLengthFrames が null（長さ不明。無音・映像のみでデコード不能、
+ * または未計測）なら判定不能として null を返す（Inspector 警告の表示要否に使う）。
+ */
+export function videoInsertSourceOverflowFrames(
+  v: Pick<EditorVideoInsert, 'originalStart' | 'originalEnd' | 'playbackRate' | 'sourceInFrame' | 'timelinePlacement'>,
+  sourceLengthFrames: number | null,
+): number | null {
+  if (sourceLengthFrames === null) return null;
+  const end = v.sourceInFrame + consumedSourceFrames(v);
+  return Math.max(0, end - sourceLengthFrames);
+}
+
+/**
+ * サブ動画 1 件を、既知のソース長（フレーム）内に収まるようクランプする（R-1）。
+ * sourceInFrame + 消費ソースフレーム数 が sourceLengthFrames を超える場合、originalEnd を
+ * 縮めて収める（sourceInFrame・originalStart は動かさない＝非破壊・イン点を保持したまま
+ * 末尾だけ詰める）。変更が無ければ同一参照 v をそのまま返す。
+ *
+ * sourceLengthFrames が null（長さ不明）なら何もしない。長さが分からないのに削るのは
+ * 「動くはずの区間を誤って壊す」リスクの方が「まれに範囲外 endAt で render が失敗する」
+ * リスクより実害が大きい（頻度・巻き戻し容易性の非対称）ため、安全側 = 無変更に倒す
+ * （useWaveformSamples が「波形なしでもグレースフルに継続」する既存方針と同型）。
+ *
+ * C-1（Codex 指摘）: 残ソースフレーム数 maxDSource を playbackRate で割って新しい
+ * タイムライン長を出す時、Math.round は切り上げ側に転びうる
+ * （例: maxDSource=101, rate=2 → round(50.5)=51 → 消費 round(51*2)=102 > 101。
+ *   「クランプしたのに範囲外のまま」になっていた）。floor に変えて、
+ * newDuration*rate が maxDSource を超えないことを整数演算で保証する。
+ *
+ * また、sourceInFrame が既にソース末尾以降（maxDSource<=0）、または rate が大きく
+ * 1タイムラインフレーム分の消費すら maxDSource に収まらない（floor 後 0）場合は
+ * 「再生可能なフレームが残っていない」ケース。旧実装はここで maxDSource を
+ * Math.max(1, …) で底上げして 1 フレームを捏造していたが、その1フレームは
+ * 実在しないソース位置を指すため endAt が超過したままだった（問題2）。
+ * この関数はクランプで直せる範囲を超えているとみなし、データは変更せず v をそのまま
+ * 返す（非破壊）。呼び出し側の clampVideoInsertsToSourceLength が unplayableIds に
+ * 積んで明示的に扱う（削除・警告表示は呼び出し側の責務）。
+ */
+export function clampVideoInsertSourceEnd(
+  v: EditorVideoInsert,
+  sourceLengthFrames: number | null,
+): EditorVideoInsert {
+  if (sourceLengthFrames === null || !Number.isFinite(sourceLengthFrames) || sourceLengthFrames <= 0) return v;
+  const overflow = videoInsertSourceOverflowFrames(v, sourceLengthFrames);
+  if (overflow === null || overflow <= 0) return v;
+  const rate = v.playbackRate ?? 1;
+  const maxDSource = sourceLengthFrames - v.sourceInFrame;
+  if (maxDSource <= 0) return v; // 再生可能フレームがゼロ（sourceInFrame がソース末尾以降）
+  const newDuration = Math.floor(maxDSource / rate);
+  if (newDuration <= 0) return v; // 1タイムラインフレーム分の消費すら残ソースに収まらない
+  if (v.timelinePlacement) {
+    const endFrame = v.timelinePlacement.startFrame + newDuration;
+    return endFrame === v.timelinePlacement.endFrame ? v : { ...v, timelinePlacement: { ...v.timelinePlacement, endFrame } };
+  }
+  const newEnd = v.originalStart + newDuration;
+  if (newEnd === v.originalEnd) return v;
+  return { ...v, originalEnd: newEnd };
+}
+
+/**
+ * 「クランプでは直せない＝再生できるソースフレームが1枚も残っていない」クリップか。
+ * （イン点がソース終端以降、または再生速度が高すぎて1タイムラインフレーム分の消費すら
+ * 残ソースに収まらない。clampVideoInsertSourceEnd が無変更で返す＝直せないケース。）
+ *
+ * X-2(a): 保存時（clampVideoInsertsToSourceLength の unplayableIds）と Inspector の警告文言が
+ * 同じ基準で判定するための共有述語。基準がずれると「保存時に自動調整されます」と案内した
+ * クリップが実は調整不能、という嘘の案内になる。
+ * 長さ不明（null）は判定不能として false（安全側・警告を出さない）。
+ */
+export function videoInsertHasNoPlayableFrames(
+  v: EditorVideoInsert,
+  sourceLengthFrames: number | null,
+): boolean {
+  if (sourceLengthFrames === null) return false;
+  const overflow = videoInsertSourceOverflowFrames(v, sourceLengthFrames);
+  if (overflow === null || overflow <= 0) return false;
+  return clampVideoInsertSourceEnd(v, sourceLengthFrames) === v;
+}
+
+/**
+ * サブ動画配列を、file ごとの既知ソース長（フレーム）マップでクランプする（保存時に使用）。
+ * マップに無い file（=長さ不明）はそのまま通す。変更されたクリップの id を clampedIds へ集める。
+ *
+ * C-1: clampVideoInsertSourceEnd が「再生可能フレームなし」で無変更のまま返してきたクリップは、
+ * 超過が残ったままなので unplayableIds へ積む（clampedIds には入れない＝実際には直せていない
+ * ため区別する）。呼び出し側で警告表示・削除提案などに使う想定。
+ */
+export function clampVideoInsertsToSourceLength(
+  items: EditorVideoInsert[],
+  sourceLengthFramesByFile: Readonly<Record<string, number>>,
+): { videoInserts: EditorVideoInsert[]; clampedIds: number[]; unplayableIds: number[] } {
+  const clampedIds: number[] = [];
+  const unplayableIds: number[] = [];
+  const videoInserts = items.map((v) => {
+    const len = sourceLengthFramesByFile[v.file];
+    if (len === undefined) return v;
+    const next = clampVideoInsertSourceEnd(v, len);
+    if (next !== v) {
+      clampedIds.push(v.id);
+      return next;
+    }
+    if (videoInsertHasNoPlayableFrames(v, len)) unplayableIds.push(v.id);
+    return v;
+  });
+  return { videoInserts, clampedIds, unplayableIds };
 }

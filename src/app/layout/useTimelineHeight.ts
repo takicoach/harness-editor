@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  DEFAULT_TIMELINE_H,
   TIMELINE_HEIGHT_STORAGE_KEY,
+  defaultTimelineHeight,
   clampTimelineHeight,
   computeResizeHeight,
   parseStoredHeight,
@@ -19,7 +19,9 @@ function readInitialHeight(): number {
   } catch {
     // プライベートモード等で localStorage が使えない場合は既定値。
   }
-  return DEFAULT_TIMELINE_H;
+  // 保存値が無いときはビューポート連動の既定（clamp(220px, 32vh, 460px)）。
+  // 固定 240px だと下段トラックが画面外に出たままになる（ベースライン §トラック画面外）。
+  return defaultTimelineHeight(window.innerHeight);
 }
 
 /** 希望高さを現在ビューポートでクランプした「適用値」を CSS 変数へ反映する。 */
@@ -101,7 +103,7 @@ export function useTimelineHeight(): {
   }, []);
 
   const onReset = useCallback(() => {
-    setHeight(DEFAULT_TIMELINE_H);
+    setHeight(defaultTimelineHeight(window.innerHeight));
     try {
       localStorage.removeItem(TIMELINE_HEIGHT_STORAGE_KEY);
     } catch {

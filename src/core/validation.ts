@@ -22,7 +22,7 @@ export function validateProject(input: ValidateInput): ValidationResult {
     );
   }
 
-  const { flaggedIds } = clampTelops(input.telops, input.cutRegions);
+  const { flaggedIds } = clampTelops(input.telops.filter(t => t.timelinePlacement === undefined), input.cutRegions);
   for (const id of flaggedIds) {
     warnings.push(`テロップ #${id} がカット区間内に入り表示されません`);
   }

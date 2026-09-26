@@ -1,8 +1,14 @@
 import { formatClock } from '../../shared/format';
 import { type DisplayMap, originalToDisplay, displayToOriginal } from '../../core/timelineDisplayMap';
 
-/** ズーム（1 フレームあたりのピクセル数）の下限。これより縮めると目盛りが潰れる。 */
-export const MIN_PX_PER_FRAME = 0.05;
+/**
+ * ズーム（1 フレームあたりのピクセル数）の下限。
+ *
+ * 以前は 0.05 だったが、それだと 14 分（26,000 フレーム）の案件は 1,300px 必要で
+ * 1440 幅の画面でも「全体を表示」が最後まで届かない（`fitPxPerFrame` が下限に張り付く）。
+ * 目盛りが潰れる心配は `rulerTicks` が間隔を粗い候補へ後退させることで吸収する。
+ */
+export const MIN_PX_PER_FRAME = 0.01;
 /** ズーム（1 フレームあたりのピクセル数）の上限。これより拡げてもフレーム単位以上は不要。 */
 export const MAX_PX_PER_FRAME = 12;
 
@@ -75,6 +81,28 @@ export function xToFrameMapped(x: number, pxPerFrame: number, map?: DisplayMap):
 export function clampZoom(pxPerFrame: number): number {
   if (!Number.isFinite(pxPerFrame)) return MIN_PX_PER_FRAME;
   return Math.min(MAX_PX_PER_FRAME, Math.max(MIN_PX_PER_FRAME, pxPerFrame));
+}
+
+/**
+ * タイムライン全体が可視幅に収まるズーム（1 フレームあたりピクセル数）。
+ *
+ * 案件を開いた直後の既定ズーム（1px/frame）は 14 分の案件だと全体の 11% しか映らず、
+ * 「どこを見ているのか」が分からないまま始まる（ベースライン §初期ズーム）。
+ * ここでは見出しガターを除いた可視幅に表示総フレームがちょうど収まる倍率を返す。
+ *
+ * @param displayTotalFrames 表示座標の総フレーム（表示マップ適用後）。
+ * @param clientWidthPx タイムライン可視領域の幅（`.tl-body` の clientWidth）。
+ * @returns [MIN_PX_PER_FRAME, MAX_PX_PER_FRAME] にクランプした倍率。
+ *   算出できない（幅 0・フレーム 0）ときは null（呼び出し側は今の倍率を維持する）。
+ */
+export function fitPxPerFrame(
+  displayTotalFrames: number,
+  clientWidthPx: number,
+): number | null {
+  if (!Number.isFinite(displayTotalFrames) || displayTotalFrames <= 0) return null;
+  const usable = clientWidthPx - TRACK_LABEL_GUTTER_PX;
+  if (!Number.isFinite(usable) || usable <= 0) return null;
+  return clampZoom(usable / displayTotalFrames);
 }
 
 /** ルーラーの 1 目盛り。major には時刻ラベルが付き、minor はラベル無し。 */

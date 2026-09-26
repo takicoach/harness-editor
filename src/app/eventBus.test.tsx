@@ -4,6 +4,10 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup, act, waitFor } from '@testing-library/react';
 import { EventBusProvider, useEventChannel, useEventBusProjectId, useEventChannelWithSync, fetchEventsSync } from './eventBus';
+import { getWriterId } from './writerId';
+
+/** SSE URL に付く画面識別子（data-safety-5）。この実行内では固定値。 */
+const writerId = (): string => encodeURIComponent(getWriterId());
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -56,9 +60,10 @@ describe('EventBusProvider', () => {
     expect(FakeEventSource.instances[0]!.url).toBe('/api/events');
   });
 
-  it('projectId 指定は /api/events?id=<projectId> を張る（エディタ画面）', () => {
+  it('projectId 指定は /api/events?id=<projectId>&w=<writerId> を張る（エディタ画面）', () => {
     render(<EventBusProvider projectId="p1">{null}</EventBusProvider>);
-    expect(FakeEventSource.instances[0]!.url).toBe('/api/events?id=p1');
+    // w= はこの画面の識別子（data-safety-5）。値はタブごとに変わるので形だけ見る。
+    expect(FakeEventSource.instances[0]!.url).toBe(`/api/events?id=p1&w=${writerId()}`);
   });
 
   it('useEventBusProjectId で projectId を切り替えると張り替える', () => {
@@ -71,7 +76,7 @@ describe('EventBusProvider', () => {
       </EventBusProvider>,
     );
     expect(FakeEventSource.instances).toHaveLength(1);
-    expect(FakeEventSource.instances[0]!.url).toBe('/api/events?id=p1');
+    expect(FakeEventSource.instances[0]!.url).toBe(`/api/events?id=p1&w=${writerId()}`);
     expect(FakeEventSource.instances[0]!.closed).toBe(false);
 
     rerender(
@@ -83,7 +88,7 @@ describe('EventBusProvider', () => {
     // 旧接続は張り替え時に close される。
     expect(FakeEventSource.instances[0]!.closed).toBe(true);
     expect(FakeEventSource.instances).toHaveLength(2);
-    expect(FakeEventSource.instances[1]!.url).toBe('/api/events?id=p2');
+    expect(FakeEventSource.instances[1]!.url).toBe(`/api/events?id=p2&w=${writerId()}`);
   });
 
   it('マウント直後は Provider の初期 projectId（既定 \'\'）→ 子が伝える projectId の順に接続が張り替わる', () => {
@@ -97,7 +102,7 @@ describe('EventBusProvider', () => {
       </EventBusProvider>,
     );
     const urls = FakeEventSource.instances.map((es) => es.url);
-    expect(urls).toEqual(['/api/events', '/api/events?id=p1']);
+    expect(urls).toEqual(['/api/events', `/api/events?id=p1&w=${writerId()}`]);
     expect(FakeEventSource.instances[0]!.closed).toBe(true);
     expect(FakeEventSource.instances[1]!.closed).toBe(false);
   });
@@ -228,6 +233,17 @@ function SyncProbe({ ch, projectId, onMsg }: { ch: string; projectId: string; on
 }
 
 describe('useEventChannelWithSync', () => {
+  it('does not deliver another project’s live result while the provider connection is catching up', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ messages: [] }) }));
+    const onMsg = vi.fn();
+    const view = render(<EventBusProvider projectId="case-a"><SyncProbe ch="render" projectId="case-a" onMsg={onMsg} /></EventBusProvider>);
+    await act(async () => {});
+    view.rerender(<EventBusProvider projectId="case-a"><SyncProbe ch="render" projectId="case-c" onMsg={onMsg} /></EventBusProvider>);
+    await act(async () => {});
+    act(() => FakeEventSource.instances[0]!.triggerMessage('render', { type: 'done', phase: 'done' }));
+    expect(onMsg).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });

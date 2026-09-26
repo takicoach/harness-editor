@@ -4,6 +4,8 @@ import { assignTelopLanes } from './telopLanes';
 import type { EditorTelop } from '../../core/types';
 import type { DisplayMap } from '../../core/timelineDisplayMap';
 import { TrackHeader } from './TrackHeader';
+import { clipHandleWidth, clipHandleStyle } from './clipHandles';
+import { clipAriaLabel, handleClipNavKey, isClipActivateKey, rovingTabIndex } from './clipAria';
 
 /** つまみ識別子。テロップトラックではテロップの片端または本体を表す。 */
 export interface TelopHandleId {
@@ -20,6 +22,13 @@ export interface TelopOverride {
 }
 
 interface TelopTrackProps {
+  /** 読み上げ名の時刻表示に使う fps（監査 interaction-10）。 */
+  fps: number;
+  /**
+   * クリップを **キーボードで** 選んだとき（Enter / Space）。監査 interaction-10。
+   * ポインタ経路（onHandleDown）と違い、ドラッグを始めずに選択だけを行う。
+   */
+  onActivate?: (handle: TelopHandleId) => void;
   pxPerFrame: number;
   telops: EditorTelop[];
   /** 選択中のテロップ ID（インスペクタ選択と同期）。 */
@@ -68,6 +77,8 @@ export function TelopTrack({
   liveOverride,
   selectedHandle,
   onHandleDown,
+  fps,
+  onActivate,
   map,
   label,
   variant,
@@ -83,9 +94,14 @@ export function TelopTrack({
     [telops],
   );
   const multiSet = useMemo(() => new Set(multiSelectedIds), [multiSelectedIds]);
+  // ロービング tabindex 用の並び（DOM の描画順と同じ）。タブ停止はこの中の 1 個だけ。
+  const clipIds = telops.map((t) => t.id);
   const trackStyle = { ['--lane-count']: Math.max(1, laneCount) } as React.CSSProperties;
+  // アイテムが 0 件のトラックは細い行へ畳む（ベースライン §トラック画面外）。
+  // 空の行が通常高さで場所を取るせいで、実際に中身のある下段トラックが画面外に出ていた。
   const trackClass =
-    variant === 'subtitle' ? 'tl-track tl-track-jimaku' : 'tl-track tl-track-telop';
+    (variant === 'subtitle' ? 'tl-track tl-track-jimaku' : 'tl-track tl-track-telop') +
+    (telops.length === 0 ? ' tl-track-empty' : '');
   const iconKind = variant === 'subtitle' ? ('jimaku' as const) : ('telop' as const);
   return (
     <div className={trackClass} style={trackStyle}>
@@ -96,6 +112,8 @@ export function TelopTrack({
         const end = liveOverride?.telopId === t.id ? liveOverride.originalEnd : t.originalEnd;
         const left = frameToXMapped(start, pxPerFrame, map);
         const width = Math.max(4, widthMapped(start, end, pxPerFrame, map));
+        // つまみ幅（極小クリップでは非表示）。監査 interaction-4。
+        const handleW = clipHandleWidth(width, 10);
         const lane = lanes[i] ?? 0;
         const top = `calc(${lane} * var(--lane-row-h) + var(--lane-inset))`;
         // 複数選択中は集合の全員を同じ選択枠でハイライトする（設計書 §2）。
@@ -105,6 +123,28 @@ export function TelopTrack({
         return (
           <div
             key={t.id}
+            // AI エージェントが「あのテロップ」を名前で指名できるようにする（ベースライン §AI）。
+            data-testid={`clip-telop-${t.id}`}
+            // キーボードから到達して選べるようにする（監査 interaction-10）。
+            // これが無いと selectedHandle が立たず、←/→ の 1 フレーム微調整に届かない。
+            // ただしタブ停止はトラックで 1 個だけ（ロービング tabindex・サイクル 4 レビュー
+            // Important）。全クリップを停止にすると 120 個超の Tab でしか抜けられない。
+            // 停止以外のクリップへは ↑/↓・Home/End で移る。
+            tabIndex={rovingTabIndex(t.id, clipIds, selectedTelopId)}
+            data-clip-nav=""
+            role="button"
+            aria-label={clipAriaLabel(label, start, end, fps, t.text)}
+            onKeyDown={(e) => {
+              // ↑/↓・Home/End は同じトラック内のクリップ移動（←/→ は 1 フレーム微調整のまま）。
+              if (handleClipNavKey(e.key, e.currentTarget)) {
+                e.preventDefault();
+                return;
+              }
+              if (!isClipActivateKey(e.key)) return;
+              e.preventDefault();
+              onActivate?.({ kind: 'telop', telopId: t.id, edge: 'body' });
+            }}
+            data-id={t.id}
             className={'tl-telop' + (selected ? ' selected' : '') + (t.manual === true ? ' manual' : '')}
             style={{ left, width, top }}
             title={t.text}
@@ -116,6 +156,7 @@ export function TelopTrack({
             <span className="tl-telop-text">{t.text}</span>
             <div
               className={'tl-handle start' + (sameHandle(startHandle, selectedHandle) ? ' selected' : '')}
+              style={clipHandleStyle(handleW, 'start')}
               title="テロップ開始をドラッグして調整"
               onPointerDown={(e) => {
                 e.stopPropagation();
@@ -124,6 +165,7 @@ export function TelopTrack({
             />
             <div
               className={'tl-handle end' + (sameHandle(endHandle, selectedHandle) ? ' selected' : '')}
+              style={clipHandleStyle(handleW, 'end')}
               title="テロップ終了をドラッグして調整"
               onPointerDown={(e) => {
                 e.stopPropagation();

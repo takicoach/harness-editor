@@ -1,11 +1,11 @@
 import type { RefObject } from 'react';
-import type { PlayerRef } from '@remotion/player';
+import type { EditorPlaybackRef as PlayerRef } from '../preview/editorPlayback';
 import type { EditorBgmClip, EditorImage, EditorSe, EditorShape, EditorTelop, EditorTitle, EditorVideoInsert, CutSegment } from '../../core/types';
 import type { EditState } from '../edit/editState';
 import type { Join } from '../../core/joinEngine';
 import type { InstallKind, InstallErrors } from '../install';
 import { TitleSettingsTab } from './TitleSettingsTab';
-import type { TelopComponent } from '../../preview/loadTelopComponent';
+import type { NativeTelopRevision } from '../../preview/nativeTelopCache';
 export { sliderToRate, rateToSlider } from './inspector/shared';
 import { SettingsTab } from './inspector/SettingsTab';
 export { SettingsTab } from './inspector/SettingsTab';
@@ -18,8 +18,14 @@ import { JoinSettings } from './inspector/JoinSettings';
 import { ShapeSettingsTab } from './inspector/ShapeSettingsTab';
 import { MainVideoSettingsTab } from './inspector/MainVideoSettingsTab';
 import { CutSegmentSettingsTab } from './inspector/CutSegmentSettingsTab';
+import { InstallCtaButton } from './inspector/shared';
+import { AssetTimingContext } from './inspector/AssetTimingSection';
+import { FrameRangeFields } from './FrameRangeFields';
+import { ASSET_KEYS, assetFinalRange, placeAsset, splitPlacedText, type AssetKind } from '../edit/assetPlacementOps';
+import type { PlaybackModel } from '../../preview/playbackModel';
 
 interface InspectorProps {
+  finalModel?: PlaybackModel;
   state: EditState;
   fps: number;
   /** public/se/ にある効果音ファイル名（SE 設定のファイル選択用）。 */
@@ -28,16 +34,17 @@ interface InspectorProps {
   imageLibrary: string[];
   /** public/ にあるサブ動画ファイル（サブ動画設定のファイル選択用）。 */
   videoLibrary: string[];
-  /**
-   * サブ動画素材の実フレーム長（file → frames）。区間を素材内へクランプ・実尺表示に使う。
-   * 未プローブ・読めない素材は**キーごと存在しない**（＝クランプせず実尺も出さない）。
-   * **任意にしない**: 渡し忘れるとクランプが silent OFF になるため、tsc に検出させる。
-   */
-  videoDurations: Record<string, number>;
   /** API id（VideoSyncWaveform の asset URL 用）。 */
   projectId: string;
-  /** テロップパックが導入済みかどうか（スタイル一覧 vs 導入 CTA の切り替え用）。 */
+  /** テロップパックが導入済みかどうか（30スタイル一覧 vs 導入 CTA の切り替え用）。 */
   telopPackInstalled: boolean;
+  /** キーフレームが書き出しへ反映されるか（部品の版で決まる・F-1）。未指定＝対応済みとして扱う。 */
+  motionKeysSupport?: { telop: boolean; image: boolean };
+  imageRendering?: { supported: boolean; canUpgrade: boolean };
+  /** カラー補正が書き出しへ反映されるか（未対応なら注意書きを出す・F-2）。 */
+  colorGradeSupported?: boolean;
+  colorWheelsSupported?: boolean;
+  mainAudioSupported?: boolean;
   /** サブ動画機能が導入済みかどうか（導入 CTA の切り替え用）。 */
   videoInsertInstalled: boolean;
   /** 導入中の機能種別（null なら非導入中）。ボタン disabled と「導入中…」表示に使う。 */
@@ -46,8 +53,8 @@ interface InspectorProps {
   installErrors: InstallErrors;
   /** 未保存の編集があるか（導入は再読込を伴うため未保存中は無効化する）。 */
   dirty: boolean;
-  /** プロジェクト導入済みのテロップ部品（グリッド描画用）。未読込なら null。 */
-  telopComponent: TelopComponent | null;
+  /** 成功した案件読込の識別子。見本のキャッシュ更新用で、未読込なら null。 */
+  componentRevision: NativeTelopRevision | null;
   /** プレビュー解像度（スウォッチの合成サイズ）。 */
   previewWidth: number;
   previewHeight: number;
@@ -79,7 +86,15 @@ interface InspectorProps {
    */
   onBack?: () => void;
 }
-export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, videoDurations, projectId, telopPackInstalled, videoInsertInstalled, installing, installErrors, dirty, telopComponent, previewWidth, previewHeight, onInstall, bgmLibrary = [], bgmInstalled = false, shapeInstalled = false, transitionInstalled = false, joins = [], keptSegments = [], onLive, onEdit, playerRef, assetVersions, onBack }: InspectorProps) {
+export function Inspector({ state, fps, finalModel, seLibrary, imageLibrary, videoLibrary, projectId, telopPackInstalled, motionKeysSupport = { telop: true, image: true }, imageRendering, colorGradeSupported = true, colorWheelsSupported = false, mainAudioSupported = false, videoInsertInstalled, installing, installErrors, dirty, componentRevision, previewWidth, previewHeight, onInstall, bgmLibrary = [], bgmInstalled = false, shapeInstalled = false, transitionInstalled = false, joins = [], keptSegments = [], onLive, onEdit, playerRef, assetVersions, onBack }: InspectorProps) {
+  const asset = state.selection && state.selection.kind in ASSET_KEYS && 'id' in state.selection ? { kind: state.selection.kind as AssetKind, id: state.selection.id } : null;
+  const range = finalModel && asset ? assetFinalRange(finalModel, asset.kind, asset.id) : null;
+  const timing = range && finalModel && asset ? { ...range,
+    onSplit: asset.kind === 'title' ? (frame: number) => onEdit(splitPlacedText(state, finalModel, 'title', asset.id, frame)) : undefined,
+    label: `完成動画 ${Number((range.start / fps).toFixed(6))}–${Number((range.end / fps).toFixed(6))} 秒（${range.start}–${range.end} フレーム）`,
+    fields: <FrameRangeFields key={`${asset.kind}:${asset.id}`} start={range.start} end={range.end} fps={fps} max={finalModel.durationInFrames} clock="final"
+      onCommit={(start, end) => onEdit(placeAsset(state, finalModel, asset.kind, asset.id, start, end))} />,
+  } : null;
   const selectedTelopId =
     state.selection?.kind === 'telop' ? state.selection.id : null;
   const selected: EditorTelop | undefined = state.telops.find(
@@ -140,7 +155,7 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
                         : '設定';
 
   return (
-    <div className="ins">
+    <AssetTimingContext.Provider value={timing}><div className="ins">
       <div className="ins-tabs">
         {onBack ? (
           <>
@@ -183,15 +198,21 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
             state={state}
             fps={fps}
             imageLibrary={imageLibrary}
+            keyframesSupported={motionKeysSupport.image}
+            renderingSupport={imageRendering}
+            installing={installing}
+            installErrors={installErrors}
+            dirty={dirty}
+            onInstall={onInstall}
             onEdit={onEdit}
           />
         ) : selectedVideoInsert ? (
           <VideoInsertSettingsTab
             videoInsert={selectedVideoInsert}
+            effectivePlaybackRate={finalModel?.videoInserts.find(v => v.id === selectedVideoInsert.id)?.playbackRate}
             state={state}
             fps={fps}
             videoLibrary={videoLibrary}
-            videoDurations={videoDurations}
             projectId={projectId}
             assetVersions={assetVersions}
             onLive={onLive}
@@ -236,6 +257,7 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
         ) : state.selection?.kind === 'mainVideo' ? (
           <MainVideoSettingsTab
             state={state}
+            onLive={onLive}
             onEdit={onEdit}
             installing={installing}
             installErrors={installErrors}
@@ -244,27 +266,32 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
             getPlaybackFrame={() => Math.round(playerRef.current?.getCurrentFrame() ?? 0)}
             keptSegments={keptSegments}
             fps={fps}
+            colorGradeSupported={colorGradeSupported}
+            colorWheelsSupported={colorWheelsSupported}
+            mainAudioSupported={mainAudioSupported}
           />
         ) : state.selection?.kind === 'cutSegment' ? (
           <CutSegmentSettingsTab
             state={state}
             segmentId={state.selection.id}
+            fps={fps}
             onEdit={onEdit}
           />
         ) : multiTelopSelected ? (
           <MultiTelopSettingsTab state={state} onEdit={onEdit} />
         ) : selected ? (
           <SettingsTab
+            projectId={projectId}
             telop={selected}
             state={state}
             fps={fps}
             telopPackInstalled={telopPackInstalled}
-            videoInsertInstalled={videoInsertInstalled}
+            keyframesSupported={motionKeysSupport.telop}
             bgmInstalled={bgmInstalled}
             installing={installing}
             installErrors={installErrors}
             dirty={dirty}
-            telopComponent={telopComponent}
+            componentRevision={componentRevision}
             previewWidth={previewWidth}
             previewHeight={previewHeight}
             onInstall={onInstall}
@@ -273,7 +300,26 @@ export function Inspector({ state, fps, seLibrary, imageLibrary, videoLibrary, v
         ) : (
           <div className="ins-empty">編集したい字幕・効果音・画像などを選ぶと、ここに設定が表示されます。</div>
         )}
+        {/* Selection-independent installation stays available below editing controls.
+          Its dirty-state hint must not move the controls the user is operating. */}
+        {!videoInsertInstalled && (
+          <div className="ins-section ins-persistent-install">
+            <div className="ins-label"><span>サブ動画機能</span></div>
+            <div className="ins-pack-cta">
+              <p>サブ動画（インサート動画）をプレビューに表示できます。</p>
+              <InstallCtaButton
+                kind="videoInsert"
+                label="サブ動画機能を導入"
+                className="ins-video-install"
+                installing={installing}
+                installErrors={installErrors}
+                dirty={dirty}
+                onInstall={onInstall}
+              />
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+    </div></AssetTimingContext.Provider>
   );
 }
