@@ -122,7 +122,7 @@ AI の料金は、使用するサービスの契約と認証方法に従いま�
 
 - **OS**: macOS（Apple Silicon の Mac アプリとブラウザ版を検証）。Windows / Linux は 0.7.0 で未検証
 - **必要なもの**: ブラウザ版は Node.js（20.19 以上）・ffmpeg・書き出し用ブラウザ（Chrome for Testing）。`setup` が確認し、ffmpeg と書き出し用ブラウザは自動導入します（Node.js は導入を案内します）
-- **文字起こしを使う場合**: Python 3 ＋ `pip install mlx-whisper`（Mac）または `pip install openai-whisper`（Windows / Linux）
+- **文字起こしを使う場合**: Python 3.10 以上 ＋ `pip install mlx-whisper`（Mac）または `pip install openai-whisper`（Windows / Linux）。アプリから起動した場合も、Homebrew・Python公式インストーラー・uv/pipxの標準的な導入先を探します。独自の場所に導入した場合は `SUPERMOVIE_PYTHON` または `.supermovie-python` でPythonのパスを指定できます。
 - **ブラウザ**: Chrome / Edge / Safari の最新版
 - **ネットワーク**: 編集・書き出しはオフラインで動きます（AI を使うときは通信します）
 

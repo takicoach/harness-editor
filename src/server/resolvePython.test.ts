@@ -4,6 +4,10 @@ import * as childProcess from 'node:child_process';
 vi.mock('node:child_process',async load=>{const actual=await load<typeof childProcess>();return {...actual,execFileSync:vi.fn(actual.execFileSync),spawn:vi.fn(actual.spawn)};});
 
 describe('resolvePythonBin', () => {
+  it('finds an installed backend outside the GUI PATH before settling for a bare interpreter',()=>{
+    const backend='/home/test/.local/share/uv/tools/mlx-whisper/bin/python';
+    expect(resolvePythonBin({env:{PATH:'/usr/bin:/bin'},readConfig:()=>null,installedCandidates:()=>[backend],hasWhisper:bin=>bin===backend,canRunScript:()=>true})).toBe(backend);
+  });
   it('SUPERMOVIE_PYTHON が設定されていれば検証せずそれを使う', () => {
     const bin = resolvePythonBin({
       env: { SUPERMOVIE_PYTHON: '/custom/python' },
@@ -103,7 +107,11 @@ describe('resolvePythonBin', () => {
 });
 
 describe('resolvePythonBinAsync',()=>{
-  const empty={env:{},readConfig:()=>null,hasWhisper:async()=>false};
+  it('finds the same GUI-independent backend asynchronously',async()=>{
+    const backend='/home/test/.local/share/uv/tools/mlx-whisper/bin/python';
+    expect(await resolvePythonBinAsync(undefined,{env:{PATH:'/usr/bin:/bin'},readConfig:()=>null,installedCandidates:()=>[backend],hasWhisper:async bin=>bin===backend,canRunScript:async()=>true})).toBe(backend);
+  });
+  const empty={env:{},readConfig:()=>null,installedCandidates:()=>[],hasWhisper:async()=>false};
   it('selects the same successful backend despite more than 2KB of real stdout and stderr',async()=>{
     const actual=await vi.importActual<typeof childProcess>('node:child_process');
     const source="process.stdout.write('o'.repeat(4096));process.stderr.write('w'.repeat(4096));";
