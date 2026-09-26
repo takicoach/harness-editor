@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve,join,win32 } from 'node:path';
+import { homedir } from 'node:os';
 
 /**
  * transcribe.py を動かす Python 実行ファイルを解決する。
@@ -42,6 +43,31 @@ const PATH_CANDIDATES = [
  */
 export function pathCandidates(platform: NodeJS.Platform = process.platform): readonly string[] {
   return platform === 'win32' ? [...PATH_CANDIDATES, 'py'] : PATH_CANDIDATES;
+}
+
+/** Finder/desktop launchers do not inherit the terminal's Homebrew/uv PATH.
+ * Inspect standard installation locations without running a login shell or scanning projects.
+ * These are candidates only: the same version and real backend-import probes still apply.
+ */
+export function installedPythonCandidates(platform:NodeJS.Platform=process.platform,env:NodeJS.ProcessEnv=process.env,home=homedir()):string[]{
+  const p=platform==='win32'?win32:{join},bins:string[]=[];
+  const interpreter=(directory:string)=>p.join(directory,platform==='win32'?'Scripts':'bin',platform==='win32'?'python.exe':'python');
+  if(env.VIRTUAL_ENV)bins.push(interpreter(env.VIRTUAL_ENV));
+  const data=platform==='win32'?(env.APPDATA??p.join(home,'AppData','Roaming')):(env.XDG_DATA_HOME??join(home,'.local','share'));
+  for(const tool of ['mlx-whisper','openai-whisper']){
+    bins.push(interpreter(p.join(env.UV_TOOL_DIR??p.join(data,'uv','tools'),tool)));
+    bins.push(interpreter(p.join(env.PIPX_HOME??p.join(data,'pipx'),'venvs',tool)));
+    if(platform!=='win32')bins.push(interpreter(join(home,'.local','pipx','venvs',tool)));
+  }
+  if(platform!=='win32'){
+    for(const directory of [join(home,'.local','bin'),'/opt/homebrew/bin','/usr/local/bin'])for(const name of PATH_CANDIDATES)bins.push(join(directory,name));
+    if(platform==='darwin')for(const version of ['3.14','3.13','3.12','3.11','3.10']){
+      bins.push(`/opt/homebrew/opt/python@${version}/bin/python${version}`,`/usr/local/opt/python@${version}/bin/python${version}`,`/Library/Frameworks/Python.framework/Versions/${version}/bin/python3`);
+    }
+  }else if(env.LOCALAPPDATA){
+    for(const version of ['314','313','312','311','310'])bins.push(win32.join(env.LOCALAPPDATA,'Programs','Python',`Python${version}`,'python.exe'));
+  }
+  return [...new Set(bins)].filter(bin=>existsSync(bin));
 }
 
 /** リポジトリ直下の machine-local 設定ファイル名（gitignore 済み）。 */
@@ -143,6 +169,8 @@ export interface ResolvePythonDeps {
   readConfig: () => string | null;
   /** 実行プラットフォーム（既定 process.platform）。probe 候補の選択に使う。 */
   platform: NodeJS.Platform;
+  /** Existing installations outside a desktop process's limited PATH. */
+  installedCandidates:()=>readonly string[];
 }
 
 /** 使用する Python 実行ファイルを返す（解決順はファイル冒頭コメント参照）。 */
@@ -158,11 +186,12 @@ export function resolvePythonBin(deps: Partial<ResolvePythonDeps> = {}): string 
   const configured = readConfig();
   if (configured) return configured;
 
-  for (const bin of pathCandidates(platform)) {
+  const candidates=[...pathCandidates(platform),...(deps.installedCandidates?.()??installedPythonCandidates(platform,env))];
+  for (const bin of candidates) {
     if (hasWhisper(bin)) return bin;
   }
   const canRunScript=deps.canRunScript??pythonCanRunScript;
-  for(const bin of pathCandidates(platform))if(canRunScript(bin))return bin;
+  for(const bin of candidates)if(canRunScript(bin))return bin;
   throw missingCompatiblePython();
 }
 
@@ -177,7 +206,9 @@ export async function resolvePythonBinAsync(signal?:AbortSignal,deps:Partial<Res
   if(configured)return configured;
   const hasWhisper=deps.hasWhisper??((bin:string,signal?:AbortSignal)=>probePythonAsync(bin,PROBE_SRC,60000,signal));
   const canRunScript=deps.canRunScript??((bin:string,signal?:AbortSignal)=>probePythonAsync(bin,VERSION_PROBE_SRC,5000,signal));
-  for(const probe of [hasWhisper,canRunScript])for(const bin of pathCandidates(deps.platform??process.platform)) {
+  const platform=deps.platform??process.platform,env=deps.env??process.env;
+  const candidates=[...pathCandidates(platform),...(deps.installedCandidates?.()??installedPythonCandidates(platform,env))];
+  for(const probe of [hasWhisper,canRunScript])for(const bin of candidates) {
     signal?.throwIfAborted();const ok=await probe(bin,signal);signal?.throwIfAborted();if(ok)return bin;
   }
   throw missingCompatiblePython();
