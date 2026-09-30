@@ -19,6 +19,7 @@ import { handlePtyUpgrade, ptyTokens } from './ptyApi';
 import { ptySessions } from './ptySession';
 import { getProjectRoot } from './projectRoot';
 import { JOB_BODY_MAX_BYTES, readJsonBody } from './readBody';
+import { saveTerminalAttachment } from './terminalAttachment';
 
 /** 課金系の環境変数が検出されたか（UI 警告用。除去そのものは ptySession が行う）。 */
 export function apiKeyDetected(env: NodeJS.ProcessEnv): boolean {
@@ -163,6 +164,12 @@ export async function handleAiApi(
     });
     if (!r.ok) { sendJson(res, 409, { error: r.error, code: r.code }); return true; }
     sendJson(res, 200, { ok: true, actualTool: r.actualTool, sessionId: r.sessionId, notes: r.notes });
+    return true;
+  }
+
+  // ブラウザ版のターミナルへファイルをドロップした時の受け皿。保存先の絶対パスを返す。
+  if (url.pathname === '/api/pty/attachment' && method === 'POST') {
+    sendJson(res, 200, { path: await saveTerminalAttachment(req, url.searchParams.get('name')) });
     return true;
   }
 

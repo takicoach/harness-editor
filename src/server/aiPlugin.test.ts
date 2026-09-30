@@ -4,15 +4,17 @@
  * 押さえられないという外部レビュー指摘（P1-5）を受けて実経路に切り替えた。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
+import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleAiApi, resolveActualPort, apiKeyDetected, smeAi } from './aiPlugin';
 import * as aiToolBin from './aiToolBin';
 import { ptySessions } from './ptySession';
 import { claudeInstallJob } from './claudeInstallJob';
 import { handlePtyUpgrade, ptyTokens } from './ptyApi';
+import { safeAttachmentName, terminalAttachmentRoot } from './terminalAttachment';
 
 interface Captured { status: number; body: unknown }
 
@@ -426,5 +428,58 @@ describe('smeAi() の configureServer 配線', () => {
 
     expect(captured.status).toBe(413);
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/pty/attachment（ブラウザ版のターミナルへのドロップ）', () => {
+  const upload = (url: string, bytes: Buffer, headers: Record<string, string> = {}): IncomingMessage =>
+    Object.assign(Readable.from([bytes]), {
+      method: 'POST', url,
+      headers: { host: '127.0.0.1:2109', origin: 'http://127.0.0.1:2109', 'sec-fetch-site': 'same-origin', ...headers },
+    }) as unknown as IncomingMessage;
+
+  it('中身を一時フォルダへ元の名前で保存し、その絶対パスを返す', async () => {
+    const { res, captured } = makeRes();
+    const name = 'スイング 画像(1).png';
+    await handleAiApi(upload(`/api/pty/attachment?${new URLSearchParams({ name })}`, Buffer.from('PNGDATA')), res, ctx());
+    expect(captured.status).toBe(200);
+    const path = (captured.body as { path: string }).path;
+    try {
+      expect(isAbsolute(path)).toBe(true);
+      expect(basename(path)).toBe(name);
+      expect(dirname(dirname(path))).toBe(terminalAttachmentRoot());
+      expect(readFileSync(path, 'utf8')).toBe('PNGDATA');
+    } finally { rmSync(dirname(path), { recursive: true, force: true }); }
+  });
+
+  it('名前に含まれるフォルダ区切りは捨て、保存先の外へ出さない', async () => {
+    const { res, captured } = makeRes();
+    await handleAiApi(upload(`/api/pty/attachment?${new URLSearchParams({ name: '../../evil/../x.png' })}`, Buffer.from('a')), res, ctx());
+    const path = (captured.body as { path: string }).path;
+    try {
+      expect(basename(path)).toBe('x.png');
+      expect(dirname(dirname(path))).toBe(terminalAttachmentRoot());
+    } finally { rmSync(dirname(path), { recursive: true, force: true }); }
+  });
+
+  it('ローカル以外からの送信は 403（保存しない）', async () => {
+    const { res, captured } = makeRes();
+    await handleAiApi(upload('/api/pty/attachment?name=a.png', Buffer.from('a'), { origin: 'https://evil.example' }), res, ctx());
+    expect(captured.status).toBe(403);
+  });
+});
+
+describe('safeAttachmentName', () => {
+  it('空・区切りだけ・制御文字は既定名や除去で安全な 1 階層の名前にする', () => {
+    expect(safeAttachmentName(null)).toBe('file');
+    expect(safeAttachmentName('..')).toBe('file');
+    expect(safeAttachmentName('a\u0000b\nc.png')).toBe('abc.png');
+    expect(safeAttachmentName('C:\\Users\\me\\clip.mov')).toBe('clip.mov');
+  });
+  it('長すぎる名前は拡張子を残して切り詰める', () => {
+    const long = 'あ'.repeat(300) + '.mov';
+    const safe = safeAttachmentName(long);
+    expect(safe.length).toBe(120);
+    expect(safe.endsWith('.mov')).toBe(true);
   });
 });

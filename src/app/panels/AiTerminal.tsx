@@ -16,6 +16,7 @@ import { terminalOptions, terminalTheme } from './claudeTerminalOptions';
 import { terminalColorsFor } from '../../shared/terminalColors';
 import { DEFAULT_AI_TOOL, type AiToolId } from '../../shared/aiToolId';
 import { pickInitialTool, toolButtonState, toolButtonHint, CODEX_INSTALL_URL, type ToolInfo } from './aiToolSwitcher';
+import { dropPaths, hasDroppedFiles, terminalDropText } from './terminalDrop';
 
 const TOOL_STORAGE_KEY = 'sme.aiTool';
 
@@ -50,6 +51,10 @@ export function AiTerminal() {
    * （Minor 1: 以前は stale でも setError と takeover 文言が両方出て二重表示だった）。
    */
   const [takeoverReason, setTakeoverReason] = useState<'takeover' | 'stale'>('takeover');
+  /** ファイルを端末の上に重ねている間だけ true（受け付けの目印を出す）。 */
+  const [dropHover, setDropHover] = useState(false);
+  /** ドロップしたファイルをブラウザ版がサーバーへ送っている間だけ true。 */
+  const [attaching, setAttaching] = useState(false);
   const wantToolRef = useRef<AiToolId>(DEFAULT_AI_TOOL);
   useEffect(() => { wantToolRef.current = wantTool; }, [wantTool]);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -274,6 +279,14 @@ export function AiTerminal() {
     return () => { d1.dispose(); ro.disconnect(); term.dispose(); termRef.current = null; };
   }, [phase]);
 
+  // ドラッグを端末の外で離した・取り消した時に、受け付けの目印を残さない。
+  useEffect(() => {
+    if (!dropHover) return;
+    const clear = () => setDropHover(false);
+    window.addEventListener('drop', clear); window.addEventListener('dragend', clear); window.addEventListener('blur', clear);
+    return () => { window.removeEventListener('drop', clear); window.removeEventListener('dragend', clear); window.removeEventListener('blur', clear); };
+  }, [dropHover]);
+
   // 修正2（テーマ追従）: data-theme が動的に切り替わった時、既に張られている xterm
   // インスタンスを作り直さず options.theme の再代入だけで配色を追従させる
   // （xterm はこの再代入をサポートしている）。claude 本体（pty の中身）の出力色は
@@ -321,6 +334,28 @@ export function AiTerminal() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRechecking(false);
+    }
+  }
+
+  /**
+   * 端末へ落とされたファイルのパスを貼り付けとして入力する。ターミナルアプリへの
+   * ドラッグと同じ入力になるため、claude は画像パスを添付画像として取り込む。
+   * 送信（Enter）はしない。利用者が指示を書き足してから送れるようにする。
+   */
+  async function handleDropFiles(files: File[]): Promise<void> {
+    if (!files.length || attaching) return;
+    setError(null);
+    setAttaching(true);
+    try {
+      const text = terminalDropText(await dropPaths(files));
+      const term = termRef.current;
+      if (!term || phaseRef.current !== 'connected') throw new Error('AI との接続が切れたため、ファイルを渡せませんでした');
+      term.paste(text);
+      term.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAttaching(false);
     }
   }
 
@@ -455,15 +490,43 @@ export function AiTerminal() {
       )}
       {(phase === 'connected' || phase === 'exited' || phase === 'takeover') && (
         <>
+          {/* ドロップは xterm の外側の枠で受ける（xterm 自身はファイルのドロップを扱わない。
+              受けないと画面全体の既定動作抑止に吸われ、何も起きない）。 */}
           <div
-            className="clt-term"
-            ref={hostRef}
-            data-testid="claude-terminal"
-            /* 枠の地色は端末の配色と同じ出所から取る。CSS 側に色を書くと light/dark の
-               2 値が styles.css と shared/terminalColors.ts に二重定義になり、
-               ライトテーマで白い端末のまわりに黒い額縁が出る（G-4 実測）。 */
-            style={{ background: terminalColorsFor(theme).background }}
-          />
+            className={dropHover ? 'clt-term-frame is-drop' : 'clt-term-frame'}
+            onDragEnter={(event) => {
+              if (!hasDroppedFiles(event.dataTransfer)) return;
+              event.preventDefault(); event.stopPropagation();
+              setDropHover(phase === 'connected' && !attaching);
+            }}
+            onDragOver={(event) => {
+              if (!hasDroppedFiles(event.dataTransfer)) return;
+              event.preventDefault(); event.stopPropagation();
+              event.dataTransfer.dropEffect = phase === 'connected' && !attaching ? 'copy' : 'none';
+            }}
+            onDragLeave={(event) => {
+              if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+              setDropHover(false);
+            }}
+            onDrop={(event) => {
+              if (!hasDroppedFiles(event.dataTransfer)) return;
+              event.preventDefault(); event.stopPropagation();
+              setDropHover(false);
+              if (phase === 'connected') void handleDropFiles(Array.from(event.dataTransfer.files));
+            }}
+          >
+            <div
+              className="clt-term"
+              ref={hostRef}
+              data-testid="claude-terminal"
+              /* 枠の地色は端末の配色と同じ出所から取る。CSS 側に色を書くと light/dark の
+                 2 値が styles.css と shared/terminalColors.ts に二重定義になり、
+                 ライトテーマで白い端末のまわりに黒い額縁が出る（G-4 実測）。 */
+              style={{ background: terminalColorsFor(theme).background }}
+            />
+            {dropHover && <div className="clt-drop-hint" aria-hidden="true">ここで離すと、ファイルを AI に渡します</div>}
+          </div>
+          {attaching && <p className="hint">ファイルを AI に渡しています…</p>}
           {phase === 'connected' && (
             <div className="clt-actions">
               <button type="button" className="clt-waiting-btn" disabled={waiting}

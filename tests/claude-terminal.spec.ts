@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { TERMINAL_FONT_FAMILY } from '../src/app/panels/claudeTerminalOptions';
-import { createTempProject, removeTempProject } from './helpers';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { FIXTURES_ROOT, createTempProject, removeTempProject } from './helpers';
 
 /**
  * このファイルは共有フィクスチャ `sample-project` を開いて AI タブを操作していたが、
@@ -42,6 +44,44 @@ test('AI タブ: 埋め込みターミナルが起動しエコーが往復する
   await term.click(); // フォーカス
   await page.keyboard.type('ping-123');
   await expect(term).toContainText('ping-123'); // エコーが返る＝入出力往復
+});
+
+// OSS 利用者報告（2026-09-30）: 画像や動画をターミナルへドラッグ&ドロップしても何も起きなかった。
+// ブラウザ版は実パスを取れないため、サーバーの一時フォルダへ送った保存先パスが
+// ターミナルアプリと同じ逃がし方で入力される（送信はしない）ことを確認する。
+test('AI タブ: ファイルをターミナルへドロップするとパスが入力される', async ({ page }) => {
+  // 0.7 の編集画面（新形式）で確かめる。旧形式の sample-project は開くと引き継ぎ画面が出るため使わない。
+  const name = `ai-drop-${process.pid}-${Date.now()}`;
+  const created = await page.request.post(`/api/create-project?native=1&name=${name}&video=main.mp4`, {
+    data: readFileSync(join(FIXTURES_ROOT, 'sample-project/public/main.mp4')),
+    headers: { 'content-type': 'application/octet-stream' },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const nativeId = (await created.json() as { id: string }).id;
+  try {
+    await page.goto(`/?project=${encodeURIComponent(nativeId)}`);
+    await page.getByRole('button', { name: '✦ AI で編集する' }).click();
+    const term = page.getByTestId('claude-terminal');
+    await expect(term).toContainText('FAKE-CLAUDE READY', { timeout: 15_000 });
+
+    const attachments: string[] = [];
+    page.on('request', (req) => { if (req.url().includes('/api/pty/attachment')) attachments.push(req.url()); });
+    const dataTransfer = await page.evaluateHandle(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['png'], 'swing(1).png', { type: 'image/png' }));
+      return transfer;
+    });
+    await term.dispatchEvent('dragenter', { dataTransfer });
+    await term.dispatchEvent('dragover', { dataTransfer });
+    await expect(page.locator('.clt-drop-hint')).toBeVisible();
+    await term.dispatchEvent('drop', { dataTransfer });
+
+    await expect(term).toContainText('swing\\(1\\).png', { timeout: 15_000 });
+    await expect(page.locator('.clt-drop-hint')).toHaveCount(0);
+    expect(attachments).toHaveLength(1);
+  } finally {
+    rmSync(join(FIXTURES_ROOT, nativeId), { recursive: true, force: true });
+  }
 });
 
 // I-2 回帰: ホーム画面（プロジェクト未選択）で AiTerminal がマウントされ、

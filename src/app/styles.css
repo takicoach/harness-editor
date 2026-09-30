@@ -3485,6 +3485,13 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
    地色は AiTerminal が shared/terminalColors.ts の値をインラインで当てる（ここは未マウント時の
    フォールバック。ハードコードを 2 箇所に増やさないため dark 側だけ置く）。 */
 .clt-term { flex: 1; min-height: 220px; padding: 6px 8px; background: #101418; border-radius: var(--radius-md); overflow: hidden; }
+/* ドロップを受ける枠。端末の縦伸びは .clt-term の flex:1 をこの枠が引き継ぐ。 */
+.clt-term-frame { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: var(--radius-md); }
+.clt-term-frame.is-drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.clt-drop-hint {
+  position: absolute; inset: auto 12px 12px; padding: 8px 12px; border-radius: var(--radius-md);
+  background: var(--accent); color: var(--accent-on); font-size: 12px; font-weight: 600; text-align: center; pointer-events: none;
+}
 /* AI タブのツール切替。導入状況にかかわらず常に 2 ボタン出す（設計 E・2026-09-16）。 */
 .clt-tools { display: flex; gap: 12px; flex-wrap: wrap; padding: 8px; }
 .clt-tool-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
