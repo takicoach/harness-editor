@@ -5,12 +5,12 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('terminalPathWord', () => {
   it('ターミナルアプリと同じく、空白や括弧をバックスラッシュで逃がす（日本語はそのまま）', () => {
-    expect(terminalPathWord('/Users/me/Desktop/スイング 画像(1).png')).toBe('/Users/me/Desktop/スイング\\ 画像\\(1\\).png');
+    expect(terminalPathWord('/Users/x/Desktop/スイング 画像(1).png')).toBe('/Users/x/Desktop/スイング\\ 画像\\(1\\).png');
     expect(terminalPathWord("/tmp/it's & $HOME;`x`")).toBe("/tmp/it\\'s\\ \\&\\ \\$HOME\\;\\`x\\`");
     expect(terminalPathWord('/tmp/plain-file_1.mov')).toBe('/tmp/plain-file_1.mov');
   });
   it('Windows のパスは空白を含む時だけ二重引用符で囲む', () => {
-    expect(terminalPathWord('C:\\Users\\me\\My Videos\\a.mp4')).toBe('"C:\\Users\\me\\My Videos\\a.mp4"');
+    expect(terminalPathWord('C:\\Media\\My Videos\\a.mp4')).toBe('"C:\\Media\\My Videos\\a.mp4"');
     expect(terminalPathWord('C:\\clips\\a.mp4')).toBe('C:\\clips\\a.mp4');
   });
   it('改行を含むパスは貼った瞬間に送信されるため受け付けない', () => {
@@ -28,8 +28,8 @@ describe('dropPaths', () => {
   const file = (name: string) => new File(['x'], name);
   it('実パスが取れるファイル（デスクトップ版）は送らずにそのパスを使う', async () => {
     const upload = vi.fn(async () => '/tmp/uploaded');
-    const paths = await dropPaths([file('a.png')], upload, () => '/Users/me/a.png');
-    expect(paths).toEqual(['/Users/me/a.png']);
+    const paths = await dropPaths([file('a.png')], upload, () => '/Users/x/a.png');
+    expect(paths).toEqual(['/Users/x/a.png']);
     expect(upload).not.toHaveBeenCalled();
   });
   it('実パスが取れない（ブラウザ版）時だけ送り、落とした順を保つ', async () => {

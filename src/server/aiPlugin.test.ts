@@ -474,7 +474,7 @@ describe('safeAttachmentName', () => {
     expect(safeAttachmentName(null)).toBe('file');
     expect(safeAttachmentName('..')).toBe('file');
     expect(safeAttachmentName('a\u0000b\nc.png')).toBe('abc.png');
-    expect(safeAttachmentName('C:\\Users\\me\\clip.mov')).toBe('clip.mov');
+    expect(safeAttachmentName('C:\\Media\\clip.mov')).toBe('clip.mov');
   });
   it('長すぎる名前は拡張子を残して切り詰める', () => {
     const long = 'a'.repeat(300) + '.mov';
