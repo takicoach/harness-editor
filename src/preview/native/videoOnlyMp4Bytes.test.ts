@@ -19,6 +19,12 @@ it('hides non-video tracks before sample expansion without touching video, media
   for(const offset of masks)for(let at=offset-1;at<offset+5;at++)expect(new Uint8Array(await filtered.read(at,at+1))).toEqual(expected.slice(at,at+1));
   expect(data).toEqual(before);
 });
+it('keeps the served-file origin on the filtering wrapper (timeouts name the original or the proxy)',async()=>{
+  const data=join(box('moov',track('soun'),track('vide')),box('mdat',text('video'))),original={...source(data),origin:'proxy' as const};
+  const filtered=await videoOnlyMp4Bytes(original);
+  expect(filtered).not.toBe(original);
+  expect(filtered.origin).toBe('proxy');
+});
 it('retains both video track positions and returns the original source when nothing is excluded',async()=>{
   const data=join(box('moov',track('vide'),track('vide')),box('mdat',text('two video streams'))),original=source(data);
   expect(await videoOnlyMp4Bytes(original)).toBe(original);

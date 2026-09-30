@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { removeTerminalAttachments, terminalAttachmentRoot } from './terminalAttachment';
@@ -45,5 +46,27 @@ describe('ターミナルへのドロップの一時フォルダ', () => {
     expect(existsSync(fresh)).toBe(true);
     expect(existsSync(other)).toBe(true);
     expect(basename(root).startsWith('harness-editor-terminal-drops-')).toBe(true);
+  });
+
+  // Codex 再レビュー: 別のエディタが動いている間は、古くてもその添付を消さない（AI 会話が参照中）。
+  it('古くても、持ち主のエディタが動いているフォルダは消さず、終了済みの持ち主のものだけ消す', () => {
+    const live = join(area, 'harness-editor-terminal-drops-live');
+    const dead = join(area, 'harness-editor-terminal-drops-dead');
+    const exited = spawnSync(process.execPath, ['-e', '0']).pid;
+    for (const [folder, pid] of [[live, process.pid], [dead, exited]] as const) {
+      mkdirSync(folder); writeFileSync(join(folder, 'owner.pid'), String(pid)); writeFileSync(join(folder, 'a.png'), 'x');
+    }
+    const twoDaysAgo = (Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000;
+    utimesSync(live, twoDaysAgo, twoDaysAgo);
+    utimesSync(dead, twoDaysAgo, twoDaysAgo);
+
+    terminalAttachmentRoot();
+    expect(existsSync(join(live, 'a.png'))).toBe(true);
+    expect(existsSync(dead)).toBe(false);
+  });
+
+  it('作ったフォルダに持ち主（このサーバー）の番号を残す', () => {
+    const root = terminalAttachmentRoot();
+    expect(readFileSync(join(root, 'owner.pid'), 'utf8')).toBe(String(process.pid));
   });
 });

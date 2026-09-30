@@ -5,7 +5,6 @@
  */
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {DECODE_PROGRESS_TIMEOUT_MS,Mp4FrameSource,httpByteSource,type ByteSource} from './mp4FrameSource';
-import {videoOnlyMp4Bytes} from './videoOnlyMp4Bytes';
 import {rational as r} from '../../core/sequence/time';
 
 type Mode='stalled'|'flush-stalled';
@@ -64,13 +63,10 @@ it('読込元が分からない配信（旧サーバー・書き出し）では�
   expect(message).toBe('映像の復号がタイムアウトしました。再試行してください');
 });
 
-it('プレビュー配信の読込元ヘッダーを読み、映像専用の読み口にも引き継ぐ',async()=>{
+it('プレビュー配信の読込元ヘッダーを読む（映像専用の読み口への引き継ぎは videoOnlyMp4Bytes.test.ts）',async()=>{
   vi.useRealTimers();
   const fetchMock=vi.fn(async()=>new Response(new Uint8Array(1),{status:206,headers:{'content-range':'bytes 0-0/16','x-harness-preview-source':'proxy'}}));
   vi.stubGlobal('fetch',fetchMock);
   const bytes=await httpByteSource('/api/sequence/asset?id=p&asset=a&preview=1');
   expect(bytes.origin).toBe('proxy');
-  // moov が無い小さな入力は videoOnlyMp4Bytes が拒否するため、読み口の受け渡しだけを確かめる。
-  const passthrough:ByteSource={size:16,origin:'original',read:async()=>{const view=new DataView(new ArrayBuffer(16));view.setUint32(0,16);view.setUint32(4,0x6d6f6f76);return view.buffer;}};
-  expect((await videoOnlyMp4Bytes(passthrough).catch(()=>passthrough)).origin).toBe('original');
 });

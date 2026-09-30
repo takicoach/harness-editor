@@ -3,7 +3,7 @@
  * ブラウザは File から実パスを取れないため、中身を一時フォルダへ保存し、その絶対パスを
  * 端末へ入力させる。デスクトップ版は preload の getPathForFile で実パスを使うのでここを通らない。
  */
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,7 @@ const MAX_NAME_BYTES = 200;
 const ROOT_PREFIX = 'harness-editor-terminal-drops-';
 /** 異常終了などで残った前回までのフォルダを消す目安。使用中の添付を消さないよう長めに取る。 */
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+const OWNER_FILE = 'owner.pid';
 
 let attachmentRoot: string | undefined;
 /**
@@ -28,6 +29,8 @@ export function terminalAttachmentRoot(): string {
   if (attachmentRoot === undefined) {
     removeStaleAttachmentRoots();
     attachmentRoot = mkdtempSync(join(tmpdir(), ROOT_PREFIX));
+    // 別のエディタが後から掃除する時に、まだ動いている持ち主のフォルダを消さないための目印。
+    writeFileSync(join(attachmentRoot, OWNER_FILE), String(process.pid));
   }
   return attachmentRoot;
 }
@@ -39,7 +42,19 @@ export function removeTerminalAttachments(): void {
   if (root !== undefined) rmSync(root, { recursive: true, force: true });
 }
 
-/** 自分が所有する実フォルダのうち、1 日以上更新の無いものだけを消す（リンクや他人の物には触れない）。 */
+/** 持ち主のサーバーがまだ動いているか。番号が読めない古い形式は「動いていない」とみなす。 */
+function ownerAlive(folder: string): boolean {
+  let pid: number;
+  try { pid = Number(readFileSync(join(folder, OWNER_FILE), 'utf8')); } catch { return false; }
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * 自分が所有する実フォルダのうち、1 日以上更新が無く、持ち主のサーバーも終了しているものだけを消す
+ * （リンクや他人の物、動いている別のエディタの添付には触れない）。
+ */
 function removeStaleAttachmentRoots(): void {
   const parent = tmpdir(), owner = process.getuid?.();
   let names: string[];
@@ -50,7 +65,7 @@ function removeStaleAttachmentRoots(): void {
     try {
       const info = lstatSync(path);
       if (!info.isDirectory() || (owner !== undefined && info.uid !== owner)) continue;
-      if (Date.now() - info.mtimeMs > STALE_AFTER_MS) rmSync(path, { recursive: true, force: true });
+      if (Date.now() - info.mtimeMs > STALE_AFTER_MS && !ownerAlive(path)) rmSync(path, { recursive: true, force: true });
     } catch { /* 消せない物は次回に回す。添付の受け付け自体は止めない */ }
   }
 }
