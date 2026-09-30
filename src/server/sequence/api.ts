@@ -404,8 +404,10 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
     if (route === '/component') { sendText(res, 200, await readSequenceComponent(directory, asset), 'text/javascript; charset=utf-8'); return true; }
     if(waveform){sendJson(res,200,await prepareSequenceWaveform(directory,asset,waveform,controller.signal));return true;}
     if (route === '/asset' && url.searchParams.get('preview')==='1') {
+      // The preview reports which file it read, so a timeout names the original or the proxy.
       const proxy=nativeProxyPath(directory,asset);
-      if(proxy){await verifiedSequenceAssetPath(directory,asset,controller.signal);serveAsset(res,proxy,req.headers.range);return true;}
+      if(proxy){await verifiedSequenceAssetPath(directory,asset,controller.signal);res.setHeader('x-harness-preview-source','proxy');serveAsset(res,proxy,req.headers.range);return true;}
+      res.setHeader('x-harness-preview-source','original');
     }
     if (route === '/asset') { await serveSequenceAsset(res,directory,asset,req.headers.range,controller.signal); return true; }
     await verifiedSequenceAssetPath(directory, asset, controller.signal);

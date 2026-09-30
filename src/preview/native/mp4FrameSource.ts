@@ -7,6 +7,8 @@ import {mp4Presentation} from './mp4Presentation';
 
 export interface ByteSource {
   size: number;
+  /** Which file the preview endpoint served (x-harness-preview-source). Unknown for exports and old servers. */
+  origin?: 'original' | 'proxy';
   /** Half-open byte range. Return exactly end-start bytes; cancel I/O when signalled. */
   read(start: number, end: number, signal?: AbortSignal): Promise<ArrayBuffer>;
 }
@@ -25,7 +27,9 @@ export async function httpByteSource(url: string, signal?: AbortSignal): Promise
   const size = Number(match[1]);
   if (!Number.isSafeInteger(size) || size <= 0) { await first.body?.cancel(); throw new Error('映像ファイルのサイズが不正です'); }
   await first.arrayBuffer();
-  return { size, async read(start, end, requestSignal) {
+  const served = first.headers.get('x-harness-preview-source');
+  const origin = served === 'original' || served === 'proxy' ? served : undefined;
+  return { size, ...(origin ? { origin } : {}), async read(start, end, requestSignal) {
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > size) throw new Error('映像の読み込み範囲が不正です');
     const controller = new AbortController(), cancel = () => controller.abort();
     const upstream = [signal, requestSignal].filter((value): value is AbortSignal => value !== undefined);
@@ -59,6 +63,13 @@ interface DecodeSession {
 const COMPRESSED_BYTE_BUDGET = 64 * 1024 * 1024;
 export const DECODE_PROGRESS_TIMEOUT_MS = 10_000;
 export const DECODE_IDLE_TIMEOUT_MS = 1_000;
+type DecodeStage = 'read' | 'decode' | 'flush';
+const STAGE_LABEL: Record<DecodeStage, string> = { read: '映像の読み込み', decode: '映像の復号', flush: '映像の復号の完了待ち' };
+const ORIGIN_LABEL: Record<NonNullable<ByteSource['origin']>, string> = { original: '元の動画', proxy: '軽量版' };
+/** Name the stalled stage and served file so a report alone separates slow I/O from a stuck decoder. */
+function decodeTimeoutError(stage: DecodeStage, origin: ByteSource['origin']): Error {
+  return new Error(`${STAGE_LABEL[stage]}がタイムアウトしました${origin ? `（${ORIGIN_LABEL[origin]}）` : ''}。再試行してください`);
+}
 
 /** Shared random-access decoder. Every returned VideoFrame is owned by the caller. */
 export class Mp4FrameSource {
@@ -223,7 +234,7 @@ export class Mp4FrameSource {
               this.assertSession(session);
             }
           }
-          await this.awaitWork(session.decoder.flush());
+          await this.awaitWork(session.decoder.flush(), 'flush');
           this.assertSession(session); session.completed = true;
           if (!this.cache.has(target)) throw new Error('指定した映像フレームを復号できません');
           break;
@@ -329,7 +340,7 @@ export class Mp4FrameSource {
     const request = prefetched?.request ?? new AbortController();
     try {
       const read = prefetched?.work ?? this.bytes.read(firstByte, lastByte, request.signal).then(encoded => ({ firstByte, encoded }));
-      return await this.awaitWork(available ? Promise.race([read, available.then(() => undefined)]) : read);
+      return await this.awaitWork(available ? Promise.race([read, available.then(() => undefined)]) : read, 'read');
     }
     finally { request.abort(); }
   }
@@ -370,16 +381,16 @@ export class Mp4FrameSource {
       };
       session.listeners.add(check); check();
     });
-    try { await this.awaitWork(progress); } finally { session.listeners.delete(check); }
+    try { await this.awaitWork(progress, 'decode'); } finally { session.listeners.delete(check); }
   }
-  private awaitWork<T>(work: Promise<T>): Promise<T> {
+  private awaitWork<T>(work: Promise<T>, stage: DecodeStage): Promise<T> {
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (action: () => void) => {
         if (settled) return; settled = true; clearTimeout(timeout); this.pending.delete(cancel); action();
       };
       const cancel = (error: Error) => finish(() => reject(error));
-      const timeout = setTimeout(() => cancel(new Error('映像の復号がタイムアウトしました。再試行してください')), DECODE_PROGRESS_TIMEOUT_MS);
+      const timeout = setTimeout(() => cancel(decodeTimeoutError(stage, this.bytes.origin)), DECODE_PROGRESS_TIMEOUT_MS);
       this.pending.add(cancel);
       work.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
       if (this.disposed) cancel(new Error('映像は閉じられています'));

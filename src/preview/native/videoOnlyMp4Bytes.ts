@@ -49,7 +49,7 @@ export async function videoOnlyMp4Bytes(source:ByteSource):Promise<ByteSource> {
     if(kind!=='vide')masks.push(track.start+4);
   }
   if(!masks.length)return source;
-  return {size:source.size,async read(start,end,signal){
+  return {size:source.size,...(source.origin?{origin:source.origin}:{}),async read(start,end,signal){
     const original=await source.read(start,end,signal);
     const intersect=masks.filter(offset=>offset<end&&offset+4>start);
     if(!intersect.length)return original;
