@@ -116,6 +116,30 @@ describe('validated saved snapshot reuse', () => {
 });
 
 describe('external save notifications', () => {
+  it('refuses automatic adoption if unsaved work appeared after the client status read',()=>{
+    const store=new SequenceStore(directory),service=new SequenceService();
+    store.save({expectedSavedRevision:null,executionId:'initial',document:document()});
+    const initial=service.open(directory);
+    const edited=service.execute(directory,{sessionId:initial.sessionId,expectedRevision:0,executionId:'human',command:{type:'add-track',track:{id:'v',name:'human',kind:'visual',enabled:true}}});
+    store.save({expectedSavedRevision:0,executionId:'external',document:document(2,'external')});
+    const status=service.inspect(directory,initial.sessionId);
+    expect(()=>service.reload(directory,initial.sessionId,edited.document.revision,2,status.externalChange!.contentHash,true)).toThrow(/未保存/);
+    expect(service.inspect(directory,initial.sessionId).document).toEqual(edited.document);
+  });
+  it('notifies observers for commands and saves, and lets another viewer follow an adopted session',()=>{
+    const store=new SequenceStore(directory),service=new SequenceService();
+    store.save({expectedSavedRevision:null,executionId:'initial',document:document()});const initial=service.open(directory);
+    const changed=vi.fn(),stop=service.subscribe(directory,changed);
+    const edited=service.execute(directory,{sessionId:initial.sessionId,expectedRevision:0,executionId:'edit',command:{type:'add-track',track:{id:'v',name:'AI',kind:'visual',enabled:true}}});
+    expect(changed).toHaveBeenCalledOnce();
+    service.save(directory,{sessionId:initial.sessionId,expectedRevision:edited.document.revision,expectedSavedRevision:0,executionId:'save'});
+    expect(changed).toHaveBeenCalledTimes(2);
+    store.save({expectedSavedRevision:1,executionId:'external',document:document(2,'external')});
+    const external=service.inspect(directory,initial.sessionId).externalChange!;
+    const reloaded=service.reload(directory,initial.sessionId,1,external.savedRevision,external.contentHash,true);
+    expect(service.inspect(directory,initial.sessionId,true).sessionId).toBe(reloaded.sessionId);
+    stop();service.discard(directory,reloaded.sessionId,2);expect(changed).toHaveBeenCalledTimes(3);
+  });
   it.each([false, true])('preserves the open session and undo state (dirty=%s) until explicit reload', dirty => {
     const store = new SequenceStore(directory), service = new SequenceService();
     store.save({expectedSavedRevision:null, executionId:'initial', document:document()});

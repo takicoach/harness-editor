@@ -27,6 +27,16 @@ export interface SequenceSessionState {
 /** One editing authority per project. Human and AI requests use the same revision/undo history. */
 export class SequenceService {
   private sessions = new Map<string, OpenSession>();
+  private listeners = new Map<string, Set<() => void>>();
+  subscribe(directory: string, listener: () => void): () => void {
+    const key = realpathSync(directory);
+    const listeners = this.listeners.get(key) ?? new Set<() => void>();
+    listeners.add(listener); this.listeners.set(key, listeners);
+    return () => { listeners.delete(listener); if (!listeners.size) this.listeners.delete(key); };
+  }
+  private changed(directory: string): void {
+    for (const listener of this.listeners.get(realpathSync(directory)) ?? []) listener();
+  }
   private state(open: OpenSession): SequenceSessionState {
     return { sessionId: open.session.id, document: open.session.document, savedRevision: open.saved.savedRevision,
       savedContentHash: open.saved.contentHash, canUndo: open.session.canUndo, canRedo: open.session.canRedo,
@@ -58,9 +68,9 @@ export class SequenceService {
     if (current && this.state(current).dirty) throw new SequenceError('REVISION_CONFLICT', '未保存の編集があります。外部編集は保存していません');
   }
   /** Polling must preserve the editing authority and its undo stack until explicit reload. */
-  inspect(directory: string, sessionId: string): SequenceSessionState {
+  inspect(directory: string, sessionId: string, followCurrent = false): SequenceSessionState {
     const key = realpathSync(directory), current = this.sessions.get(key);
-    if (!current || current.session.id !== sessionId)
+    if (!current || (!followCurrent && current.session.id !== sessionId))
       throw new SequenceError('REVISION_CONFLICT', '編集セッションが変わりました。保存済みの内容を読み直してください');
     const saved = new SequenceStore(key).load();
     if (!saved) throw new SequenceError('MISSING_TARGET', '保存済みの編集データが見つかりません');
@@ -72,10 +82,13 @@ export class SequenceService {
     }
     return state;
   }
-  reload(directory: string, sessionId: string, expectedRevision: number, savedRevision: number, contentHash: string): SequenceSessionState {
+  reload(directory: string, sessionId: string, expectedRevision: number, savedRevision: number, contentHash: string, onlyIfClean = false): SequenceSessionState {
     const saved = new SequenceStore(directory).load();
     if (!saved || saved.savedRevision !== savedRevision || saved.contentHash !== contentHash)
       throw new SequenceError('REVISION_CONFLICT', '確認中に外部の保存内容が変わりました。変更内容を再確認してください');
+    const current = this.sessions.get(realpathSync(directory));
+    if (onlyIfClean && current && this.state(current).dirty)
+      throw new SequenceError('REVISION_CONFLICT', '未保存の編集があります。現在の内容を保持しています');
     return this.discard(directory, sessionId, expectedRevision);
   }
   private current(directory: string, sessionId: string): OpenSession {
@@ -89,6 +102,7 @@ export class SequenceService {
   execute(directory: string, request: EditRequest): SequenceSessionState & { executionId: string; appliedRevision: number; changed: boolean; replayed: boolean } {
     const open = this.current(directory, request.sessionId);
     const receipt = open.session.execute(request);
+    if (receipt.changed) this.changed(directory);
     return { ...this.state(open), executionId: receipt.executionId, appliedRevision: receipt.appliedRevision, changed: receipt.changed, replayed: receipt.replayed };
   }
   applyEditor(directory:string,projectId:string,sessionId:string,input:unknown) {
@@ -118,6 +132,7 @@ export class SequenceService {
         throw new SequenceError('REVISION_CONFLICT', '同じ保存IDに異なる要求があります');
       const saved = new SequenceStore(directory).save(previous.snapshot);
       open.saved = saved;
+      this.changed(directory);
       return { ...this.state(open), replayed: saved.replayed };
     }
     if (request.expectedRevision !== document.revision) throw new SequenceError('REVISION_CONFLICT', '保存しようとした編集版が変更されています');
@@ -127,6 +142,7 @@ export class SequenceService {
     while (open.saves.size > 64) open.saves.delete(open.saves.keys().next().value!);
     open.saved = saved;
     open.historyError = this.observe(directory, saved, true);
+    this.changed(directory);
     return { ...this.state(open), replayed: saved.replayed };
   }
   /** Explicit discard only; reopening normally must never throw away unsaved work. */
@@ -135,7 +151,9 @@ export class SequenceService {
     if (!current || current.session.id !== sessionId || current.session.document.revision !== expectedRevision)
       throw new SequenceError('REVISION_CONFLICT', '破棄しようとした編集版が変更されています');
     this.sessions.delete(key);
-    return this.open(key);
+    const next = this.open(key);
+    this.changed(key);
+    return next;
   }
 }
 

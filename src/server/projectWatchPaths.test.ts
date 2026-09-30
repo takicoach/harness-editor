@@ -23,6 +23,12 @@ function makeProject(): string {
 }
 
 describe('projectContentSignature', () => {
+  it('includes native documents in both the watcher and content signature', () => {
+    const dir=makeProject(),file=join(dir,'.harness','project.v2.json');
+    expect(projectWatchPaths(dir)).toContain(file);
+    const before=projectContentSignature(dir);mkdirSync(dirname(file));writeFileSync(file,'{}');
+    expect(projectContentSignature(dir)).not.toBe(before);
+  });
   it('撮影台本の追加・外部更新・削除を同じ監視一覧と指紋へ含める', () => {
     const dir = makeProject();
     const file = join(dir, 'shooting-script.json');

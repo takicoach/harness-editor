@@ -344,8 +344,8 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
       }
       else if (route === '/migrate') sendJson(res, 200, await migrateSequenceProject(directory, id(body.executionId), controller.signal));
       else if (route === '/session') sendJson(res, 200, sessions.open(directory, true));
-      else if (route === '/session/status') sendJson(res, 200, sessions.inspect(directory, id(body.sessionId)));
-      else if (route === '/session/reload') sendJson(res, 200, sessions.reload(directory, id(body.sessionId), integer(body.expectedRevision), integer(body.savedRevision), id(body.contentHash)));
+      else if (route === '/session/status') sendJson(res, 200, sessions.inspect(directory, id(body.sessionId), true));
+      else if (route === '/session/reload') sendJson(res, 200, sessions.reload(directory, id(body.sessionId), integer(body.expectedRevision), integer(body.savedRevision), id(body.contentHash), body.onlyIfClean === true));
       else if (route === '/command') {
         const request = editRequest(body);
         await assertRegisteredComponents(directory, request.command);

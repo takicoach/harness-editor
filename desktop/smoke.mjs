@@ -52,7 +52,9 @@ try{
   let session=await sessionResponse.json();
   const edit=await page.request.post(`${origin}/api/sequence/command?id=DesktopSmoke`,{data:{sessionId:session.sessionId,expectedRevision:session.document.revision,executionId:'desktop-smoke-edit',command:{type:'update-clip',clipId:session.document.clips[0].id,patch:{name:'Desktop saved clip'}}}});
   assert.ok(edit.ok(),await edit.text());session=await edit.json();
-  await page.reload();
+  // External commands now arrive through the live session channel. A full reload
+  // would prompt about that unsaved edit and would hide synchronization failures.
+  await expect(page.locator(`[data-native-clip-id="${session.document.clips[0].id}"]`)).toContainText('Desktop saved clip');
   await expect(page.locator('iframe[data-native-preview]')).toHaveAttribute('data-native-frame','0',{timeout:60000});
   await page.locator('body').click({position:{x:5,y:5}});
   const current=async()=>await (await page.request.post(`${origin}/api/sequence/session?id=DesktopSmoke`,{data:{}})).json();

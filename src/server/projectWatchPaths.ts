@@ -14,6 +14,7 @@ import { previewProxyName } from './previewProxy';
 
 /** 監視・指紋の対象（プロジェクトからの相対パス断片）。 */
 const WATCH_REL_SEGMENTS: readonly (readonly string[])[] = [
+  ['.harness', 'project.v2.json'],
   ['shooting-script.json'],
   ['editor-timeline.json'],
   ['transcript.json'],

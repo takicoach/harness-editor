@@ -53,6 +53,7 @@ import { denoiseJobs } from './denoiseApi';
 import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
 import { transcribeJobs } from './transcribeApi';
+import { sequenceService } from './sequence/service';
 
 const HEARTBEAT_MS = 25_000;
 
@@ -299,6 +300,10 @@ export function handleEventsSse(
 
   if (projectId !== null) {
     stops.push(wireWatchChannel(root, projectId, send, writerId));
+    try {
+      stops.push(sequenceService.subscribe(resolveProjectDir(root, projectId), () => send('sequence', { type: 'change' })));
+      send('sequence', { type: 'open' });
+    } catch { /* Missing projects still receive the established watch/error handling. */ }
     stops.push(wireClaudeChannel(projectId, send));
     stops.push(wireJobChannel('render', projectId, renderObservations, send,restoreRender));
     stops.push(wireJobChannel('denoise', projectId, denoiseJobs, send));

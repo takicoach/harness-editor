@@ -13,7 +13,8 @@ import {NativeNotifications} from './NativeNotifications';
 import {NativeLearningReview} from './NativeLearningReview';
 import {useLearningDiff} from '../useLearningDiff';
 import {nativeCutRateWarning} from './notificationHistory';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import type {NativeNavigation} from './useNativeNavigation';
 import { Icon } from '../Icon';
 import { configureUiSound, uiSound } from './uiSound';
 import { NativeHeader } from './NativeHeader';
@@ -122,7 +123,7 @@ const TOOL_ITEMS = [
 // materialRelPath（src/server/uploadMaterial.ts）の subdir と一致させる。
 // より深い prefix を先に（public/ は video の受け皿として最後）。
 const MATERIAL_KINDS: Array<[string, 'se' | 'image' | 'bgm' | 'video']> = [['public/se/', 'se'], ['public/images/', 'image'], ['public/BGM/', 'bgm'], ['public/', 'video']];
-export function NativeWorkspace({ projectId }: { projectId: string }) {
+export function NativeWorkspace({ projectId, navigation, onReload }: { projectId: string; navigation?: NativeNavigation; onReload?():void }) {
   const fileReference=useNativeFileReference(),importPending=useRef(false),importOwner=useRef({});
   useEffect(()=>()=>{importOwner.current={};},[projectId]);
   const timeline=useRef<NativeTimelineHandle>(null),[boundaryWorking,setBoundaryWorking]=useState(false);
@@ -137,7 +138,8 @@ export function NativeWorkspace({ projectId }: { projectId: string }) {
   const inspectorSaving=useRef(0);
   const player = useRef<NativePreviewHandle>(null),[manipulationBusy,setManipulationBusy]=useState(false);
   const [timelineDragging,setTimelineDragging]=useState(false);
-  const nativeSession = useNativeSession(projectId), agent = useNativeEditorBridge(projectId,nativeSession,scriptDraft||inspectorDraft||captionDraft||manipulationBusy||cutWorking||boundaryWorking);
+  const deferExternal = scriptDraft||inspectorDraft||captionDraft||manipulationBusy||timelineDragging||cutWorking||boundaryWorking;
+  const nativeSession = useNativeSession(projectId,deferExternal), agent = useNativeEditorBridge(projectId,nativeSession,deferExternal);
   const [preparingSave,setPreparingSave]=useState(false),viewSave=useRef<Promise<boolean>|null>(null),saveEpoch=useRef(0);
   useEffect(()=>{saveEpoch.current++;viewSave.current=null;setPreparingSave(false);return()=>{saveEpoch.current++;};},[projectId]);
   const save=useCallback(()=>{
@@ -238,7 +240,8 @@ export function NativeWorkspace({ projectId }: { projectId: string }) {
     if(switchPending.current||session.busy||agent.busy||id===projectId)return;
     switchPending.current=true;setSwitchingProject(true);player.current?.pause();
     try {
-      if(!await session.save())return;
+      if(navigation){await navigation.navigate(id);return;}
+      if(doc&&!await session.save())return;
       writeNativeView(projectId,view.current);
       tutorial.beforeNavigate(id);
       window.location.assign(`/?${new URLSearchParams({project:id})}`);
@@ -314,6 +317,16 @@ export function NativeWorkspace({ projectId }: { projectId: string }) {
   const effectiveRight = rightColumnWidth(shellSize.width, rightSize);
   const effectiveBottom = timelineBottom({ windowHeight: shellSize.height || window.innerHeight, bottom: bottomAuto ? null : bottom });
   const view = useRef(initialView); view.current = { mode,tab,selected,activeCutId,frame,zoom,left,right,bottom,bottomAuto,inspectorOpen,leftHidden,rightHidden,ripple:rippleOn };
+  useImperativeHandle(navigation?.beforeLeave,()=>async nextProjectId=>{
+    if(session.busy)return false;
+    player.current?.pause();
+    // Failed loads and projects awaiting migration have no editing session to save.
+    // Loaded documents must still flush drafts and successfully save before leaving.
+    if(doc&&!await session.save())return false;
+    writeNativeView(projectId,view.current);
+    if(nextProjectId)tutorial.beforeNavigate(nextProjectId);
+    return true;
+  });
   useEffect(() => {
     const saveView = () => writeNativeView(projectId,view.current);
     window.addEventListener('pagehide',saveView); return () => { saveView(); window.removeEventListener('pagehide',saveView); };
@@ -798,7 +811,7 @@ export function NativeWorkspace({ projectId }: { projectId: string }) {
       canUndo={!!session.state?.canUndo} canRedo={!!session.state?.canRedo} busy={session.busy}
       onUndo={() => void command({ type: 'undo' })} onRedo={() => void command({ type: 'redo' })}
       onNotifications={()=>{notifications.markRead();setNotificationsOpen(true);}} notificationsOpen={notificationsOpen} unreadNotifications={notifications.unread}
-      onHome={() => { void (async () => { if (await session.save()) window.location.assign('/'); })(); }}
+      onHome={() => { if(session.busy)return;void (async () => { if(navigation){await navigation.navigate(null);return;}if (!doc||await session.save()) window.location.assign('/'); })(); }}
       onActivity={() => { connection.clearError(); setActivityOpen(true); }}
       onSettings={()=>setSettingsOpen(open=>!open)} settingsOpen={settingsOpen} onHelp={()=>setHelpOpen(true)}
       autoSave={autoSave} onAutoSave={value => { setAutoSave(value); saveAutoSaveEnabled(value); }}
@@ -813,7 +826,7 @@ export function NativeWorkspace({ projectId }: { projectId: string }) {
       {session.state.dirty || scriptDraft || inspectorDraft || captionDraft ? '未保存の編集があります。現在の内容は保持しています。' : '再読み込みで保存済みの変更を取り込めます。'}</span>
       <button className="btn-ghost" disabled={session.busy} onClick={() => {
         if (!window.confirm('外部の保存内容を読み込みます。現在の未保存入力とUndo履歴は破棄されます。続けますか？')) return;
-        void session.reloadExternal().then(ok=>{if(ok){tutorial.beforeNavigate(projectId);window.location.reload();}});
+        void session.reloadExternal().then(ok=>{if(ok){tutorial.beforeNavigate(projectId);if(onReload)onReload();else window.location.reload();}});
       }}>保存内容を再読み込み</button></div>}
     {(session.error || notice || legacyChanged || connection.needsReview) && <div className="native-notice" role="alert"><span>{session.error ?? notice ?? (connection.needsReview?'AI編集の結果を確認するまで自動保存を停止しています。「AIの作業」で現在の内容を確認してください。':'旧形式のファイルに変更があります。現在の編集には取り込まれていません。')}</span><button className="btn-ghost native-header-icon" aria-label="通知を閉じる" onClick={() => { session.clearError(); setNotice(null); setLegacyChanged(false); }}><Icon name="x" /></button></div>}
     {toast && <NativeToast key={toast.id} id={toast.id} message={toast.message} onClose={() => setToast(null)} />}
@@ -881,7 +894,7 @@ export function NativeWorkspace({ projectId }: { projectId: string }) {
         </div>
       </NativeLibraryDrop>
       <div className="native-resizer native-resizer-left" {...resizeProps('left')} />
-      <NativePreview addBar={mode==='review'?undefined:(<NativeAddBar vertical disabled={session.busy} onAddText={addText} onAddTitle={()=>addElement('title')} onPickShape={kind=>setShapeTools({kind})}
+      <NativePreview sessionId={session.state?.sessionId} addBar={mode==='review'?undefined:(<NativeAddBar vertical disabled={session.busy} onAddText={addText} onAddTitle={()=>addElement('title')} onPickShape={kind=>setShapeTools({kind})}
           onGoMaterials={target=>{openLeft('materials');void changeTab(target).then(()=>setPlaceHighlight(target));}}/>)}
         notice={session.state&&<NativeProxyBanner projectId={projectId} sessionId={session.state.sessionId} revision={session.state.document.revision}
           onReady={()=>{player.current?.pause();setMediaGeneration(value=>value+1);setToast('軽量版でプレビューを読み込みました');}}/>}

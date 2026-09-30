@@ -17,17 +17,19 @@ import {useNativeFileReference} from './useNativeFileReference';
 import './native.css';
 import './native-polish.css';
 import type {TransferProgress} from '../components/TaskProgress';
+import {useNativeNavigation} from './useNativeNavigation';
 
 /** Keep the established project dashboard while making native editing the normal entry. */
 export function NativeApp() {
-  const projectId = new URLSearchParams(location.search).get('project');
+  const navigation = useNativeNavigation(), {projectId} = navigation;
+  const [workspaceVersion, setWorkspaceVersion] = useState(0);
   useEventBusProjectId(projectId ?? '');
   useEffect(() => {
     const prevent = (event: DragEvent) => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault(); };
     window.addEventListener('dragover', prevent); window.addEventListener('drop', prevent);
     return () => { window.removeEventListener('dragover', prevent); window.removeEventListener('drop', prevent); };
   }, []);
-  return projectId ? <NativeWorkspace key={projectId} projectId={projectId} /> : <NativeHome />;
+  return projectId ? <NativeWorkspace key={`${projectId}:${workspaceVersion}`} projectId={projectId} navigation={navigation} onReload={()=>setWorkspaceVersion(value=>value+1)} /> : <NativeHome navigate={id=>void navigation.navigate(id)} />;
 }
 
 /** 編集画面へ全ページ遷移する（テストでは NativeHome の navigate で差し替える）。 */

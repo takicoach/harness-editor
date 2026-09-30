@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NativeApiError, nativeRequest, openNativeSequence, saveNativeSequence, uploadNativeAsset, type NativeCommand, type NativeSession } from './api';
 import type {SequenceAsset} from '../../core/sequence/model';
+import {useEventChannel} from '../eventBus';
 
-export function useNativeSession(projectId: string) {
+export function useNativeSession(projectId: string, deferExternal = false) {
   const [state, setState] = useState<NativeSession | null>(null), latest = useRef<NativeSession | null>(null);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve()), epoch = useRef(0);
+  const pendingWork = useRef(0), pendingRefresh = useRef(false), refreshNow = useRef(() => {});
+  const refreshError = useRef<string | null>(null);
+  // Commands in this session (AI/API/another tab) keep arriving during a field draft: the inspector
+  // rebases its draft onto the new revision. Only adopting an external save (a new session read
+  // from disk) waits for the input to end, so a draft is never replaced by a reloaded session.
+  const refreshBlocked = useRef(false); refreshBlocked.current = busy;
+  const reloadDeferred = useRef(false); reloadDeferred.current = deferExternal;
+  const pendingReload = useRef(false);
   const [reloadKey, setReloadKey] = useState(0);
   const saveInFlight = useRef<Promise<boolean> | null>(null);
   const [saveProgress,setSaveProgress]=useState<number|null>(null),saveCompleteTimer=useRef<ReturnType<typeof setTimeout>>();
@@ -27,6 +36,7 @@ export function useNativeSession(projectId: string) {
   }, []);
   useEffect(() => {
     const generation = ++epoch.current, controller = new AbortController();
+    pendingRefresh.current = false; pendingReload.current = false; pendingWork.current = 0; refreshError.current = null; queue.current = Promise.resolve();
     clearTimeout(saveCompleteTimer.current);setSaveProgress(null);saveInFlight.current=null;pendingSave.current=null;
     latest.current = null; setState(null); setLoading(true); setBusy(false); setError(null);
     void openNativeSequence(projectId, controller.signal).then(value => { if (generation === epoch.current && value) accept(value); })
@@ -36,6 +46,7 @@ export function useNativeSession(projectId: string) {
   }, [projectId, accept, reloadKey]);
   const run = useCallback((work: () => Promise<NativeSession>): Promise<boolean> => {
     const generation = epoch.current;
+    pendingWork.current++;
     setBusy(true); setError(null);
     const task = queue.current.then(async () => {
       if (generation !== epoch.current) return false;
@@ -49,7 +60,11 @@ export function useNativeSession(projectId: string) {
       }
     });
     queue.current = task;
-    void task.finally(() => { if (queue.current === task && generation === epoch.current) setBusy(false); });
+    void task.finally(() => {
+      if (generation !== epoch.current) return;
+      pendingWork.current--;
+      if (queue.current === task) setBusy(false);
+    });
     return task;
   }, [accept]);
   const execute = useCallback((command: NativeCommand) => {
@@ -145,28 +160,60 @@ export function useNativeSession(projectId: string) {
     const beforeUnload = (event: BeforeUnloadEvent) => { if (latest.current?.dirty) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload);
   }, []);
-  // Read shared edits and disk status without silently reopening after an external save.
+  // Notifications are the fast path; polling/focus recover missed events and reconnects.
+  const changed = (raw: unknown) => {
+    if (!raw || typeof raw !== 'object' || !('type' in raw) || !['change','open'].includes(String(raw.type))) return;
+    pendingRefresh.current = true; refreshNow.current();
+  };
+  useEventChannel('sequence', changed, projectId);
+  useEventChannel('watch', changed, projectId);
   useEffect(() => {
     if (!state) return;
     const controller = new AbortController(); let inFlight = false;
     const refresh = async () => {
       const current = latest.current;
-      if (document.hidden || busy || inFlight || !current) return;
-      const generation = epoch.current; inFlight = true;
+      if (document.hidden || refreshBlocked.current || pendingWork.current || inFlight || !current) { pendingRefresh.current = true; return; }
+      const generation = epoch.current; inFlight = true; pendingRefresh.current = false;
+      const owns = () => !controller.signal.aborted && generation === epoch.current;
+      const canApply = () => owns() && !refreshBlocked.current && !pendingWork.current && latest.current === current;
       try {
-        const next = await nativeRequest<NativeSession>(projectId, '/session/status', {sessionId:current.sessionId}, controller.signal);
-        if (!controller.signal.aborted && generation === epoch.current) accept(next);
+        let next = await nativeRequest<NativeSession>(projectId, '/session/status', {sessionId:current.sessionId}, controller.signal);
+        if (!canApply()) { if (owns()) pendingRefresh.current = true; return; }
+        if (next.externalChange && !next.dirty && !current.dirty && reloadDeferred.current) pendingReload.current = true;
+        else if (next.externalChange && !next.dirty && !current.dirty) {
+          pendingReload.current = false;
+          const external = next.externalChange;
+          next = await nativeRequest<NativeSession>(projectId, '/session/reload', {
+            sessionId:next.sessionId, expectedRevision:next.document.revision,
+            savedRevision:external.savedRevision, contentHash:external.contentHash, onlyIfClean:true,
+          }, controller.signal);
+        }
+        if (canApply()) {
+          accept(next);
+          const previousError = refreshError.current; refreshError.current = null;
+          if (previousError) setError(value => value === previousError ? null : value);
+        }
+        else if (owns()) pendingRefresh.current = true;
       } catch (error) {
-        if (!controller.signal.aborted && generation === epoch.current) setError(error instanceof Error ? error.message : String(error));
-      } finally { inFlight = false; }
+        // A concurrent edit/save won the revision check. Read it on the next event/poll.
+        if (owns() && !(error instanceof NativeApiError && error.status === 409)) {
+          refreshError.current = error instanceof Error ? error.message : String(error); setError(refreshError.current);
+        }
+      } finally {
+        inFlight = false;
+        if (owns() && pendingRefresh.current && !document.hidden && !refreshBlocked.current && !pendingWork.current) void refresh();
+      }
     };
+    refreshNow.current = () => { void refresh(); };
+    if (pendingRefresh.current || state.externalChange) void refresh();
     const timer = setInterval(() => { void refresh(); }, 1500);
     const resume = () => { void refresh(); };
     window.addEventListener('focus', resume); window.addEventListener('online', resume);
     document.addEventListener('visibilitychange', resume);
-    return () => { clearInterval(timer); controller.abort(); window.removeEventListener('focus', resume);
+    return () => { clearInterval(timer); controller.abort(); refreshNow.current = () => {}; window.removeEventListener('focus', resume);
       window.removeEventListener('online', resume); document.removeEventListener('visibilitychange', resume); };
-  }, [projectId, state?.sessionId, busy, accept]);
+  }, [projectId, state?.sessionId, accept]);
+  useEffect(() => { if (!busy && !deferExternal && (pendingRefresh.current || pendingReload.current)) refreshNow.current(); }, [busy, deferExternal]);
   const reloadExternal = useCallback(() => {
     const current = latest.current, external = current?.externalChange;
     return run(async () => {

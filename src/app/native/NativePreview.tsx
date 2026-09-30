@@ -35,7 +35,7 @@ export interface NativeShapeDrawBindings {
   /** 完成した図形データを 1 コマンドで insert する。失敗時は false。 */
   onComplete(data: ShapeData): Promise<boolean>;
 }
-export interface NativePreviewProps { projectId: string; document: SequenceDocument; onFrame(frame: number): void; bypassLut: boolean; initialFrame?: number; onPlay?():void; monitor?:'プログラム'|'ソース'|'変更前'|'変更案'|'カット込み確認';manipulation?:NativeManipulationBindings; legacyContext?: string; onError?(failure: NativePreviewFailure): void;
+export interface NativePreviewProps { projectId: string; sessionId?: string; document: SequenceDocument; onFrame(frame: number): void; bypassLut: boolean; initialFrame?: number; onPlay?():void; monitor?:'プログラム'|'ソース'|'変更前'|'変更案'|'カット込み確認';manipulation?:NativeManipulationBindings; legacyContext?: string; onError?(failure: NativePreviewFailure): void;
   onRendered?(frame: number, geometry: RenderedSceneGeometry | null): void;
   onPlaybackChanged?(playing: boolean): void;
   onEnded?(): void;
@@ -53,7 +53,7 @@ export interface NativePreviewProps { projectId: string; document: SequenceDocum
   /** プレビューへセーフエリア枠を重ねるか（設定 `EditorPrefs.safeArea`）。既定 false。 */
   safeArea?: boolean;
 }
-export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>(function NativePreview({ projectId, document: doc, onFrame, bypassLut, initialFrame = 0, onPlay, monitor='プログラム',manipulation,legacyContext,onError,onRendered,onPlaybackChanged,onEnded,onShuttle,playbackRate,monitorControls,addBar,notice,onFitPanels,visualPreview,shapeDraw,safeArea }, ref) {
+export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>(function NativePreview({ projectId, sessionId, document: doc, onFrame, bypassLut, initialFrame = 0, onPlay, monitor='プログラム',manipulation,legacyContext,onError,onRendered,onPlaybackChanged,onEnded,onShuttle,playbackRate,monitorControls,addBar,notice,onFitPanels,visualPreview,shapeDraw,safeArea }, ref) {
   const stage = useRef<HTMLDivElement>(null), frameBox = useRef<HTMLDivElement>(null), box = useRef<HTMLDivElement>(null), renderer = useRef<NativePreviewBridge | null>(null);
   const current = useRef(initialFrame), transport = useRef<NativeAudioTransport | null>(null), context = useRef<AudioContext | null>(null);
   const [frame, setFrame] = useState(initialFrame), [playing, setPlaying] = useState(false), [scale, setScale] = useState(.5), [error, setError] = useState<string | null>(null);
@@ -81,6 +81,7 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
   //       App 側の値と食い違い、以後「再生」ボタンが表示 4×・実際 1× になる。native 経路（prop 無し）だけ戻す。
   const controlledRate = useRef(playbackRate); controlledRate.current = playbackRate;
   const version = useRef(0), planRef = useRef<ScenePlan | null>(null), pcm = useRef(new Map<string, PreparedPcm>());
+  const planSession = useRef(sessionId);
   const bypass = useRef(bypassLut); bypass.current = bypassLut;
   const drawing = useRef(0),failureVersion=useRef(0);
   const latestDrawing=useRef<Promise<RenderedSceneGeometry|undefined>|null>(null);
@@ -338,7 +339,10 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
       transport.current?.dispose(); void context.current?.close(); context.current = null; pcm.current.clear(); };
   }, [projectId, legacyContext]);
   useEffect(() => {
-    if(planRef.current?.document.id===doc.id&&planRef.current.document.revision>=doc.revision)return;
+    // Revisions are immutable within a session. A disk reload starts a new session
+    // and may replace the graph at the same revision (or restore an older one).
+    if(planSession.current===sessionId&&planRef.current?.document.id===doc.id&&planRef.current.document.revision>=doc.revision)return;
+    planSession.current=sessionId;
     temporary.current=null;inspectorPreview.current=null;
     const nextPlan=new ScenePlan(doc),previous=planRef.current;
     const keepAudio=previous?.document.id===doc.id&&(playingRef.current||preparation.current!==null)
@@ -348,7 +352,7 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
     setError(null); planRef.current=nextPlan;
     if (doc.sequenceEndFrame > 0) void show(Math.max(0,Math.min(previous&&previous.document.id!==doc.id?initialFrame:current.current, doc.sequenceEndFrame - 1))).catch(fail);
     else { renderer.current?.clear(); current.current = 0; setFrame(0); }
-  }, [doc, projectId, legacyContext]);
+  }, [doc, projectId, legacyContext, sessionId]);
   useEffect(()=>{
     const previous=inspectorPreview.current;
     inspectorPreview.current=null;
