@@ -344,12 +344,17 @@ export function AiTerminal() {
    */
   async function handleDropFiles(files: File[]): Promise<void> {
     if (!files.length || attaching) return;
+    // 落とした時点の端末と接続に貼り付け先を固定する。送信中にツール切替・再起動で
+    // 入れ替わった場合、新しい会話へ前の会話向けのファイルを貼らない。
+    const term = termRef.current, ws = wsRef.current;
+    if (!term || !ws) return;
     setError(null);
     setAttaching(true);
     try {
       const text = terminalDropText(await dropPaths(files));
-      const term = termRef.current;
-      if (!term || phaseRef.current !== 'connected') throw new Error('AI との接続が切れたため、ファイルを渡せませんでした');
+      if (termRef.current !== term || wsRef.current !== ws || phaseRef.current !== 'connected') {
+        throw new Error('送信中に AI との接続が切り替わったため、ファイルを渡しませんでした。もう一度ドロップしてください');
+      }
       term.paste(text);
       term.focus();
     } catch (err) {

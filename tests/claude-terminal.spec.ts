@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { TERMINAL_FONT_FAMILY } from '../src/app/panels/claudeTerminalOptions';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,8 +49,8 @@ test('AI タブ: 埋め込みターミナルが起動しエコーが往復する
 // OSS 利用者報告（2026-09-30）: 画像や動画をターミナルへドラッグ&ドロップしても何も起きなかった。
 // ブラウザ版は実パスを取れないため、サーバーの一時フォルダへ送った保存先パスが
 // ターミナルアプリと同じ逃がし方で入力される（送信はしない）ことを確認する。
-test('AI タブ: ファイルをターミナルへドロップするとパスが入力される', async ({ page }) => {
-  // 0.7 の編集画面（新形式）で確かめる。旧形式の sample-project は開くと引き継ぎ画面が出るため使わない。
+/** 0.7 の編集画面（新形式）で AI 端末を開く。旧形式の sample-project は開くと引き継ぎ画面が出るため使わない。 */
+async function openNativeAiTerminal(page: Page): Promise<{ term: Locator; cleanup: () => void }> {
   const name = `ai-drop-${process.pid}-${Date.now()}`;
   const created = await page.request.post(`/api/create-project?native=1&name=${name}&video=main.mp4`, {
     data: readFileSync(join(FIXTURES_ROOT, 'sample-project/public/main.mp4')),
@@ -58,19 +58,30 @@ test('AI タブ: ファイルをターミナルへドロップするとパスが
   });
   expect(created.ok(), await created.text()).toBe(true);
   const nativeId = (await created.json() as { id: string }).id;
+  const cleanup = () => rmSync(join(FIXTURES_ROOT, nativeId), { recursive: true, force: true });
   try {
     await page.goto(`/?project=${encodeURIComponent(nativeId)}`);
     await page.getByRole('button', { name: '✦ AI で編集する' }).click();
     const term = page.getByTestId('claude-terminal');
     await expect(term).toContainText('FAKE-CLAUDE READY', { timeout: 15_000 });
+    return { term, cleanup };
+  } catch (error) { cleanup(); throw error; }
+}
 
+async function droppedPng(page: Page, name: string) {
+  return page.evaluateHandle((fileName) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['png'], fileName, { type: 'image/png' }));
+    return transfer;
+  }, name);
+}
+
+test('AI タブ: ファイルをターミナルへドロップするとパスが入力される', async ({ page }) => {
+  const { term, cleanup } = await openNativeAiTerminal(page);
+  try {
     const attachments: string[] = [];
     page.on('request', (req) => { if (req.url().includes('/api/pty/attachment')) attachments.push(req.url()); });
-    const dataTransfer = await page.evaluateHandle(() => {
-      const transfer = new DataTransfer();
-      transfer.items.add(new File(['png'], 'swing(1).png', { type: 'image/png' }));
-      return transfer;
-    });
+    const dataTransfer = await droppedPng(page, 'swing(1).png');
     await term.dispatchEvent('dragenter', { dataTransfer });
     await term.dispatchEvent('dragover', { dataTransfer });
     await expect(page.locator('.clt-drop-hint')).toBeVisible();
@@ -79,9 +90,34 @@ test('AI タブ: ファイルをターミナルへドロップするとパスが
     await expect(term).toContainText('swing\\(1\\).png', { timeout: 15_000 });
     await expect(page.locator('.clt-drop-hint')).toHaveCount(0);
     expect(attachments).toHaveLength(1);
-  } finally {
-    rmSync(join(FIXTURES_ROOT, nativeId), { recursive: true, force: true });
-  }
+  } finally { cleanup(); }
+});
+
+// Codex レビュー A3: 送信中に AI を切り替え・再起動すると、完了時に新しい会話の入力欄へ貼っていた。
+test('AI タブ: ファイルの送信中に端末が入れ替わったら、新しい端末には貼らない', async ({ page }) => {
+  const { term, cleanup } = await openNativeAiTerminal(page);
+  try {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let sent!: () => void;
+    const started = new Promise<void>((resolve) => { sent = resolve; });
+    await page.route('**/api/pty/attachment**', async (route) => { sent(); await held; await route.continue(); });
+
+    await term.dispatchEvent('drop', { dataTransfer: await droppedPng(page, 'late-drop.png') });
+    await started;
+    await expect(page.getByText('ファイルを AI に渡しています…')).toBeVisible();
+
+    // 送信を止めたまま、偽 claude を終了させて再起動する（新しい接続・新しい端末になる）。
+    await term.click();
+    await page.keyboard.type('exit');
+    await page.keyboard.press('Enter');
+    await page.locator('.clt-exit button', { hasText: '再起動する' }).click();
+    await expect(term).toContainText('FAKE-CLAUDE READY', { timeout: 15_000 });
+
+    release();
+    await expect(page.locator('.sme-error')).toContainText('切り替わった', { timeout: 15_000 });
+    await expect(term).not.toContainText('late-drop');
+  } finally { cleanup(); }
 });
 
 // I-2 回帰: ホーム画面（プロジェクト未選択）で AiTerminal がマウントされ、

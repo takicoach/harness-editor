@@ -19,7 +19,7 @@ import { handlePtyUpgrade, ptyTokens } from './ptyApi';
 import { ptySessions } from './ptySession';
 import { getProjectRoot } from './projectRoot';
 import { JOB_BODY_MAX_BYTES, readJsonBody } from './readBody';
-import { saveTerminalAttachment } from './terminalAttachment';
+import { removeTerminalAttachments, saveTerminalAttachment } from './terminalAttachment';
 
 /** 課金系の環境変数が検出されたか（UI 警告用。除去そのものは ptySession が行う）。 */
 export function apiKeyDetected(env: NodeJS.ProcessEnv): boolean {
@@ -248,6 +248,8 @@ export function smeAi(): Plugin {
       server.httpServer?.on('close', () => {
         claudeInstallJob.killAll();
         ptySessions.killAll();
+        // 端末が終わればドロップした添付の一時コピーも参照されない。
+        removeTerminalAttachments();
       });
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
         // このハンドラ内で throw すると async 関数の Promise が unhandled rejection になり、

@@ -477,9 +477,17 @@ describe('safeAttachmentName', () => {
     expect(safeAttachmentName('C:\\Users\\me\\clip.mov')).toBe('clip.mov');
   });
   it('長すぎる名前は拡張子を残して切り詰める', () => {
-    const long = 'あ'.repeat(300) + '.mov';
+    const long = 'a'.repeat(300) + '.mov';
     const safe = safeAttachmentName(long);
     expect(safe.length).toBe(120);
     expect(safe.endsWith('.mov')).toBe(true);
+  });
+  it('日本語の名前は UTF-8 のバイト数で切り詰める（Linux の 255 バイト上限を超えない）', () => {
+    const safe = safeAttachmentName('あ'.repeat(116) + '.mov');
+    expect(Buffer.byteLength(safe)).toBeLessThanOrEqual(200);
+    expect(safe.endsWith('.mov')).toBe(true);
+    expect(safe.startsWith('あ')).toBe(true);
+    // 文字の途中で切らない（壊れた UTF-8 を作らない）。
+    expect(safe).not.toContain('\uFFFD');
   });
 });
