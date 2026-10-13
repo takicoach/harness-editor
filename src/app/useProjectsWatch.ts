@@ -13,6 +13,7 @@ type ProjectStatusPatch = Pick<
   | 'lastEditedAt'
   // 工程ステッパー（out/video.mp4 の増減で rendered が変わる）。
   | 'steps'
+  | 'thumbnailCover'
   | 'statusSeq'
 >;
 
@@ -60,7 +61,7 @@ export function useProjectsWatch(
       return;
     }
     if (d.type !== 'status' || typeof d.id !== 'string') return;
-    const { id, status, stageManual, activityLabel, activityStartedAt, activityStale, lastEditedAt, steps, statusSeq } = d;
+    const { id, status, stageManual, activityLabel, activityStartedAt, activityStale, lastEditedAt, steps, thumbnailCover, statusSeq } = d;
     onStatusRef.current(id, {
       status,
       // この差分がどの観測から来たか。受け手（applyStatusPatch）が一覧の全置換と
@@ -75,6 +76,8 @@ export function useProjectsWatch(
       activityStartedAt,
       activityStale,
       lastEditedAt,
+      // 無い差分は「書き出しが消えた」の意味で undefined を渡す（stageManual と同じく残留させない）。
+      thumbnailCover,
     });
   });
 }

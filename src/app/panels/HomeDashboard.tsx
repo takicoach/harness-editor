@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ProjectSummary, ProjectSteps } from '../../shared/types';
 import { defaultProjectName } from '../createProjectApi';
 import {TaskProgress,type TransferProgress} from '../components/TaskProgress';
 import { DISPLAY_STATUSES, STATUS_LABEL, type ProjectStage } from '../../shared/projectStage';
 import { VideoThumb } from './VideoThumb';
+import { ProjectCover } from './projectCover';
 import { MediaPicker, type PickedFile } from './MediaPicker';
 import { useDropdown } from '../useDropdown';
 import { useLiveNow } from '../useLiveNow';
@@ -12,6 +13,8 @@ import { groupProjectsByStatus } from './homeKanban';
 import { loadHomeView, saveHomeView, type HomeView } from './homeViewPref';
 import { largeUploadNotice } from '../../shared/uploadNotice';
 import { CREATE_MEDIA_ACCEPT, classifyCreateSelection, imageLimitMessage } from '../../shared/createMedia';
+import { orderByName } from '../../shared/importOrder';
+import { MAX_IMPORT_BATCH_ITEMS } from '../../shared/importBatches';
 import { deleteProjectRequest } from '../trashApi';
 import { moveProjectsToTrash, formatBulkTrashResult } from '../trashBulk';
 import { revealProjectRequest } from '../projectRevealApi';
@@ -51,6 +54,8 @@ interface HomeDashboardProps {
   onProjectsChanged: () => void;
   /** 相対時刻の基準（テスト注入用）。 */
   now?: number;
+  /** 動画の一覧の上に足す欄（スライドの案件）。無ければ今までどおり。 */
+  extraSection?: ReactNode;
 }
 
 /** バッジメニューの選択肢。表示ステータス全値（正本 shared/projectStage）+ 自動判定に戻す。 */
@@ -63,7 +68,7 @@ const STAGE_OPTIONS: { stage: ProjectStage; label: string }[] = [
  * プロジェクト未選択時のホーム。カードグリッドで各プロジェクトの
  * サムネ・ステータス・最終編集日時・尺を一覧する。
  */
-export function HomeDashboard({ projects, error, loading = false, notice = null, agentBoard, onPick, onSetStage, onCreate, onProjectsChanged, now, managedMedia = false }: HomeDashboardProps) {
+export function HomeDashboard({ projects, error, loading = false, notice = null, agentBoard, onPick, onSetStage, onCreate, onProjectsChanged, now, managedMedia = false, extraSection }: HomeDashboardProps) {
   const boardItem = (projectId: string) => agentBoard && Object.prototype.hasOwnProperty.call(agentBoard.items, projectId)
     ? agentBoard.items[projectId]
     : undefined;
@@ -255,7 +260,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
 
   /**
    * 選んだ・ドロップしたファイルから作成の素材を決める（設計 M1・M3b・M6b）。
-   * 1回の作成で1種類。画像は複数可（上限を超えたら理由だけ出す）。動画・音声は1件目だけ（複数なら通知）。
+   * 1回の作成で1種類。画像は複数可（上限を超えたら理由だけ出す）。新しい編集画面では動画も複数可（設計 §1 ③）。それ以外の動画・音声は1件目だけ（複数なら通知）。
    */
   const startCreate = (files: File[], via: 'drop' | 'select'): void => {
     const first = files[0];
@@ -273,6 +278,15 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
         return;
       }
       setCreateSource({ kind: 'upload-images', files: ordered });
+      return;
+    }
+    if (managedMedia && selection.kind === 'video' && files.length > 1) {
+      // 設計 §1 ③: 複数の動画は1つの作品のメインへ、受付時に固定した自然順で並べる。束の上限を超える時は作る前に断る（空の作品だけが残らないように）。
+      if (files.length > MAX_IMPORT_BATCH_ITEMS) {
+        setDropNotice(`動画は1回に${MAX_IMPORT_BATCH_ITEMS}本まで作成できます（選んだ動画: ${files.length} 本）`);
+        return;
+      }
+      setCreateSource({ kind: 'videos', files: orderByName(files, (file) => file.name) });
       return;
     }
     if (files.length > 1) {
@@ -349,6 +363,11 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
       >
         フォルダから選ぶ
       </button>
+      {managedMedia && (
+        <button type="button" className="home-create-link-btn" data-testid="home-create-empty" onClick={() => setCreateSource({ kind: 'empty' })}>
+          空のプロジェクトを作成
+        </button>
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -430,6 +449,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
     return (
       <div className="home" data-tutorial="home" {...homeDropHandlers}>
         {dropOverlay}
+        {extraSection}
         <div className="sme-center">
           <p>まだプロジェクトがありません</p>
           <p className="hint">動画を選んで最初のプロジェクトを作りましょう</p>
@@ -489,6 +509,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
         </button>
       </div>
       {notice && <p className="home-board-notice" role="status">{notice}</p>}
+      {extraSection}
       {agentBoard && <div className="home-agent-guide">
         <span>処理中のタブを開いたまま、別の動画を編集できます。</span>
         {agentBoard.status === 'error' && <span role="status">AI作業の状態を確認できません。次の更新で再確認します。</span>}
@@ -705,10 +726,15 @@ export type CreateSource =
   | { kind: 'upload'; file: File }
   | { kind: 'link'; name: string; path: string; sizeBytes: number }
   | { kind: 'upload-images'; files: File[] }
-  | { kind: 'link-images'; files: PickedFile[] };
+  | { kind: 'link-images'; files: PickedFile[] }
+  | { kind: 'empty' }
+  /** 新しい編集画面への複数の動画（設計 §1 ③）。自然順に並べ替え済み。空の作品に束で取り込み、メインの末尾に順に並べる。 */
+  | { kind: 'videos'; files: File[] };
 
 /** 作成ダイアログの「素材: …」（設計 M6）。 */
 export function createSourceLabel(source: CreateSource): string {
+  if (source.kind === 'empty') return '素材なし（空のプロジェクト）';
+  if (source.kind === 'videos') return `動画 ${source.files.length} 本（${source.files[0]?.name ?? ''} ほか）`;
   if (source.kind === 'upload') return source.file.name;
   if (source.kind === 'link') return source.name;
   return `画像 ${source.files.length} 枚（${source.files[0]?.name ?? ''} ほか）`;
@@ -732,7 +758,7 @@ interface CreateProjectModalProps {
 function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }: CreateProjectModalProps) {
   const fileName = createSourceLabel(source);
   const images = source.kind === 'upload-images' || source.kind === 'link-images' ? source : null;
-  const [name, setName] = useState(() => defaultProjectName(source.kind === 'upload' ? source.file.name : source.kind === 'link' ? source.name : source.files[0]!.name));
+  const [name, setName] = useState(() => defaultProjectName(source.kind === 'upload' ? source.file.name : source.kind === 'link' ? source.name : source.kind === 'empty' ? '空のプロジェクト' : source.files[0]!.name));
   const [progress,setProgress]=useState<TransferProgress>({phase:'preparing'});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -742,6 +768,7 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
   const [preferCopy, setPreferCopy] = useState(false);
   // リンク取り込みは実体を運ばないので、大容量の待ち時間案内は出さない。
   const sizeNotice = source.kind === 'upload' && (!managedMedia||preferCopy) ? largeUploadNotice(source.file.size)
+    : source.kind === 'videos' && preferCopy ? largeUploadNotice(source.files.reduce((sum, file) => sum + file.size, 0))
     : source.kind === 'upload-images' ? largeUploadNotice(imagesTotalBytes(source)) : null;
 
   const submit = (): void => {
@@ -769,6 +796,8 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
             画像 {images.files.length} 枚（合計 {formatSize(imagesTotalBytes(images))}）をコピーして取り込みます。元の画像は変更しません。選んだ順に1枚5秒で並べます。
           </p>
         )}
+        {source.kind === 'empty' && <p className="home-create-link-note" role="note">素材なしで作ります（1920x1080・30fps）。最初に足した動画の fps・解像度に合わせます。</p>}
+        {source.kind === 'videos' && <p className="home-create-link-note" role="note">動画 {source.files.length} 本を名前の順にメインへ並べます。読み込み中は仮の枠を出し、全部の準備が終わったら1回で並べます。</p>}
         {managedMedia && source.kind==='upload' && <p className="home-create-link-note" role="note">{preferCopy?'元の動画を変更せず、編集用のコピーを保存します。動画の容量に応じた空き容量が必要です。':'元の動画をコピーせずに使います。外付けの動画は、編集するときにドライブを接続してください。'}</p>}
         {source.kind === 'link' && (
           <div className="home-create-link-note" role="note">
@@ -791,7 +820,7 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
             }}
           />
         </label>
-        {source.kind === 'upload' && (
+        {(source.kind === 'upload' || source.kind === 'videos') && (
           <label className="home-create-copy-label">
             <input
               type="checkbox"
@@ -803,7 +832,7 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
             コピーして取り込む（外付けを外しても編集できるようにする）
           </label>
         )}
-        {source.kind === 'upload' && !preferCopy && (
+        {(source.kind === 'upload' || source.kind === 'videos') && !preferCopy && (
           <p className="hint home-create-link-hint">
             {managedMedia?'元動画の保存場所を確認します。自動で見つからない場合は、保存場所を選んでください。':'同じ動画が登録済みのフォルダ（外付け・デスクトップ・ダウンロード・ムービー）にあれば、コピーせずリンクで取り込みます。'}
           </p>
@@ -978,7 +1007,8 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
       </button>
       )}
       <div className={thumbClass}>
-        {p.videoAssetId || p.videoFile !== null ? (
+        {/* サムネの書き出しを読み込めなければ従来の絵（動画のコマ・画像・音声・空）に戻す。 */}
+        <ProjectCover project={p}>{p.videoAssetId || p.videoFile !== null ? (
           <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({ id:p.id, asset:p.videoAssetId })}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
         ) : p.imageAssetId ? (
           <img className="ml-thumb-video-el" src={`/api/sequence/asset?${new URLSearchParams({ id: p.id, asset: p.imageAssetId })}`} alt="" loading="lazy" draggable={false} />
@@ -989,7 +1019,7 @@ function ProjectCard({ p, now, onPick, onSetStage, onDelete, onRevealFailed, onC
           </div>
         ) : (
           <div className="home-card-thumb-empty" />
-        )}
+        )}</ProjectCover>
       </div>
       <div className="home-card-body">
         <div className="dd home-card-badge-wrap" ref={dd.rootRef}>

@@ -4,7 +4,7 @@
  * 押さえられないという外部レビュー指摘（P1-5）を受けて実経路に切り替えた。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -15,6 +15,12 @@ import { ptySessions } from './ptySession';
 import { claudeInstallJob } from './claudeInstallJob';
 import { handlePtyUpgrade, ptyTokens } from './ptyApi';
 import { safeAttachmentName, terminalAttachmentRoot } from './terminalAttachment';
+import { aiFocus } from './aiFocus';
+import * as aiLogin from './aiLogin';
+import { instructionInbox } from './instructionInbox';
+import { noteAiTabMcp, resetAiTabMcp } from './mcp/aiTabClient';
+import { SequenceStore } from './sequence/store';
+import { thumbnailService } from './thumbnail/service';
 
 interface Captured { status: number; body: unknown }
 
@@ -105,21 +111,25 @@ describe('GET /api/pty/token', () => {
   });
 });
 
-describe('POST /api/pty/waiting', () => {
-  it('ptySessions.startWaiting() の失敗を 409 にする', async () => {
-    vi.spyOn(ptySessions, 'startWaiting').mockReturnValue({ ok: false, error: 'AI が起動していません' });
-    const { res, captured } = makeRes();
-    await handleAiApi(makeReq('POST', '/api/pty/waiting'), res, ctx());
-    expect(captured.status).toBe(409);
-    expect((captured.body as { error: string }).error).toBe('AI が起動していません');
+describe('起動の最初の依頼（/api/pty/ensure）', () => {
+  const screen = { projectId: 'first-a', projectName: '10月の講義', mode: 'thumbnail', target: null, playheadSec: null, selection: [], materials: '' };
+  it('主画面の状況から最初の依頼を作って ensure に渡す', async () => {
+    const ensure = vi.spyOn(ptySessions, 'ensure').mockResolvedValue({ ok: true });
+    const { res } = makeRes();
+    await handleAiApi(makeReq('POST', '/api/pty/ensure', { tool: 'claude', focus: { pageId: 'page-first-1', seq: 1, screen } }), res, ctx());
+    expect(ensure.mock.calls[0]![0].firstPrompt).toContain('「10月の講義（サムネ）を見ています。何をしましょう？」');
+    aiFocus.release('page-first-1');
   });
-
-  it('成功時は 200 で { ok: true }', async () => {
-    vi.spyOn(ptySessions, 'startWaiting').mockReturnValue({ ok: true });
+  it('purpose=login（ログインのための起動）では最初の依頼を渡さない', async () => {
+    const ensure = vi.spyOn(ptySessions, 'ensure').mockResolvedValue({ ok: true });
+    const { res } = makeRes();
+    await handleAiApi(makeReq('POST', '/api/pty/ensure', { tool: 'claude', purpose: 'login' }), res, ctx());
+    expect(ensure.mock.calls[0]![0].firstPrompt).toBeNull();
+  });
+  it('待機の口は無くなった', async () => {
     const { res, captured } = makeRes();
     await handleAiApi(makeReq('POST', '/api/pty/waiting'), res, ctx());
-    expect(captured.status).toBe(200);
-    expect(captured.body).toEqual({ ok: true });
+    expect(captured.status).toBe(404);
   });
 });
 
@@ -489,5 +499,157 @@ describe('safeAttachmentName', () => {
     expect(safe.startsWith('あ')).toBe(true);
     // 文字の途中で切らない（壊れた UTF-8 を作らない）。
     expect(safe).not.toContain('\uFFFD');
+  });
+});
+
+describe('/api/ai/focus（画面の状況）', () => {
+  const screen = { projectId: 'focus-a', projectName: '案件A', mode: 'video', target: { kind: 'video', editorSessionId: 'w-a' },
+    playheadSec: 1.5, selection: [], materials: '' };
+  it('報告を受けて主画面かどうかを返し、GET で台帳の見え方を返す', async () => {
+    aiFocus.claim({ pageId: 'page-focus-1', seq: 1, screen });
+    const posted = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/focus', { pageId: 'page-focus-1', seq: 2, screen: { ...screen, mode: 'thumbnail', target: null } }), posted.res, ctx());
+    expect(posted.captured).toEqual({ status: 200, body: { primary: true } });
+    const read = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/focus'), read.res, ctx());
+    expect(read.captured.status).toBe(200);
+    expect((read.captured.body as { primary: { screen: { mode: string } } }).primary.screen.mode).toBe('thumbnail');
+    aiFocus.release('page-focus-1');
+  });
+  it('形の違う報告は 400', async () => {
+    const { res, captured } = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/focus', { pageId: 'page-focus-2', seq: 1, screen: { projectId: 'x' } }), res, ctx());
+    expect(captured).toEqual({ status: 400, body: { error: '画面の状況の形が正しくありません' } });
+  });
+  it('release でその画面を忘れる（主画面なら主画面も無くなる）', async () => {
+    aiFocus.claim({ pageId: 'page-focus-3', seq: 1, screen });
+    const { res, captured } = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/focus/release', { pageId: 'page-focus-3' }), res, ctx());
+    expect(captured).toEqual({ status: 200, body: { ok: true } });
+    expect(aiFocus.primary()).toBeNull();
+  });
+});
+
+describe('AI タブを開いた画面を主画面にする（/api/pty/ensure・/api/pty/switch）', () => {
+  const screen = { projectId: 'claim-a', projectName: '案件A', mode: 'slides', target: null, playheadSec: null, selection: [], materials: '' };
+  it('ensure の本文の focus で主画面を登録する', async () => {
+    vi.spyOn(ptySessions, 'ensure').mockResolvedValue({ ok: true });
+    const { res, captured } = makeRes();
+    await handleAiApi(makeReq('POST', '/api/pty/ensure', { tool: 'claude', theme: 'dark', focus: { pageId: 'page-claim-1', seq: 1, screen } }), res, ctx());
+    expect(captured.status).toBe(200);
+    expect(aiFocus.primary()).toMatchObject({ pageId: 'page-claim-1', screen: { projectId: 'claim-a', mode: 'slides' } });
+    aiFocus.release('page-claim-1');
+  });
+  it('switch でも登録する。形の違う focus は無視して起動は続ける', async () => {
+    vi.spyOn(ptySessions, 'switchTool').mockResolvedValue({ ok: true, actualTool: 'codex', sessionId: 's', notes: [] });
+    const bad = makeRes();
+    await handleAiApi(makeReq('POST', '/api/pty/switch', { tool: 'codex', focus: { pageId: 'x' } }), bad.res, ctx());
+    expect(bad.captured.status).toBe(200);
+    const good = makeRes();
+    await handleAiApi(makeReq('POST', '/api/pty/switch', { tool: 'codex', focus: { pageId: 'page-claim-2', seq: 1, screen } }), good.res, ctx());
+    expect(aiFocus.primary()?.pageId).toBe('page-claim-2');
+    aiFocus.release('page-claim-2');
+  });
+});
+
+describe('ボタンの依頼（/api/ai/requests）と在席（/api/ai/presence）', () => {
+  // 同じ requestId の再送は受付時刻も同じ（画面は作った時の値を送り直す）。呼ぶたびに Date.now() だとミリ秒の境目で 409 になる。
+  const requestCreatedAt = Date.now();
+  const body = (projectId: string, requestId?: string) => ({ projectId, text: 'スライド: 構成案を作って', context: { frame: 0, timeSec: 0, selection: null },
+    ...(requestId ? { requestId, requestCreatedAt } : {}) });
+  it('記録を作って入力欄に貼り、記録（送信待ち）を返す。同じ requestId は貼り直さない', async () => {
+    vi.spyOn(ptySessions, 'state').mockReturnValue('running');
+    const paste = vi.spyOn(ptySessions, 'paste').mockReturnValue({ ok: true });
+    const first = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/requests', body('req-a', 'request-a000000000000001')), first.res, ctx());
+    expect(first.captured.status).toBe(200);
+    const record = first.captured.body as { id: string; status: string };
+    expect(record.status).toBe('pending');
+    expect(paste).toHaveBeenCalledWith(`スライド: 構成案を作って（依頼 #${record.id.replace('inst-', '')}）`);
+    const again = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/requests', body('req-a', 'request-a000000000000001')), again.res, ctx());
+    expect((again.captured.body as { id: string }).id).toBe(record.id);
+    expect(paste).toHaveBeenCalledTimes(1);
+  });
+  it('端末が起動していなければ 409 で、記録も作らない', async () => {
+    vi.spyOn(ptySessions, 'state').mockReturnValue('idle');
+    const { res, captured } = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/requests', body('req-b')), res, ctx());
+    expect(captured).toMatchObject({ status: 409, body: { code: 'AI_NOT_RUNNING' } });
+    expect(instructionInbox.list('req-b')).toEqual([]);
+  });
+  it('在席: 起動の後に AI タブの MCP 接続が来て初めて connected', async () => {
+    resetAiTabMcp();
+    vi.spyOn(ptySessions, 'state').mockReturnValue('running');
+    vi.spyOn(ptySessions, 'startedAt').mockReturnValue(5_000);
+    const before = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/presence'), before.res, ctx());
+    expect(before.captured.body).toMatchObject({ terminal: 'running', mcp: false, connected: false, focus: { primary: null } });
+    noteAiTabMcp(4_000);
+    const old = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/presence'), old.res, ctx());
+    expect(old.captured.body).toMatchObject({ connected: false });
+    noteAiTabMcp(6_000);
+    const after = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/presence'), after.res, ctx());
+    expect(after.captured.body).toMatchObject({ mcp: true, connected: true });
+    resetAiTabMcp();
+  });
+});
+
+describe('サムネの AI のボタンの依頼（/api/ai/thumbnail-requests）', () => {
+  const requestCreatedAt = Date.now();
+  const post = (over: Record<string, unknown> = {}) => ({ projectId: 'thumb-wire', kind: 'new', pageId: null, cutout: 'auto', note: '配線の確認',
+    requestId: 'thumbwire-0000000000000001', requestCreatedAt, ...over });
+  it('形が違えば 400。AI が起動していなければ 409。id の無い照会は 400、知らない案件の照会は 404', async () => {
+    vi.stubEnv('HARNESS_PROJECT_ROOT', editorDir);
+    vi.spyOn(ptySessions, 'state').mockReturnValue('idle');
+    const bad = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/thumbnail-requests', { projectId: 'x' }), bad.res, ctx());
+    expect(bad.captured).toMatchObject({ status: 400, body: { code: 'INVALID_INPUT' } });
+    const idle = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/thumbnail-requests', post()), idle.res, ctx());
+    expect(idle.captured).toMatchObject({ status: 409, body: { code: 'AI_NOT_RUNNING' } });
+    const noId = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/thumbnail-requests'), noId.res, ctx());
+    expect(noId.captured.status).toBe(400);
+    const unknown = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/thumbnail-requests?id=no-such-project'), unknown.res, ctx());
+    expect(unknown.captured.status).toBe(404);
+    vi.unstubAllEnvs();
+  });
+  it('案件のあるサムネで押すと依頼番号つきで貼り、照会が送信待ちを返す。同じ requestId は貼り直さない', async () => {
+    vi.stubEnv('HARNESS_PROJECT_ROOT', editorDir);
+    vi.spyOn(ptySessions, 'state').mockReturnValue('running');
+    const paste = vi.spyOn(ptySessions, 'paste').mockReturnValue({ ok: true });
+    const directory = join(editorDir, 'thumb-wire');
+    mkdirSync(directory);
+    new SequenceStore(directory).save({ expectedSavedRevision: null, executionId: 'v', document: { schemaVersion: 2, id: 'thumb-wire', name: 'thumb-wire', revision: 0, fps: { num: 30, den: 1 },
+      resolution: { width: 1920, height: 1080 }, sequenceEndFrame: 30, background: '#000000', assets: [], tracks: [], clips: [], transitions: [], transcripts: [], ducking: { enabled: false, strength: 'mid' } } });
+    thumbnailService.create(directory, 'c-wire');
+    const first = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/thumbnail-requests', post()), first.res, ctx());
+    expect(first.captured).toMatchObject({ status: 200, body: { status: 'pending', label: '送信待ち（AI タブで Enter）', request: { route: 'button', kind: 'new' } } });
+    const requestId = (first.captured.body as { request: { requestId: string } }).request.requestId;
+    expect(paste).toHaveBeenCalledWith(`サムネ: 新しい案を作って（切り抜き: AI に任せる）配線の確認（依頼 #${requestId.replace('inst-', '')}）`);
+    const again = makeRes();
+    await handleAiApi(makeReq('POST', '/api/ai/thumbnail-requests', post()), again.res, ctx());
+    expect(paste).toHaveBeenCalledTimes(1);
+    const read = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/thumbnail-requests?id=thumb-wire'), read.res, ctx());
+    expect(read.captured).toMatchObject({ status: 200, body: { status: 'pending', request: { requestId } } });
+    vi.unstubAllEnvs();
+  });
+});
+
+describe('GET /api/ai/login', () => {
+  it('ツールのログイン状態を返す。知らないツールは 400', async () => {
+    vi.spyOn(aiLogin, 'aiLoginState').mockResolvedValue('missing');
+    const ok = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/login?tool=codex'), ok.res, ctx());
+    expect(ok.captured).toEqual({ status: 200, body: { state: 'missing' } });
+    const bad = makeRes();
+    await handleAiApi(makeReq('GET', '/api/ai/login?tool=gemini'), bad.res, ctx());
+    expect(bad.captured.status).toBe(400);
   });
 });

@@ -1,4 +1,4 @@
-import type { InstructionInbox } from '../instructionInbox';
+import { normalizeInstructionId, type InstructionInbox } from '../instructionInbox';
 import type { InstructionContext, InstructionStatus } from '../../shared/types';
 
 /** get_next_instruction の返り値。 */
@@ -50,6 +50,6 @@ export function reportInstructionStatus(
   inbox: InstructionInbox,
   args: ReportStatusArgs,
 ): { ok: boolean } {
-  const updated = inbox.updateStatus(args.id, args.status, args.reply);
+  const updated = inbox.updateStatus(normalizeInstructionId(args.id), args.status, args.reply);
   return { ok: updated !== null };
 }

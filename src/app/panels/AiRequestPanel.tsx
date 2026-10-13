@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AiScreen } from '../../shared/aiFocus';
+import { useAiFocus } from '../useAiFocus';
 import {TaskProgress} from '../components/TaskProgress';
 import type { InstructionContext, InstructionInput, InstructionRecord } from '../../shared/types';
 import { useEventChannel } from '../eventBus';
 import { fetchJson, putJsonPost } from '../fetchJson';
-import { useAgentConnected } from '../useAgentConnected';
+import { useAiPresence } from '../useAiPresence';
+import { focusAiTerminal } from './aiTerminalFocus';
 import { AiTerminal } from './AiTerminal';
 import './aiRequestPanel.css';
 
@@ -28,7 +31,7 @@ function writeDraft(projectId: string, draft: Draft) {
   localStorage.setItem(storageKey(projectId), JSON.stringify({ version: 1, ...draft }));
 }
 const statusText: Record<InstructionRecord['status'], string> = {
-  pending: '受付済み・AI待ち', processing: '処理中', done: '処理結果あり', failed: '失敗',
+  pending: '送信待ち（AI タブで Enter）', processing: '処理中', done: '処理結果あり', failed: '失敗',
 };
 const rank = { pending: 0, processing: 1, done: 2, failed: 2 };
 
@@ -47,7 +50,9 @@ export function AiRequestPanel({ projectId, buildContext, onOpenActivity }: {
   const [error, setError] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const active = useRef(true);
-  const connected = useAgentConnected(true, projectId);
+  const presence = useAiPresence(true);
+  const aiScreen = useMemo<AiScreen>(() => ({ projectId, projectName: projectId.slice(0, 200), mode: 'video', target: null, playheadSec: null, selection: [], materials: '' }), [projectId]);
+  const aiFocus = useAiFocus(aiScreen);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   function remember(next: Draft) {
@@ -101,7 +106,9 @@ export function AiRequestPanel({ projectId, buildContext, onOpenActivity }: {
       };
       // Persist before the network can accept the request. Retry uses this exact context and ID.
       remember({ text: draftRef.current.text, pending: request });
-      const record = await putJsonPost<InstructionRecord>('/api/instructions', request);
+      // 入力欄に貼るだけ。送るのは利用者の Enter。貼ったら端末を開いてカーソルを置く。
+      const record = await putJsonPost<InstructionRecord>('/api/ai/requests', request);
+      if (active.current) { setTerminalOpen(true); focusAiTerminal(); }
       if (record.projectId !== projectId || record.requestId !== request.requestId) throw new Error('受付結果が依頼と一致しません');
       if (active.current) accept(record);
       // Switching projects must not clear a newer draft in the same project's next mounted panel.
@@ -116,10 +123,10 @@ export function AiRequestPanel({ projectId, buildContext, onOpenActivity }: {
     }
   }
 
-  const available = connected.global === true || connected.dedicated === true;
+  const available = presence?.connected === true;
   return <section className="ai-request-panel" aria-label="この案件のAI依頼">
     <header className="ai-request-heading"><h3>AIに依頼</h3>
-      <span role="status">{available ? 'AI接続済み' : connected.global === null ? <TaskProgress compact label="接続を確認中"/> : 'AIの接続待ち'}</span></header>
+      <span role="status">{available ? 'AI接続済み' : presence === null ? <TaskProgress compact label="接続を確認中"/> : 'AIの接続待ち'}</span></header>
     <p className="ai-request-help">この案件で直したいことを書いてください。今の再生位置と選択も添えて送ります。</p>
     <label htmlFor="ai-request-text">依頼内容</label>
     <textarea id="ai-request-text" rows={4} value={draft.text} disabled={sending || draft.pending !== null}
@@ -136,8 +143,8 @@ export function AiRequestPanel({ projectId, buildContext, onOpenActivity }: {
         {terminalOpen ? '接続画面を閉じる' : 'AIの接続・設定'}</button></div>
     {sending&&<TaskProgress compact label="依頼の受付を確認しています"/>}
     {error && <p className="ai-request-error" role="alert">{error}</p>}
-    {!available && <p className="ai-request-help">依頼は保存されます。「AIの接続・設定」で接続し、待機を開始すると受け付けた依頼を処理します。</p>}
-    {terminalOpen && <div className="ai-request-terminal"><AiTerminal /></div>}
+    {!available && <p className="ai-request-help">「AIの接続・設定」で AI を起動してから「依頼を送る」を押すと、AI の入力欄に貼られます。Enter で送ってください。</p>}
+    {terminalOpen && <div className="ai-request-terminal"><AiTerminal focus={aiFocus} /></div>}
     <div className="ai-request-history"><div className="ai-request-heading"><h3>この案件の依頼履歴</h3>
       <button type="button" onClick={() => setRefresh(value => value + 1)}>履歴を更新</button></div>
       {onOpenActivity ? <div className="ai-request-activity">

@@ -11,10 +11,11 @@ import {ScenePlan} from '../../core/sequence/scenePlan';
 import type {SequenceDocument} from '../../core/sequence/model';
 import type {NativeExportStatus} from '../../shared/nativeExport';
 import {rational as r} from '../../core/sequence/time';
-const render=vi.hoisted(()=>({png:Buffer.alloc(0),close:vi.fn(async()=>{})}));
+const render=vi.hoisted(()=>({image:Buffer.alloc(0),close:vi.fn(async()=>{})}));
 vi.mock('playwright-core',()=>({chromium:{launch:async()=>({version:()=> 'admission-test-renderer',close:render.close,newPage:async()=>({
- setDefaultTimeout(){},on(){},goto:async()=>{},evaluate:async()=>{},screenshot:async()=>render.png,
- context:()=>({newCDPSession:async()=>({send:async()=>({data:render.png.toString('base64')})})}),
+ // page.evaluate also reads the window size before each capture (2bfe8912): report the requested 32×32.
+ setDefaultTimeout(){},on(){},goto:async()=>{},evaluate:async()=>[32,32],screenshot:async()=>render.image,
+ context:()=>({newCDPSession:async()=>({send:async()=>({data:render.image.toString('base64')})})}),
  locator:()=>({elementHandle:async()=>({contentFrame:async()=>({waitForFunction:async()=>{},evaluate:async()=>undefined})})})
 })})}}));
 afterEach(()=>vi.clearAllMocks());
@@ -23,7 +24,8 @@ it.each(['unchanged','missing','same-bytes-new-inode'])('keeps reference admissi
  const ffmpeg=resolveFfmpegBin();if(!ffmpeg.ok)throw new Error(ffmpeg.message);
  try{
   await mkdir(output);execFileSync(ffmpeg.bin,['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','1',source]);
-  render.png=execFileSync(ffmpeg.bin,['-v','error','-f','lavfi','-i','color=black:size=32x32','-frames:v','1','-f','image2pipe','-vcodec','png','pipe:1']);
+  // The product capture is a JPEG (exportIntermediate.test.ts).
+  render.image=execFileSync(ffmpeg.bin,['-v','error','-f','lavfi','-i','color=black:size=32x32','-frames:v','1','-pix_fmt','yuvj420p','-f','image2pipe','-vcodec','mjpeg','pipe:1']);
   const bytes=await readFile(source),asset=await registerSequenceReference(directory,source);
   const document:SequenceDocument={schemaVersion:2,id:'case',name:'参照書き出し',revision:0,fps:r(30),resolution:{width:32,height:32},sequenceEndFrame:3,background:'#000000',assets:[asset],
    tracks:[{id:'audio',kind:'audio',name:'原音',enabled:true}],clips:[{id:'speech',trackId:'audio',name:'原音',startFrame:0,durationFrames:3,clock:{offset:r(0),rate:r(1),duration:r(3)},

@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import {cleanup,fireEvent,render,waitFor,within} from '@testing-library/react';
+import {cleanup,fireEvent,render,within} from '@testing-library/react';
 import {NativeTextStyleList,TEXT_STYLE_CATALOG_URL} from './NativeTextStyleList';
 import type {SequenceAsset,SequenceDocument} from '../../core/sequence/model';
 import type {TextContent} from '../../core/sequence/textStyle';
@@ -228,9 +228,18 @@ it('draws no preview for a cell that never becomes visible',()=>{
   openPicker(t.view);
   expect(window.document.querySelectorAll('[data-native-style-preview]')).toHaveLength(0);
 });
-it('automatically prepares the three built-in styles when the project has none',async()=>{
+// 選んだだけで文書を変えない（字幕を選ぶとこの一覧が出る。自動で用意すると、選択が編集になり Undo と版が動く）。
+it('shows only a prepare button and never prepares by itself when the project has no styles yet',async()=>{
   const t=setup({preparation:'needs-builtin',assets:[]});
-  await waitFor(()=>expect(t.props.onPrepare).toHaveBeenCalledTimes(1));
+  expect(t.view.getByRole('button',{name:'テロップスタイルを用意する'})).toBeTruthy();
+  expect(t.view.queryByLabelText('スタイルを検索')).toBeNull();
+  await new Promise(resolve=>setTimeout(resolve,50));
+  expect(t.props.onPrepare).not.toHaveBeenCalled();
+});
+it('calls onPrepare once when the prepare button is clicked',()=>{
+  const t=setup({preparation:'needs-builtin',assets:[]});
+  fireEvent.click(t.view.getByRole('button',{name:'テロップスタイルを用意する'}));
+  expect(t.props.onPrepare).toHaveBeenCalledTimes(1);
 });
 it('shows built-in style cards directly in the adjustment panel',()=>{
   const t=setup();
@@ -238,6 +247,12 @@ it('shows built-in style cards directly in the adjustment panel',()=>{
   expect(inline.querySelectorAll('.native-style-card')).toHaveLength(2);
   expect(t.view.queryByRole('dialog',{name:'スタイルを選ぶ'})).toBeNull();
   expect(t.view.getByRole('button',{name:'黒帯'})).toBeTruthy();
+});
+it('keeps a large built-in set (more than 6) in the picker instead of the adjustment panel',()=>{
+  const many=assets.map(asset=>asset.id!=='builtin'?asset:{...asset,textStyleCatalog:{...asset.textStyleCatalog!,entries:Array.from({length:7},(_,i)=>({id:i+1,name:`標準 ${i+1}`}))}});
+  const t=setup({assets:many});
+  expect(t.view.container.querySelectorAll('.native-style-inline .native-style-card')).toHaveLength(0);
+  expect(t.view.getByRole('button',{name:'変更…'})).toBeTruthy();
 });
 it('shows both a load button and the existing list when the project catalog is missing',()=>{
   const t=setup({preparation:'needs-project'});

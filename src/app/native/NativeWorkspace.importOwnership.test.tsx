@@ -18,7 +18,7 @@ vi.mock('./useNativeEditorBridge',()=>({useNativeEditorBridge:()=>({bridge:{},bu
 vi.mock('./useNativeSession',()=>({useNativeSession:()=>({state:{sessionId:'test',dirty:false,document:{
  schemaVersion:2,id:'ownership',revision:0,name:'ownership',fps:{num:30,den:1},resolution:{width:320,height:180},sequenceEndFrame:300,
  background:'#000',assets:[],tracks:[],clips:[],transitions:[],transcripts:[],ducking:{enabled:false,strength:'mid'}
-}},busy:false,reference:state.reference,upload:state.upload})}));
+}},busy:false,reference:state.reference,upload:state.upload,appendToMain:vi.fn().mockResolvedValue({ok:true})})}));
 beforeEach(()=>{
  Object.defineProperty(window,'harnessDesktop',{configurable:true,value:{getPathForFile:()=>'/media/source.mp4'}});
  sessionStorage.clear();state.flush.mockReset();state.resolve.mockReset().mockResolvedValue({path:'/media/source.mp4',expectedFingerprint:'a'.repeat(64)});state.reference.mockReset().mockResolvedValue(true);state.upload.mockReset().mockResolvedValue(true);
@@ -27,27 +27,27 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();Reflect.deleteProperty(window,'harnessDesktop');vi.unstubAllGlobals();});
 it('imports all browser drops directly without a location picker',async()=>{
  Reflect.deleteProperty(window,'harnessDesktop');state.flush.mockResolvedValue(true);
- const view=render(<NativeWorkspace projectId="ownership"/>),files=[new File(['a'],'first.mp4'),new File(['b'],'second.mp4')];
+ const view=render(<NativeWorkspace projectId="ownership"/>),files=[new File(['a'],'first.wav'),new File(['b'],'second.wav')];
  fireEvent.drop(view.container.querySelector('.native-library')!,{dataTransfer:{files}});
  await waitFor(()=>expect(state.upload).toHaveBeenCalledTimes(2));
  expect(state.upload.mock.calls.map(call=>call[0])).toEqual(files);expect(state.resolve).not.toHaveBeenCalled();
 });
 it.each(['reference','copy','music'])('does not start a %s import after leaving during the input flush',async kind=>{
  let finish!:(ok:boolean)=>void;state.flush.mockImplementation(()=>new Promise<boolean>(r=>{finish=r;}));
- const view=render(<NativeWorkspace projectId="ownership"/>),file=new File(['media'],'source.mp4');
+ const view=render(<NativeWorkspace projectId="ownership"/>),file=new File(['media'],'source.wav');
  if(kind==='reference')fireEvent.drop(view.container.querySelector('.native-library')!,{dataTransfer:{files:[file]}});
  else{const input=kind==='music'?view.getByLabelText('BGM・効果音ファイル'):view.container.querySelector('input[multiple]')!;fireEvent.change(input,{target:{files:[file]}});}
  await waitFor(()=>expect(state.flush).toHaveBeenCalled());view.unmount();await act(async()=>{finish(true);});
  expect(state.resolve).not.toHaveBeenCalled();expect(state.reference).not.toHaveBeenCalled();expect(state.upload).not.toHaveBeenCalled();
 });
 it('imports a dropped file after the current project finishes its flush',async()=>{
- state.flush.mockResolvedValue(true);const view=render(<NativeWorkspace projectId="ownership"/>),file=new File(['media'],'source.mp4');
+ state.flush.mockResolvedValue(true);const view=render(<NativeWorkspace projectId="ownership"/>),file=new File(['media'],'source.wav');
  fireEvent.drop(view.container.querySelector('.native-library')!,{dataTransfer:{files:[file]}});
  await waitFor(()=>expect(state.reference).toHaveBeenCalledWith('/media/source.mp4','a'.repeat(64),expect.any(Function),undefined));expect(state.upload).not.toHaveBeenCalled();
 });
 it('does not register a location resolved just after the project was retired',async()=>{
  state.flush.mockResolvedValue(true);let finish!:(value:{path:string;expectedFingerprint:string})=>void;state.resolve.mockImplementation(()=>new Promise(r=>{finish=r;}));
- const view=render(<NativeWorkspace projectId="ownership"/>),file=new File(['media'],'source.mp4');fireEvent.drop(view.container.querySelector('.native-library')!,{dataTransfer:{files:[file]}});
+ const view=render(<NativeWorkspace projectId="ownership"/>),file=new File(['media'],'source.wav');fireEvent.drop(view.container.querySelector('.native-library')!,{dataTransfer:{files:[file]}});
  await waitFor(()=>expect(state.resolve).toHaveBeenCalled());view.unmount();await act(async()=>{finish({path:'/old/source.mp4',expectedFingerprint:'a'.repeat(64)});});
  expect(state.reference).not.toHaveBeenCalled();expect(state.upload).not.toHaveBeenCalled();
 });

@@ -1,0 +1,65 @@
+import {shotDir} from './shotDir';
+import {test,expect} from '@playwright/test';
+import {execFileSync} from 'node:child_process';
+import {join} from 'node:path';
+import {createTempProject,removeTempProject} from './helpers';
+import {resolveFfmpegBin,resolveFfprobeBin} from '../src/server/resolveFfmpeg';
+import {importSequenceAsset} from '../src/server/sequence/assets';
+import {SequenceStore} from '../src/server/sequence/store';
+import {silenceFixture} from '../src/core/sequence/silenceCut.fixture';
+
+test('silence candidates → isolated audition → one bulk edit → Undo/Redo → finish → real export',async({page,request},testInfo)=>{
+  test.setTimeout(150000);const project=createTempProject('e2e-silence'),errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.setViewportSize(testInfo.repeatEachIndex%2?{width:1024,height:768}:{width:1440,height:900});
+  await page.emulateMedia({colorScheme:testInfo.repeatEachIndex%2?'dark':'light'});
+  try{
+    const ff=resolveFfmpegBin();if(!ff.ok)throw new Error(ff.message);
+    const file=join(project.dir,'silence.wav');execFileSync(ff.bin,['-v','error','-f','lavfi','-i',"aevalsrc='if(between(t,2,4),0,0.5*sin(2*PI*440*t))':s=48000:d=6",file]);
+    const asset=await importSequenceAsset(project.dir,file,'トーク音声.wav'),doc=silenceFixture(180);doc.assets=[asset];if(doc.clips[0]!.content.kind==='audio')doc.clips[0]!.content.assetId=asset.id;
+    new SequenceStore(project.dir).save({document:doc,executionId:'init',expectedSavedRevision:null});
+    await page.goto(`/?project=${project.id}`);
+    let analyses=0;page.on('request',request=>{if(request.url().includes('/silence/analyze?'))analyses++;});
+    const open=page.getByRole('button',{name:'無音カット',exact:true});await expect(open).toBeEnabled({timeout:30000});await open.click();
+    await page.getByRole('button',{name:'解析開始',exact:true}).click();
+    const panel=page.getByRole('region',{name:'無音カットの設定'}),apply=panel.getByRole('button',{name:'1か所を一括カット'});
+    await expect(apply).toBeEnabled({timeout:30000});await expect(page.getByRole('tab',{name:'字幕一覧',exact:true})).toBeVisible();
+    await expect(page.locator('.native-timeline-toolbar').getByRole('button',{name:'無音カット',exact:true})).toHaveCount(0);
+    await expect(page.locator('.native-inspector').getByRole('region',{name:'無音カットの設定'})).toBeVisible();
+    await expect(page.locator('.native-silence-candidate')).toHaveCount(1);
+    await panel.getByRole('spinbutton',{name:'最小無音長',exact:true}).fill('3');
+    await expect(panel.getByRole('button',{name:'0か所を一括カット'})).toBeVisible();await expect(page.locator('.native-silence-candidate')).toHaveCount(0);
+    await panel.getByRole('spinbutton',{name:'最小無音長',exact:true}).fill('0.3');await expect(apply).toBeEnabled();await expect(page.locator('.native-silence-candidate')).toHaveCount(1);expect(analyses).toBe(1);
+    await page.screenshot({path:join(shotDir('native-silence-cut'),`panel-${testInfo.repeatEachIndex}.png`)});
+    const state=async()=>{const response=await request.post(`/api/sequence/session?id=${project.id}`,{data:{}});expect(response.ok()).toBe(true);return response.json();};
+    const before=await state();
+    const bypass=await request.post(`/api/sequence/command?id=${project.id}`,{data:{sessionId:before.sessionId,expectedRevision:0,executionId:'bypass',command:{type:'apply-silence-cut',ranges:[{startFrame:1,endFrame:10}]}}});expect(bypass.status()).toBe(400);
+    expect((await request.get(`/api/sequence/silence/analyze?id=${project.id}`)).status()).toBe(405);
+    await panel.getByRole('button',{name:'つなぎ目を試聴'}).click();
+    await expect(page.getByText('変更案',{exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'一時停止',exact:true})).toBeVisible();expect((await state()).document).toEqual(before.document);
+    await panel.getByRole('button',{name:'試聴を終了'}).click();
+    // The server commits, but the first response is lost. The retry must reuse the exact receipt.
+    let lost=false;const sent:unknown[]=[];
+    await page.route('**/api/sequence/silence/apply?*',async route=>{sent.push(route.request().postDataJSON());if(!lost){lost=true;await route.fetch();await route.abort('failed');}else await route.continue();});
+    await apply.click();await expect(panel.getByRole('button',{name:'結果を再確認'})).toBeEnabled();await expect(panel.getByRole('button',{name:'閉じる',exact:true})).toBeDisabled();
+    await page.getByRole('tab',{name:'字幕一覧',exact:true}).click();await expect(panel).toBeVisible();
+    await page.waitForResponse(response=>response.url().includes('/api/sequence/session/status')&&response.status()===200);
+    await panel.getByRole('button',{name:'結果を再確認'}).click();expect(sent).toHaveLength(2);expect(sent[1]).toEqual(sent[0]);
+    await expect(panel.getByText('1か所をカットしました')).toBeVisible();const applied=await state();expect(applied.document.revision).toBe(1);expect(applied.document.cutArchive.entries).toHaveLength(1);
+    await panel.getByRole('button',{name:'今回のカットを取り消す'}).click();await expect.poll(async()=>(await state()).document.sequenceEndFrame).toBe(180);
+    await expect(panel.getByText('1か所をカットしました')).toBeHidden();await expect(apply).toBeEnabled();
+    await panel.getByRole('button',{name:'閉じる',exact:true}).click();await expect(open).toBeFocused();
+    await open.click();await panel.getByRole('button',{name:'解析開始',exact:true}).click();await expect(apply).toBeEnabled({timeout:30000});
+    await page.getByRole('tab',{name:'字幕一覧',exact:true}).click();await expect(panel).toHaveCount(0);
+    await page.getByRole('tab',{name:'調整',exact:true}).click();await expect(open).toBeVisible();await expect(open).toHaveAttribute('aria-expanded','false');
+    await page.getByRole('button',{name:/やり直す/}).click();await expect.poll(async()=>(await state()).document.sequenceEndFrame).toBe(applied.document.sequenceEndFrame);
+    await page.getByRole('button',{name:'仕上げ',exact:true}).click();await expect(page.locator('.native-finish-cut-track .tl-cut')).toHaveCount(1);
+    await page.screenshot({path:join(shotDir('native-silence-cut'),`finish-${testInfo.repeatEachIndex}.png`)});
+    await page.getByRole('button',{name:'書き出し',exact:true}).click();await page.getByRole('button',{name:'書き出し開始'}).click();
+    let job:{id:string;phase:string;error?:string}|undefined;
+    await expect.poll(async()=>{const response=await request.get(`/api/sequence/export/list?id=${project.id}`);job=(await response.json()).jobs[0];return job?.phase;},{timeout:90000,intervals:[500]}).toMatch(/^(complete|failed)$/);
+    expect(job!.error??'').toBe('');const probe=resolveFfprobeBin();if(!probe.ok)throw new Error(probe.message);
+    const result=JSON.parse(execFileSync(probe.bin,['-v','error','-count_frames','-show_streams','-of','json',join(project.dir,'.harness/exports',job!.id,'output.mp4')],{encoding:'utf8'}));
+    expect(Number(result.streams.find((s:{codec_type:string})=>s.codec_type==='video').nb_read_frames)).toBe(applied.document.sequenceEndFrame);
+    expect(result.streams.some((s:{codec_type:string})=>s.codec_type==='audio')).toBe(true);expect(errors).toEqual([]);
+  }catch(e){await testInfo.attach('browser-errors',{body:JSON.stringify(errors),contentType:'application/json'});await testInfo.attach('page-html',{body:await page.content(),contentType:'text/html'});throw e;}finally{await page.close();removeTempProject(project.dir);}
+});

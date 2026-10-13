@@ -292,3 +292,13 @@ it('routes a throwing onComplete to the notification history, not the export pan
   expect(spy).toHaveBeenCalledWith('p',expect.any(String),'listener boom');
   expect(view.queryByRole('alert')).toBeNull();
 });
+it('disabledReason があれば書き出しを押せず、理由を title と見える補足文で示す',async()=>{
+  const {props}=setup(),view=render(<NativeExportControl {...props} disabledReason="試し表示中は書き出せません"/>);
+  await waitFor(()=>expect(request).toHaveBeenCalledWith('p','/export/list',undefined,expect.anything()));await act(async()=>{});
+  const button=view.getByText('書き出し') as HTMLButtonElement;
+  expect(button.disabled).toBe(true);expect(button.title).toBe('試し表示中は書き出せません');
+  expect(view.getByText('試し表示中は書き出せません',{selector:':not(button)'})).toBeTruthy();
+  // 理由が外れれば押せる（読み込み中で無効だったのではないことの確認）。
+  view.rerender(<NativeExportControl {...props}/>);
+  expect(button.disabled).toBe(false);expect(button.title).toBe('');expect(view.queryByText('試し表示中は書き出せません')).toBeNull();
+});

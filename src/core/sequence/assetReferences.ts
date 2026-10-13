@@ -1,4 +1,4 @@
-import type { SequenceDocument } from './model';
+import type { SequenceAsset, SequenceDocument } from './model';
 
 export type AssetReferencePlace =
   | 'clip-content' | 'clip-anchor' | 'clip-lut' | 'clip-witness'
@@ -42,4 +42,19 @@ export function sequenceAssetReferences(doc: SequenceDocument, assetId: string):
   for (const asset of doc.assets) if (asset.origin?.kind === 'audio-fix' && asset.origin.from === assetId)
     found.push({ place: 'audio-fix-origin', detail: `${asset.name}（音声補正の元）` });
   return found;
+}
+
+const fixOrigin = (asset: SequenceAsset | undefined) => asset?.origin?.kind === 'audio-fix' ? asset.origin : undefined;
+/** 補正の系譜（origin.from）を原本までたどる。循環・自己参照で回り続けない（その時と系譜が途切れた時は、たどり始めた素材を返す）。
+ * 画面（音声補正の対象）とサーバ（学習の注記）で共有する。 */
+export function audioFixRoot(doc: SequenceDocument, assetId: string): string {
+  let current = doc.assets.find(asset => asset.id === assetId);
+  const seen = new Set([assetId]);
+  for (let origin = fixOrigin(current); origin; origin = fixOrigin(current)) {
+    const from = origin.from;
+    if (seen.has(from)) return assetId;
+    seen.add(from);
+    current = doc.assets.find(asset => asset.id === from);
+  }
+  return current?.id ?? assetId;
 }

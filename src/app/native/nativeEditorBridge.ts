@@ -10,6 +10,8 @@ interface Dependencies {
   read():NativeSession|null; humanBusy():boolean; saving():boolean; busy(value:boolean):void;
   request<T>(route:string,body:unknown,headers:Record<string,string>):Promise<T>;
   accept(state:NativeSession):void;
+  /** AI タブの土台: 今のモード（サムネを開いていれば thumbnail）。無ければ heartbeat に載せない。 */
+  mode?():'video'|'thumbnail';
 }
 type Receipt={input:string;pending?:Promise<EditorOperationResult>;applied?:EditorOperationResult;saved?:EditorOperationResult;save?:Promise<EditorOperationResult>};
 const headers=(delivery?:EditorDeliveryGuard)=>{
@@ -29,7 +31,7 @@ export function createNativeEditorBridge(deps:Dependencies):AsyncEditorBridge {
     sessionId:deps.sessionId,
     presence:(projectId,failed)=>{
       const state=deps.read();
-      return state ? {status:'ready',projectId:deps.projectId,documentFormat:'sequence-v2',revision:sequenceEditorRevision(state.sessionId,state.document.revision),
+      return state ? {status:'ready',projectId:deps.projectId,documentFormat:'sequence-v2',...(deps.mode?{mode:deps.mode()}:{}),revision:sequenceEditorRevision(state.sessionId,state.document.revision),
         ...(!state.dirty?{scriptEditingHash:state.savedContentHash}:{}),
         dirty:state.dirty,saving:deps.saving(),humanBusy:deps.humanBusy(),elements:sequenceEditorTargets(state.document)}
         : projectId?{status:failed?'error':'loading',projectId}:{status:'home',projectId:null};

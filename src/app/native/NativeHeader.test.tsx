@@ -14,7 +14,7 @@ function props(extra: Partial<NativeHeaderProps> = {}): NativeHeaderProps {
 it('左＝場所・中央＝モード・右＝行動の順に並び、自動保存は設定と保存の間にある', () => {
   const view = render(<NativeHeader {...props()} />);
   const names = view.getAllByRole('button').map(b => b.getAttribute('aria-label') ?? b.textContent);
-  expect(names).toEqual(['ホームに戻る', '確認', '編集', '仕上げ', '元に戻す', 'やり直す', 'AIの作業', '設定', '保存', '書き出し']);
+  expect(names).toEqual(['ホームに戻る', '確認', '編集', '仕上げ', 'サムネ', '元に戻す', 'やり直す', 'AIの作業', '設定', '保存', '書き出し']);
   expect(view.getByRole('button', { name: '編集' }).getAttribute('aria-current')).toBe('page');
   const actions = view.container.querySelector('.native-header-actions')!;
   const order = [...actions.children].map(node => node.className);
@@ -97,4 +97,23 @@ it('「？」（使い方（ヘルプ））は通知・エラー履歴の右隣�
   expect(help.querySelector('path')?.getAttribute('d')).toContain('M12 3a9 9 0 1 0 0 18');
   fireEvent.click(help);
   expect(onHelp).toHaveBeenCalledOnce();
+});
+
+it('サムネのときは「サムネ」が選ばれ、押すと onMode に thumbnail を渡す', () => {
+  const p = props({ mode: 'thumbnail' });
+  const view = render(<NativeHeader {...p} />);
+  expect(view.getByRole('button', { name: 'サムネ' }).getAttribute('aria-current')).toBe('page');
+  fireEvent.click(view.getByRole('button', { name: '編集' }));
+  expect(p.onMode).toHaveBeenCalledWith('edit');
+});
+
+it('動画の編集データが読み込まれるまでは「サムネ」を押せない（理由はツールチップ）。ほかのモードは押せる', () => {
+  const view = render(<NativeHeader {...props({ thumbnailUnavailable: '動画の編集データを読み込んでから使えます' })} />);
+  const thumbnail = view.getByRole('button', { name: 'サムネ' }) as HTMLButtonElement;
+  expect(thumbnail.disabled).toBe(true);
+  expect(thumbnail.title).toBe('動画の編集データを読み込んでから使えます');
+  expect((view.getByRole('button', { name: '確認' }) as HTMLButtonElement).disabled).toBe(false);
+  cleanup();
+  const ready = render(<NativeHeader {...props()} />);
+  expect((ready.getByRole('button', { name: 'サムネ' }) as HTMLButtonElement).disabled).toBe(false);
 });

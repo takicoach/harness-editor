@@ -1,7 +1,7 @@
 {
   "name": "harness-editor",
   "private": true,
-  "version": "0.7.2",
+  "version": "0.8.0",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -18,11 +18,11 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.legacy-fixtures.json",
     "learn": "node --import tsx src/learning/bin.ts",
     "aggregate-cuts": "node --import tsx src/server/aggregateCutLearningBin.ts",
-    "docs:shots": "node scripts/capture-guide-shots.mjs",
     "docs:help-shots": "node scripts/capture-help-shots.mjs",
     "desktop:dev": "HARNESS_DESKTOP_NODE=$(command -v node) npm --prefix desktop start",
     "desktop:mac": "npm --prefix desktop run package:mac",
-    "test:desktop": "npm --prefix desktop test"
+    "test:desktop": "npm --prefix desktop test",
+    "docs:shots": "node scripts/capture-guide-shots.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

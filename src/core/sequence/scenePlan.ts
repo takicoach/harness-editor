@@ -117,6 +117,12 @@ export class ScenePlan {
     return gain;
   }
 }
+const shared=new WeakMap<SequenceDocument,ScenePlan>();
+/** 同じ文書オブジェクト（中身を変えないかたまり）につき1回だけ作り、タイムラインとプレビューで共有する。鍵は文書のオブジェクトそのもの（id・版ではない）。
+ * 中身の違う一時表示（試し・設定欄の見た目・無音カットの案）は別のオブジェクトなので取り違えない（設計 §2-5）。 */
+export function scenePlanFor(document:SequenceDocument):ScenePlan{
+  let plan=shared.get(document);if(!plan){plan=new ScenePlan(document);shared.set(document,plan);}return plan;
+}
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') { Object.freeze(value); for (const child of Object.values(value)) freeze(child); }
   return value;

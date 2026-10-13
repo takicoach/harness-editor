@@ -84,3 +84,12 @@ describe('reportInstructionStatus', () => {
     expect(out.ok).toBe(false);
   });
 });
+
+describe('report_instruction_status の依頼番号', () => {
+  it('「#番号」で返された報告も受け付ける', () => {
+    const inbox = createInstructionInbox();
+    const { record } = inbox.enqueuePasted({ projectId: 'p', projectDir: '/root/p', text: 'スライド: 構成案を作って', context: { frame: 0, timeSec: 0, selection: null } });
+    inbox.markPastedSubmitted();
+    expect(reportInstructionStatus(inbox, { id: `#${record.id.replace('inst-', '')}`, status: 'done', reply: '済み' })).toEqual({ ok: true });
+  });
+});

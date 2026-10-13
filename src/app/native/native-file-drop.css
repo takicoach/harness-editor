@@ -1,6 +1,8 @@
 .native-library { position:relative; }
 .native-asset-link { display:inline-flex; align-items:center; gap:4px; color:var(--fg-3); font-size:var(--native-font-sub); }
 .native-asset-link[data-unavailable="true"] { color:var(--fg-1); font-weight:650; }
+/* リンク先の中身を照合中（エラーではない）。控えめに添える。 */
+.native-asset-link-checking { margin-left:2px; padding:0 5px; border-radius:999px; background:var(--bg-3); color:var(--fg-2); }
 .native-reference-notice { align-items:flex-start; flex-wrap:wrap; }
 .native-reference-notice p { margin:4px 0 0; font-size:var(--native-font-sub); line-height:1.6; }
 .native-reference-actions { display:flex; flex-wrap:wrap; gap:4px; max-height:80px; overflow:auto; }

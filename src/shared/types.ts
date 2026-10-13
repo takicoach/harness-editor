@@ -70,6 +70,11 @@ export interface ProjectSummary {
   /** 編集データファイル群の最新 mtimeMs（相対最終編集日時表示用）。無ければ undefined。 */
   lastEditedAt?: number;
   /**
+   * サムネのメインの案の書き出し（`<案件>/サムネ/サムネ_<案件名>.png|.jpg`）。あればカードの画像にする。
+   * file は案件からの相対パス（表示用）、mtimeMs は画像の取り直し用。配信は `/api/thumbnail/cover?id=` で、パスは送らない。
+   */
+  thumbnailCover?: { file: string; mtimeMs: number };
+  /**
    * 工程ステッパー（自動判定）。現行サーバは一覧・SSE 差分の両方で常に載せる。
    * optional なのは steps を知らない旧サーバのレスポンスと互換を保つため
    * （その場合はステッパーを表示しない）。
@@ -268,6 +273,10 @@ export interface LearningDiffResponse {
   aiEditCount?: number;
   /** 新形式のみ。パネルの「比較元: …」に出す文。 */
   baselineLabel?: string;
+  /** 新形式のみ。移行した案件のメインに後から足した素材は比べていない旨（設計 第A段 §1 学習ループ）。あれば学習は完了扱いにしない。 */
+  partialNote?: string;
+  /** partialNote がある時だけ。今のタイムラインで後から足した素材が占める区間（仕上げのフレーム）。すっぽり入る字幕・効果音の候補は既定でチェックを外す。 */
+  partialRanges?: Array<{ startFrame: number; endFrame: number }>;
   /** 新形式のみ。承認要求にそのまま付けて返す照合キー。 */
   candidateKey?: LearningCandidateKey;
 }

@@ -1,7 +1,7 @@
 import {afterEach,expect,it,vi} from 'vitest';
 const fault=vi.hoisted(()=>({fail:false,foreign:false,afterLink:null as (()=>Promise<void>)|null,probeChanged:false,probeChangedApplied:0}));
 vi.mock('node:fs/promises',async load=>{const fs=await load<typeof import('node:fs/promises')>();return {...fs,symlink:async(...args:Parameters<typeof fs.symlink>)=>{if(fault.fail){fault.fail=false;if(fault.foreign)await fs.writeFile(args[1],'foreign');throw new Error('injected publication failure');}await fs.symlink(...args);const callback=fault.afterLink;fault.afterLink=null;await callback?.();}};});
-vi.mock('./media',async load=>{const actual=await load<typeof import('./media')>();return {...actual,probeSequenceAssetSource:async(...args:Parameters<typeof actual.probeSequenceAssetSource>)=>{const probed=await actual.probeSequenceAssetSource(...args);if(fault.probeChanged){fault.probeChangedApplied++;probed.asset.streams=probed.asset.streams.map(stream=>({...stream,duration:{num:999,den:1}}));}return probed;}};});
+vi.mock('./media',async load=>{const actual=await load<typeof import('./media')>();return {...actual,probePinnedSequenceAsset:async(...args:Parameters<typeof actual.probePinnedSequenceAsset>)=>{const probed=await actual.probePinnedSequenceAsset(...args);if(fault.probeChanged){fault.probeChangedApplied++;probed.streams=probed.streams.map(stream=>({...stream,duration:{num:999,den:1}}));}return probed;}};});
 import {realpath,mkdtemp,mkdir,writeFile,readFile,readdir,lstat,stat,rename,unlink,symlink,rm,utimes,readlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
@@ -66,7 +66,8 @@ it('accepts a selected symlink and reconnects after the external volume path cha
  await reconnectSequenceReference(f.project,asset,reattached);expect(asset).toEqual(saved);
  expect((await lstat(join(f.project,asset.file))).isSymbolicLink()).toBe(true);
  expect((await sequenceReferenceStatus(f.project,asset)).state).toBe('ok');
- expect(await readdir(join(f.project,'.harness'))).toEqual(['references']);
+ // 素材は複製しない。.harness/cache には照合記録（小さな JSON）だけ
+ expect((await readdir(join(f.project,'.harness'))).sort()).toEqual(['cache','references']);expect(await readdir(join(f.project,'.harness/cache'))).toEqual(['reference-verified']);
 });
 it('rejects changed bytes even when size and mtime are restored, without trusting cached verification',async()=>{
  const f=await fixture(),asset=await registerSequenceReference(f.project,f.source),lease=await openSequenceReference(f.project,asset),old=await stat(f.source);

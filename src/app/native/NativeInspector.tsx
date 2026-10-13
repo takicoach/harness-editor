@@ -34,6 +34,8 @@ import {inspectorHeading,inspectorSections,inspectorSelectionKind,inspectorGroup
 import {summarizeGroup} from './inspectorSummary';
 import {fadeFrames,fadeSeconds} from './audioFade';
 import {NativePositionPresets} from './NativePositionPresets';
+import {NativeTrialSwapSection,type TrialSwapControls} from './NativeTrialSwapSection';
+import {trialSelectable} from '../../core/sequence/trialSwap';
 
 /** 未設定の title の既定書体。capturePage/layers.tsx の CaptureTitleClip 既定 family と同じ値。 */
 const DEFAULT_TITLE_FONT_FAMILY=FONTS.find(font=>font.id==='noto-sans-jp')!.family;
@@ -50,10 +52,10 @@ function telopFontFamilyValue(family:string):string {
 }
 
 export interface NativeInspectorHandle {flush():Promise<boolean>;blurDraft():void}
-interface Props {onPreviewVisual?(clipId:string,visual:ClipVisual|null):void;projectId:string;document:SequenceDocument;readDocument():SequenceDocument|null;frame:number;onSeek(frame:number):void;selected:string[];disabled:boolean;externalBusy?:boolean;bypassLut:boolean;onBypass(value:boolean):void;onCommand(command:NativeCommand):Promise<boolean>;onUploadLut():void;onDraftChange?(dirty:boolean):void;onPrepareTextStyles():Promise<boolean>;showSceneFades?:boolean;sceneFadeSwitching?:boolean;sceneFadeTarget?:SceneFadeTarget;onSceneFadeTargetChange?(target:SceneFadeTarget):Promise<boolean>;transitionJoinKey?:string;onTransitionJoin?(joinKey:string):Promise<boolean>;exporting?:boolean;onRegisterAssets?(assetIds:string[]):Promise<boolean>;onNotice?(message:string):void;
+interface Props {onPreviewVisual?(clipId:string,visual:ClipVisual|null):void;projectId:string;document:SequenceDocument;readDocument():SequenceDocument|null;frame:number;onSeek(frame:number):void;selected:string[];disabled:boolean;externalBusy?:boolean;bypassLut:boolean;onBypass(value:boolean):void;onCommand(command:NativeCommand):Promise<boolean>;onUploadLut():void;onDraftChange?(dirty:boolean):void;onPrepareTextStyles():Promise<boolean>;showSceneFades?:boolean;sceneFadeSwitching?:boolean;sceneFadeTarget?:SceneFadeTarget;onSceneFadeTargetChange?(target:SceneFadeTarget):Promise<boolean>;transitionJoinKey?:string;onTransitionJoin?(joinKey:string):Promise<boolean>;exporting?:boolean;onRegisterAssets?(assetIds:string[]):Promise<boolean>;onNotice?(message:string):void;trialSwap?:TrialSwapControls;
   /** F14: 群の開閉を viewState に記憶するとき。省略時は自前の state で持つ（単体テスト）。 */
-  groupOpen?:Record<string,boolean>;onGroupOpen?(key:string,open:boolean):void}
-export const NativeInspector=forwardRef<NativeInspectorHandle,Props>(function NativeInspector({ onPreviewVisual,projectId,document: doc,readDocument,frame,onSeek, selected, disabled,externalBusy=false, bypassLut, onBypass, onCommand:dispatch, onUploadLut,onDraftChange,onPrepareTextStyles,showSceneFades=false,sceneFadeSwitching=false,sceneFadeTarget={kind:'head'},onSceneFadeTargetChange=async()=>false,transitionJoinKey,onTransitionJoin=async()=>false,exporting=false,onRegisterAssets=async()=>false,onNotice=()=>undefined,groupOpen,onGroupOpen },ref) {
+  groupOpen?:Record<string,boolean>;onGroupOpen?(key:string,open:boolean):void;leadingTools?:ReactNode}
+export const NativeInspector=forwardRef<NativeInspectorHandle,Props>(function NativeInspector({ onPreviewVisual,projectId,document: doc,readDocument,frame,onSeek, selected, disabled,externalBusy=false, bypassLut, onBypass, onCommand:dispatch, onUploadLut,onDraftChange,onPrepareTextStyles,showSceneFades=false,sceneFadeSwitching=false,sceneFadeTarget={kind:'head'},onSceneFadeTargetChange=async()=>false,transitionJoinKey,onTransitionJoin=async()=>false,exporting=false,onRegisterAssets=async()=>false,onNotice=()=>undefined,trialSwap,groupOpen,onGroupOpen,leadingTools },ref) {
   const element=useRef<HTMLElement>(null),[ownedPending,setOwnedPending]=useState(0),[draft,setDraft]=useState(false),[error,setError]=useState('');
   const [localOpen,setLocalOpen]=useState<Record<string,boolean>>({});
   const openMap=groupOpen??localOpen;
@@ -339,7 +341,10 @@ export const NativeInspector=forwardRef<NativeInspectorHandle,Props>(function Na
         void (any?flush():Promise.resolve(true)).then(ok=>{if(ok)groups.forEach(g=>setGroupOpen(`${kind}:${g}`,!any));});
       }}>{groups.some(isOpen)?'すべて畳む':'すべて開く'}</button>}
     </div>
+    {leadingTools}
     {error&&<p className="native-subtle" role="alert">{error} <button onClick={()=>setError('')}>閉じる</button></p>}
+    {/* 試し中は下の fieldset ごと止めるため、「素材を試す」節は fieldset の外（クリップ設定の先頭）に置く。無効化は節に渡す disabled だけで決まる。 */}
+    {clip&&trialSwap&&trialSelectable(doc,selected)&&<NativeTrialSwapSection {...trialSwap} document={doc} clipId={clip.id} projectId={projectId}/>}
     {!clip&&<div className="native-inspector-empty" role="note"><strong>クリップを選ぶと</strong><p className="native-subtle">その種類の項目（内容・見た目・配置・動き・時間）がここに出ます。</p></div>}
     {clip&&<InspectorDraftContext.Provider value={reportDraft}><fieldset key={clip.id} disabled={fieldsDisabled}>
       {contentSection}

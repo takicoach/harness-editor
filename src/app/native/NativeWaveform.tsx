@@ -1,5 +1,6 @@
 import {reportEditorError} from './notificationHistory';
 import {acquireWaveform} from './waveformCache';
+import {waitForWaveformPreparation,waitWaveformPollInterval} from './waveformPreparation';
 import {useEffect,useRef,useState} from 'react';
 import type {SequenceClip} from '../../core/sequence/model';
 import type {ScenePlan} from '../../core/sequence/scenePlan';
@@ -32,13 +33,23 @@ export function NativeWaveform({projectId,clip,plan,viewport,height,displayGain,
       const params=new URLSearchParams({id:projectId,asset:request.assetId,stream:String(request.streamIndex),rateNum:String(request.rate.num),rateDen:String(request.rate.den),
         sourceInNum:String(request.sourceIn.num),sourceInDen:String(request.sourceIn.den),fpsNum:String(request.fps.num),fpsDen:String(request.fps.den),
         startFrame:String(request.startFrame),frameCount:String(request.frameCount),clipFrames:String(request.clipFrames),bins:String(request.bins),loop:request.loop?'1':'0'});
-      shared=acquireWaveform(key,signal=>fetch(`/api/sequence/waveform?${params}`,{signal}).then(async response=>{
-        const body=await response.json();if(!response.ok)throw new Error(body.error??'波形を準備できませんでした');
-        const value=body as WaveformResponse;
-        if(value.version!==1||value.precision!=='prepared-pcm-sample-floor'||!value.request||requestKey(value.request)!==requestKey(request)
-          ||!Array.isArray(value.bins)||value.bins.length!==request.bins||value.bins.some(bin=>![bin.peak,bin.rms,bin.samples].every(Number.isFinite)||bin.peak<0||bin.rms<0||!Number.isSafeInteger(bin.samples)||bin.samples<0))throw new Error('波形データが要求した範囲と一致しません');
-        return value;
-      }));
+      shared=acquireWaveform(key,async signal=>{
+        // 準備中なら接続を返し、準備の識別子ごとの問い合わせが完了を知らせてから取り直す（設計 §2-2）。
+        for(let attempt=0;;attempt++){
+          const response=await fetch(`/api/sequence/waveform?${params}`,{signal}),body=await response.json();
+          // 503 はサーバの一時的な混雑: 失敗にせず、待ってから取り直す（上限は準備中と共通）。
+          if(response.status===503&&attempt<3){await waitWaveformPollInterval(signal);continue;}
+          if(!response.ok||body.state==='failed')throw new Error(body.error??'波形を準備できませんでした');
+          if(body.state==='preparing'){
+            if(attempt>=3||typeof body.preparationId!=='string')throw new Error('波形の準備状態を確認できませんでした');
+            await waitForWaveformPreparation(projectId,body.preparationId,signal);continue;
+          }
+          const value=body as WaveformResponse;
+          if(value.version!==1||value.precision!=='prepared-pcm-sample-floor'||!value.request||requestKey(value.request)!==requestKey(request)
+            ||!Array.isArray(value.bins)||value.bins.length!==request.bins||value.bins.some(bin=>![bin.peak,bin.rms,bin.samples].every(Number.isFinite)||bin.peak<0||bin.rms<0||!Number.isSafeInteger(bin.samples)||bin.samples<0))throw new Error('波形データが要求した範囲と一致しません');
+          return value;
+        }
+      });
       void shared.promise.then(value=>{if(!controller.signal.aborted){setLoaded({key,data:value});setFailed(null);}}).catch(error=>{if(!controller.signal.aborted){const message=error instanceof Error?error.message:'波形を準備できませんでした';setFailed({key,message});reportEditorError(projectId,'波形',message);}});
     },120);
     return()=>{clearTimeout(timer);controller.abort();shared?.release();};

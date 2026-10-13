@@ -30,6 +30,7 @@ export class SequenceSession {
     this.current = parseSequence(serializeSequence(document));
   }
   get document(): SequenceDocument { return structuredClone(this.current); }
+  get revision(): number { return this.current.revision; }
   get canUndo(): boolean { return this.undoStack.length > 0; }
   get canRedo(): boolean { return this.redoStack.length > 0; }
 

@@ -9,8 +9,8 @@ const STALE_TERMINAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const STATUSES: readonly InstructionStatus[] = ['pending', 'processing', 'done', 'failed'];
 
-/** レコードがどちらの経路（専属 / グローバル）で取得されたかの内部区分。 */
-export type TakenVia = 'dedicated' | 'global';
+/** レコードがどの経路で取得されたかの内部区分。paste は画面のボタンの依頼（AI タブの入力欄に貼る。get_next_instruction では配らない）。 */
+export type TakenVia = 'dedicated' | 'global' | 'paste';
 
 /** ディスクへ書く 1 レコード（内部 claim 情報を任意で含む）。 */
 type PersistedRecord = InstructionRecord & { takenVia?: TakenVia };
@@ -56,7 +56,7 @@ function isValidPersistedRecord(value: unknown): value is PersistedRecord {
   if (r.reply !== null && typeof r.reply !== 'string') return false;
   if (typeof r.createdAt !== 'number' || typeof r.updatedAt !== 'number') return false;
   if (!isValidContext(r.context)) return false;
-  if (r.takenVia !== undefined && r.takenVia !== 'dedicated' && r.takenVia !== 'global') return false;
+  if (r.takenVia !== undefined && r.takenVia !== 'dedicated' && r.takenVia !== 'global' && r.takenVia !== 'paste') return false;
   return true;
 }
 

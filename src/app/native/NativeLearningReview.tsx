@@ -50,5 +50,5 @@ export function NativeLearningReview({ learning }: { learning: UseLearningDiff }
     return <DiffReviewPanel key={state.jobId} diff={state.diff} submitting={state.status === 'submitting'} hidden={blocked}
       error={state.status === 'review' ? state.error : null} onApprove={learning.approve} onDismiss={learning.dismiss} />;
   }
-  return <DiffReviewDone key={state.jobId} result={state.result} recordedCount={state.recordedCount} hidden={blocked} onClose={learning.dismiss} />;
+  return <DiffReviewDone key={state.jobId} result={state.result} recordedCount={state.recordedCount} partialNote={state.partialNote} hidden={blocked} onClose={learning.dismiss} />;
 }

@@ -76,6 +76,16 @@
 /* F14: 未選択のときの空状態カード。 */
 .native-inspector-empty { margin:12px 15px; padding:11px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg-2); }
 .native-inspector-empty p { margin:4px 0 0; }
+/* 試し差し替え: 節は fieldset の外（クリップ設定の先頭）に置くので、群と同じ左右の余白を持たせる。 */
+.native-inspector>section[data-setting=trial-swap] { margin:0 15px; padding:10px 0 8px; border-top:0; border-bottom:1px solid var(--border); }
+.native-trial-candidates { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+/* いま試している候補（設計 §3-4）。.native-text-button は背景を !important で消すので、太字と下線で見分ける。 */
+.native-trial-candidates .native-text-button[aria-pressed=true] { font-weight:700; text-decoration:underline; text-underline-offset:3px; }
+/* 長い素材名でも「（使用中）」「（試し中）」の印が欄の外で切れないよう折り返す。 */
+.native-trial-candidates .native-text-button { max-width:100%; text-align:left; white-space:normal; overflow-wrap:anywhere; }
+.native-trial-end { display:flex; flex-direction:column; }
+.native-trial-end .native-check { margin:4px 0; }
+.native-error { margin:6px 0 0; color:var(--danger); font-size:var(--native-font-sub); line-height:1.6; }
 .native-inspector-foldall { margin-left:auto; min-height:24px; padding:0 8px; font-size:var(--native-font-sub); }
 .native-count { margin-left:6px; padding:0 6px; border-radius:999px; background:var(--bg-2); }
 

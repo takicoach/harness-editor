@@ -6,6 +6,7 @@ import ts from 'typescript';
 import { AUDITED_API } from '../../captureRuntime/auditImports';
 import type { SequenceAsset } from '../../core/sequence/model';
 import { managedAssetPath } from './media';
+import { watchedFs, type ReadLimit } from './fsWatch';
 
 export const NATIVE_FRAME_MODULE = '@harness/frame-runtime';
 /** The only bare specifiers a frozen component may keep; everything else must live in the folder. */
@@ -117,12 +118,12 @@ export async function storeSequenceComponent(projectDirectory:string,contents:Ui
 }
 
 /** Never recompiles legacy sources: changed/missing saved bytes are an explicit error. */
-export async function readSequenceComponent(projectDirectory: string, asset: SequenceAsset): Promise<string> {
+export async function readSequenceComponent(projectDirectory: string, asset: SequenceAsset, limit: ReadLimit = {}): Promise<string> {
   if (asset.kind !== 'component' || !/^[a-f0-9]{64}$/.test(asset.fingerprint)) throw new Error('描画部品の素材参照が不正です');
   const path = await managedAssetPath(projectDirectory, asset.file);
   const info = await lstat(join(projectDirectory, asset.file));
   if (info.isSymbolicLink() || info.size > 16 * 1024 * 1024) throw new Error('保存した描画部品が不正です');
-  const data = await readFile(path);
+  const data = await watchedFs('readFile', path, () => readFile(path), { limitMs: limit.unresponsiveMs });
   if (hash(data) !== asset.fingerprint) throw new Error('保存した描画部品が変更されています。旧ファイルへは切り替えません');
   return data.toString('utf8');
 }

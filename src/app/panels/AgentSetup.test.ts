@@ -41,8 +41,12 @@ it.each([AGENT_LOOP_PROMPT, dedicatedLoopPrompt('sample-project')])('画面の�
   expect(prompt).toContain('changes は空配列、sequence は documentId と型付き commands');
   expect(prompt).toContain('editor_validate、editor_apply の順');
   expect(prompt).toContain('runId を editor_runs で確認');
+  expect(prompt).toContain('許可された場所（外付け・デスクトップ・ダウンロード・ムービー）にある動画の絶対パスを editor_import_media に渡し');
+  expect(prompt).toContain('batchId を editor_import_runs で確認して、束が confirmed になった場合だけ完了とする');
+  expect(prompt).toContain('confirmed は開いている編集画面に並んだ状態で、保存は画面の自動保存か人の保存で行われる。');
   expect(prompt).toContain('結果不明の操作を新しい operationId で再実行しない');
   expect(prompt).toContain('saved を確認した場合だけ完了');
+  expect(prompt).toContain('editor_apply の編集は saved を確認した場合だけ完了とし（動画の取り込みは束の confirmed で完了）');
   expect(prompt).toContain('旧形式であることを確認できた案件だけ');
 });
 

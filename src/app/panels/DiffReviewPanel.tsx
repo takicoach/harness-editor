@@ -124,6 +124,16 @@ export function aiEditWarningText(count: number): string {
 export const LEDGER_WARNING_TEXT =
   'スキル側の取り出し済み台帳を更新できませんでした。この案件で /video-harness:learn の取り出しを実行すると、同じ修正が二重に記録されることがあります。';
 
+/**
+ * 字幕・効果音の候補が、後から足した素材の部分（partialRanges）にすっぽり入るか（設計 第A段 §1 学習ループ）。
+ * 比較元の時刻を持つ removed は見ない（仕上げのフレームではないため）。効果音は開始の1フレームで見る。
+ */
+export function inAddedSourcePart(item: LearningTelopDiffItem | LearningSeDiffItem, ranges: LearningDiffResponse['partialRanges']): boolean {
+  if (!ranges || item.kind === 'removed') return false;
+  const endFrame = 'endFrame' in item ? item.endFrame : item.startFrame + 1;
+  return ranges.some((range) => range.startFrame <= item.startFrame && endFrame <= range.endFrame);
+}
+
 /** 0..n-1 の全 index を持つ Set（既定=全選択）。 */
 function allSelected(n: number): Set<number> {
   return new Set(Array.from({ length: n }, (_, i) => i));
@@ -176,10 +186,14 @@ export function DiffReviewPanel({ diff, submitting, error = null, hidden = false
   const aiEditCount = diff.aiEditCount ?? 0;
   // AI の編集が入った案件は、AI の変更を人の好みとして自動昇格させないよう既定で全部オフ（設計書 D7）。
   const initial = (n: number): Set<number> => (aiEditCount > 0 ? new Set() : allSelected(n));
+  // 後から足した素材の部分にすっぽり入る字幕・効果音は、比較元が無いので既定でオフ（カット・言葉は今のまま）。
+  const added = (item: LearningTelopDiffItem | LearningSeDiffItem): boolean => inAddedSourcePart(item, diff.partialRanges);
+  const initialOutsideAdded = (items: Array<LearningTelopDiffItem | LearningSeDiffItem>): Set<number> =>
+    new Set([...initial(items.length)].filter((i) => !added(items[i]!)));
   const [selectedCut, setSelectedCut] = useState<Set<number>>(() => initial(cut.length));
   const [selectedWords, setSelectedWords] = useState<Set<number>>(() => initial(words.length));
-  const [selectedTelops, setSelectedTelops] = useState<Set<number>>(() => initial(telops.length));
-  const [selectedSes, setSelectedSes] = useState<Set<number>>(() => initial(ses.length));
+  const [selectedTelops, setSelectedTelops] = useState<Set<number>>(() => initialOutsideAdded(telops));
+  const [selectedSes, setSelectedSes] = useState<Set<number>>(() => initialOutsideAdded(ses));
   const overlay = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   useWaitingDialog(overlay, root, hidden, onDismiss, !submitting);
@@ -221,11 +235,12 @@ export function DiffReviewPanel({ diff, submitting, error = null, hidden = false
         <div className="diff-review-head">
           <strong>AIとの差分レビュー</strong>
           <span className="diff-review-summary">
-            {diff.unavailableReason?'学習候補を比較できませんでした':total===0?'今回、学習候補はありません':`あなたの編集から ${total} 件の学習候補が見つかりました`}
+            {diff.unavailableReason?'学習候補を比較できませんでした':total===0?(diff.partialNote?'取り込んだ元の素材の部分には、学習候補はありません':'今回、学習候補はありません'):`あなたの編集から ${total} 件の学習候補が見つかりました`}
           </span>
         </div>
-        {total===0&&<p className="diff-review-scope-note">書き出し後の学習チェックを実行しました。{diff.unavailableReason??'今回、記録する項目はありません。'}</p>}
+        {total===0&&<p className="diff-review-scope-note">書き出し後の学習チェックを実行しました。{diff.unavailableReason??(diff.partialNote?'後から足した素材のカットは比べていないため、学習は完了していません。':'今回、記録する項目はありません。')}</p>}
         {diff.baselineLabel !== undefined && <p className="diff-review-baseline">{baselineNoteText(diff.baselineLabel)}</p>}
+        {diff.partialNote !== undefined && <p className="diff-review-partial" role="note">{diff.partialNote}</p>}
         {aiEditCount > 0 && (
           <p className="diff-review-ai-warning" role="note">
             {aiEditWarningText(aiEditCount)}
@@ -306,6 +321,7 @@ export function DiffReviewPanel({ diff, submitting, error = null, hidden = false
                     ) : (
                       <span className="diff-review-text">{item.kind === 'added' ? item.after : item.before}</span>
                     )}
+                    {added(item) && <span className="diff-review-partial-tag">後から足した素材の部分</span>}
                   </label>
                 </li>
               ))}
@@ -331,6 +347,7 @@ export function DiffReviewPanel({ diff, submitting, error = null, hidden = false
                       {item.file}
                       {item.nearbyText !== '' ? `（${item.nearbyText}）` : ''}
                     </span>
+                    {added(item) && <span className="diff-review-partial-tag">後から足した素材の部分</span>}
                   </label>
                 </li>
               ))}
@@ -367,12 +384,15 @@ export function DiffReviewPanel({ diff, submitting, error = null, hidden = false
 export function DiffReviewDone({
   result,
   recordedCount,
+  partialNote,
   hidden = false,
   onClose,
 }: {
   result: LearningApproveResponse;
   /** 新しく記録した件数（サーバー応答の recorded の合計。応答に無ければ送った件数）。 */
   recordedCount: number;
+  /** 差分の partialNote（後から足した素材を比べていない旨）。完了画面にも1行出す。 */
+  partialNote?: string;
   /** 他のダイアログの後ろで待つ間 true（useWaitingDialog）。 */
   hidden?: boolean;
   onClose: () => void;
@@ -402,6 +422,7 @@ export function DiffReviewDone({
         <p className="diff-review-result">{learningDoneSummary(recordedCount, promoted, conflicts, result.alreadyRecorded ?? 0)}</p>
         {/* 1 本目は昇格 0 件が正常。「何も起きなかった」と読ませないための補足。 */}
         <p className="diff-review-scope-note">{learningPromotionNote()}</p>
+        {partialNote !== undefined && <p className="diff-review-partial" role="note">{partialNote}</p>}
         {result.ledgerError !== undefined && (
           <p className="diff-review-error" role="alert">
             {LEDGER_WARNING_TEXT}

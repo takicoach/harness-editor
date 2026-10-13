@@ -31,6 +31,14 @@ export const HEAVY_TESTS = [
    */
   'src/server/transitionCorpusFp.e2e.test.ts',
   'src/server/videoInsertCorpusFp.e2e.test.ts',
+  // 試し差し替えの実ブラウザ監査: 実 Chromium の操作に加え、画像 4 本・BGM 2 本を実際に書き出して比べる（数分かかる）。
+  'src/app/native/nativeTrialSwap.e2e.test.ts',
+  // コマ絵の索引: 18 素材の全フレームを Task 7 と同じ引数で 1 枚ずつ取り出し、焼き込み番号を読む（約 3,800 回の FFmpeg 起動）。
+  'src/server/sequence/framePresentation.allFrames.test.ts',
+  // コマ絵: 5 素材の全フレームを /frames と同じ経路（prepareSequenceFrames）で取り出して焼き込み番号を読む（約 1,100 回の取り出し）。
+  'src/server/sequence/frameImages.allFrames.test.ts',
+  // サムネ段階 1: 任意項目の無い描画が、変更前（35f740a9）で焼いた基準と画素一致することを見る。基準は VCS 外。
+  'src/preview/native/nativeRenderBaseline.e2e.test.ts',
 ];
 
 const heavy = process.env['HARNESS_TEST_HEAVY'] === '1';

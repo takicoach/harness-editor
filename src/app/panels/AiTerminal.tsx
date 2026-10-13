@@ -6,6 +6,11 @@
  * （aiToolSwitcher.test.ts）に分担する。
  */
 import { useEffect, useRef, useState } from 'react';
+import type { AiFocusHandle } from '../useAiFocus';
+import type { AiLoginState } from '../../shared/aiFocus';
+import { useAiPresence } from '../useAiPresence';
+import { readinessSteps } from './aiReadiness';
+import { AiFocusBar } from './AiFocusBar';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -16,11 +21,15 @@ import { terminalOptions, terminalTheme } from './claudeTerminalOptions';
 import { terminalColorsFor } from '../../shared/terminalColors';
 import { DEFAULT_AI_TOOL, type AiToolId } from '../../shared/aiToolId';
 import { pickInitialTool, toolButtonState, toolButtonHint, CODEX_INSTALL_URL, type ToolInfo } from './aiToolSwitcher';
+import { AI_TERMINAL_FOCUS_EVENT } from './aiTerminalFocus';
 import { dropPaths, hasDroppedFiles, terminalDropText } from './terminalDrop';
 
 const TOOL_STORAGE_KEY = 'sme.aiTool';
 
-export function AiTerminal() {
+/** focus は、この端末を開いている画面の状況。起動（ensure・switch）の本文に載せ、サーバはこの画面を主画面にする。 */
+export function AiTerminal({ focus = null }: { focus?: AiFocusHandle | null } = {}) {
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
   // documentElement の data-theme を購読（Waveform.tsx と同じ既存フック）。
   // xterm インスタンスは作り直さず options.theme の再代入で追従させる（下の effect）。
   const theme = useThemeValue();
@@ -29,7 +38,6 @@ export function AiTerminal() {
   const [error, setError] = useState<string | null>(null);
   const [installLog, setInstallLog] = useState<string[]>([]);
   const [removedEnv, setRemovedEnv] = useState<string[]>([]);
-  const [waiting, setWaiting] = useState(false); // 「待機を開始」送信中
   const [tools, setTools] = useState<ToolInfo[]>([]);
   /** サーバーが実際に起動しているツール。表示は必ずこれを正本にする。 */
   const [actualTool, setActualTool] = useState<AiToolId | null>(null);
@@ -44,6 +52,11 @@ export function AiTerminal() {
    * を表す別の状態機械で、もう一方のツールが connected 中でも導入進捗はここで独立に追う。
    */
   const [installingTool, setInstallingTool] = useState<AiToolId | null>(null);
+  /** 起動の目的。login はログインのための起動（最初の依頼を渡さない）。 */
+  const [purpose, setPurpose] = useState<'work' | 'login'>('work');
+  /** AI がログインの切れで終わった（Codex のログアウト後など）。案内の文言を変える。 */
+  const [loginExpired, setLoginExpired] = useState(false);
+  const purposeRef = useRef<'work' | 'login'>('work');
   /**
    * takeover phase に落ちた理由。'takeover'（別タブがこの端末を奪った）と
    * 'stale'（別タブのツール切替でこの接続が無効になった）は原因が違い、
@@ -105,7 +118,11 @@ export function AiTerminal() {
     if (initial !== null) { setWantTool(initial); wantToolRef.current = initial; }
     setActualTool(s.current);
     const usable = initial !== null && s.tools.some((t) => t.id === initial && t.installed && t.versionOk);
-    dispatch({ type: 'status', installed: usable });
+    // 準備（導入・ログイン）ができるまでは作業用に起動しない（設計書 7）。確かめられなければ起動する。
+    const login: AiLoginState = usable && initial !== null
+      ? await fetchJson<{ state: AiLoginState }>(`/api/ai/login?tool=${initial}`).then(r => r.state).catch(() => 'unknown' as const)
+      : 'unknown';
+    dispatch({ type: 'status', installed: usable, login });
   }
 
   // 初回: ツール一覧と導入状態を確認。
@@ -164,7 +181,7 @@ export function AiTerminal() {
         // 制約がある（claudeArgs/EnsureOpts 参照）。ここで送るのは「今の」テーマでよい。
         const ensured = await putJsonPost<{ actualTool: AiToolId | null; notes: string[] }>(
           '/api/pty/ensure',
-          { theme: themeRef.current, tool: wantToolRef.current },
+          { theme: themeRef.current, tool: wantToolRef.current, purpose: purposeRef.current, ...(focusRef.current ? { focus: focusRef.current.beat() } : {}) },
         ).catch(async (err: unknown) => {
           // tool-mismatch（409）は「別タブが別のツールを動かしている」。エラーで止めず
           // サーバーの実ツールへ表示を寄せ、そのまま接続する。
@@ -199,7 +216,7 @@ export function AiTerminal() {
           if (wsRef.current !== ws) return;
           if (typeof e.data !== 'string') return;
           if (e.data.startsWith('{')) {
-            let m: { type?: string; data?: string; code?: number; keys?: string[] };
+            let m: { type?: string; data?: string; code?: number; keys?: string[]; reason?: unknown };
             try { m = JSON.parse(e.data); } catch { writeTerm(e.data); return; }
             if (m.type === 'auth-ok') { dispatch({ type: 'ws-auth-ok' }); return; }
             if (m.type === 'data' && typeof m.data === 'string') { writeTerm(m.data); return; }
@@ -207,7 +224,9 @@ export function AiTerminal() {
             if (m.type === 'removed-env' && Array.isArray(m.keys)) { setRemovedEnv(m.keys); return; }
             if (m.type === 'exit') {
               const code = typeof m.code === 'number' ? m.code : -1;
-              dispatch({ type: 'ws-exit', code });
+              const reason = m.reason === 'auth' ? 'auth' : null;
+              if (reason === 'auth') { purposeRef.current = 'work'; setPurpose('work'); setLoginExpired(true); }
+              dispatch({ type: 'ws-exit', code, reason });
               return;
             }
             if (m.type === 'takeover') { setTakeoverReason('takeover'); dispatch({ type: 'ws-takeover' }); return; }
@@ -295,6 +314,13 @@ export function AiTerminal() {
     if (termRef.current) termRef.current.options.theme = terminalTheme(theme);
   }, [theme]);
 
+  // ボタンの依頼を入力欄に貼った後、端末にカーソルを置く（送るのは利用者の Enter）。
+  useEffect(() => {
+    const focusTerm = () => termRef.current?.focus();
+    window.addEventListener(AI_TERMINAL_FOCUS_EVENT, focusTerm);
+    return () => window.removeEventListener(AI_TERMINAL_FOCUS_EVENT, focusTerm);
+  }, []);
+
   // コンポーネント全体の unmount 時に WS を確実に閉じる。phase 遷移（starting→connected 等）
   // のたびには実行しない（deps: [] で mount/unmount 1 回のみ）ため、接続確立直後に
   // 誤って閉じてしまうことがない。
@@ -364,17 +390,6 @@ export function AiTerminal() {
     }
   }
 
-  async function handleStartWaiting(): Promise<void> {
-    setWaiting(true);
-    try {
-      await putJsonPost('/api/pty/waiting', {});
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setWaiting(false);
-    }
-  }
-
   /**
    * ツール切替。確認ダイアログ → /api/pty/switch → 成功したら wsRef を閉じて
    * dispatch({type:'restart'}) で starting effect を再実行させる
@@ -382,6 +397,34 @@ export function AiTerminal() {
    * 再接続の発火はこの応答後（switchTool 成功）に限定する — onclose では再接続しない
    * （申し送り2）。
    */
+  /** 「ログインする」: 最初の依頼を渡さずに起動し、端末でログインしてもらう。 */
+  function handleLoginOpen(): void {
+    purposeRef.current = 'login';
+    setPurpose('login');
+    dispatch({ type: 'login-open' });
+  }
+  /** 「ログインできたので始める」: ログインを確かめてから、作業用に起動し直す（ここで最初の依頼が 1 回入る）。 */
+  async function handleLoginDone(): Promise<void> {
+    const tool = actualTool ?? wantTool;
+    const state = await fetchJson<{ state: AiLoginState }>(`/api/ai/login?tool=${tool}`).then(r => r.state).catch(() => 'unknown' as const);
+    if (state === 'missing') { setError('まだログインできていないようです。下の AI の画面の案内どおりにログインしてから押してください。'); return; }
+    setSwitching(true);
+    setError(null);
+    try {
+      purposeRef.current = 'work';
+      setPurpose('work');
+      setLoginExpired(false);
+      await putJsonPost('/api/pty/switch', { tool, theme: themeRef.current, purpose: 'work', ...(focusRef.current ? { focus: focusRef.current.beat() } : {}) });
+      wsRef.current?.close();
+      wsRef.current = null;
+      dispatch({ type: 'restart' });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSwitching(false);
+    }
+  }
+
   async function handleSwitchTool(next: AiToolId): Promise<void> {
     if (next === wantTool || switching) return;
     const from = currentLabel(actualTool ?? wantTool);
@@ -393,9 +436,16 @@ export function AiTerminal() {
     setSwitching(true);
     setError(null);
     try {
+      // 切り替え先のログインを確かめてから起動する（設計書 7）。未ログインなら最初の依頼を渡さず、ログイン用に起動する。確かめられなければ作業用に起動する。
+      const loginState = await fetchJson<{ state: AiLoginState }>(`/api/ai/login?tool=${next}`).then(r => r.state).catch(() => 'unknown' as const);
+      const nextPurpose: 'work' | 'login' = loginState === 'missing' ? 'login' : 'work';
+      purposeRef.current = nextPurpose;
+      setPurpose(nextPurpose);
       const r = await putJsonPost<{ actualTool: AiToolId; notes: string[] }>('/api/pty/switch', {
         tool: next,
         theme: themeRef.current,
+        purpose: nextPurpose,
+        ...(focusRef.current ? { focus: focusRef.current.beat() } : {}),
       });
       localStorage.setItem(TOOL_STORAGE_KEY, r.actualTool);
       setWantTool(r.actualTool);
@@ -412,8 +462,12 @@ export function AiTerminal() {
     }
   }
 
+  const presence = useAiPresence(phase === 'starting' || phase === 'connected');
+  const readiness = readinessSteps({ phase, purpose, connected: presence?.connected === true, loginExpired });
+
   return (
     <div className="clt">
+      {(phase === 'starting' || phase === 'connected') && <AiFocusBar view={presence?.focus ?? null} />}
       <div className="clt-tools" role="radiogroup" aria-label="使う AI">
         {tools.map((t) => {
           const state = toolButtonState(t);
@@ -462,6 +516,26 @@ export function AiTerminal() {
           );
         })}
       </div>
+      {/* 使えるようになったら畳む（狭い右の列で端末の行を空けるため。端末そのものが「使える」を示す）。 */}
+      {readiness && !readiness.ready && (
+        <section className="clt-ready" aria-label="AI を使うまで">
+          <ol className="clt-ready-steps">
+            {readiness.steps.map((step) => <li key={step.label} data-state={step.state}>{step.label}</li>)}
+          </ol>
+          <p className="clt-note" role="status">{readiness.message}</p>
+          <p className="clt-note">動画とサムネを AI に頼むには、この AI タブが必要です（スライドは「貼り付け」でも頼めます）。</p>
+        </section>
+      )}
+      {phase === 'need-login' && (
+        <div className="clt-setup clt-actions">
+          <button type="button" className="btn-primary" onClick={handleLoginOpen}>ログインする</button>
+        </div>
+      )}
+      {(phase === 'connected' || phase === 'exited') && purpose === 'login' && (
+        <div className="clt-actions">
+          <button type="button" className="btn-primary" disabled={switching} onClick={() => void handleLoginDone()}>ログインできたので始める</button>
+        </div>
+      )}
       {wantTool === 'codex' && (
         <p className="clt-note">
           初回だけ Codex が英語で確認を出します（このフォルダを信頼しますか）。Enter を押せば進めます。
@@ -532,18 +606,12 @@ export function AiTerminal() {
             {dropHover && <div className="clt-drop-hint" aria-hidden="true">ここで離すと、ファイルを AI に渡します</div>}
           </div>
           {attaching && <p className="hint">ファイルを AI に渡しています…</p>}
-          {phase === 'connected' && (
-            <div className="clt-actions">
-              <button type="button" className="clt-waiting-btn" disabled={waiting}
-                onClick={() => void handleStartWaiting()}>
-                待機を開始（編集指示を受け付ける）
-              </button>
-            </div>
-          )}
           {phase === 'exited' && (
             <div className="clt-exit">
-              <p>{currentLabel(actualTool ?? wantTool)} が終了しました。</p>
-              <button type="button" onClick={() => dispatch({ type: 'restart' })}>再起動する</button>
+              {purpose === 'login'
+                ? <p>{currentLabel(actualTool ?? wantTool)} のログインの画面が閉じました。ログインできたら「ログインできたので始める」を押してください。</p>
+                : <p>{currentLabel(actualTool ?? wantTool)} が終了しました。</p>}
+              <button type="button" onClick={() => dispatch({ type: 'restart' })}>{purpose === 'login' ? 'もう一度ログインする' : '再起動する'}</button>
             </div>
           )}
           {phase === 'takeover' && (

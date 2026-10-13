@@ -20,6 +20,15 @@ import { ptySessions } from './ptySession';
 import { getProjectRoot } from './projectRoot';
 import { JOB_BODY_MAX_BYTES, readJsonBody } from './readBody';
 import { removeTerminalAttachments, saveTerminalAttachment } from './terminalAttachment';
+import { aiFocus } from './aiFocus';
+import { firstPrompt, withRequestNumber } from '../shared/agentPrompts';
+import type { AiPresence } from '../shared/aiFocus';
+import { instructionInbox, validateInstructionInput } from './instructionInbox';
+import { aiTabMcpLastSeen } from './mcp/aiTabClient';
+import { aiLoginState } from './aiLogin';
+import { resolveProjectDir } from './projectRoot';
+import { thumbnailAgent } from './thumbnail/agent';
+import { createThumbnailAiButtonRequest, thumbnailAiLatest, type ThumbnailAiApiDeps } from './thumbnail/aiRequestApi';
 
 /** 課金系の環境変数が検出されたか（UI 警告用。除去そのものは ptySession が行う）。 */
 export function apiKeyDetected(env: NodeJS.ProcessEnv): boolean {
@@ -72,6 +81,17 @@ async function readBodySafe(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
+/** AI タブを開いた画面を主画面にする（ensure・switch の本文の focus）。形が違っても起動は止めない。 */
+function claimFocus(body: Record<string, unknown>): void {
+  if (body.focus === undefined) return;
+  try { aiFocus.claim(body.focus); } catch { /* 古い画面・壊れた本文は主画面にしない */ }
+}
+
+/** 起動の引数で 1 回だけ渡す最初の依頼。ログインのための起動（purpose=login）では渡さない。 */
+function launchPrompt(body: Record<string, unknown>): string | null {
+  return body.purpose === 'login' ? null : firstPrompt(aiFocus.primary()?.screen ?? null);
+}
+
 function readTheme(body: Record<string, unknown>): 'light' | 'dark' {
   return body.theme === 'light' ? 'light' : 'dark';
 }
@@ -117,6 +137,7 @@ export async function handleAiApi(
 
   if (url.pathname === '/api/pty/ensure' && method === 'POST') {
     const body = await readBodySafe(req);
+    claimFocus(body);
     const tool = readTool(body);
     if (tool === null) { sendJson(res, 400, { error: '対応していない AI ツールです' }); return true; }
     const r = await ptySessions.ensure({
@@ -126,6 +147,8 @@ export async function handleAiApi(
       port: ctx.port,
       theme: readTheme(body),
       tool,
+      firstPrompt: launchPrompt(body),
+      purpose: body.purpose === 'login' ? 'login' : 'work',
     });
     if (!r.ok) {
       sendJson(res, 409, { error: r.error, code: r.code, actualTool: r.actualTool });
@@ -142,6 +165,7 @@ export async function handleAiApi(
 
   if (url.pathname === '/api/pty/switch' && method === 'POST') {
     const body = await readBodySafe(req);
+    claimFocus(body);
     // switch は ensure と違い「未指定なら既定ツール」を許さない（切り替え先を明示させる）。
     // 「未指定」と「指定されたが許可リスト外」は原因が違うので別文言にし、かつ
     // body.tool === undefined を先に見ることでその非対称の意図をコードからも読めるようにする。
@@ -161,6 +185,8 @@ export async function handleAiApi(
       port: ctx.port,
       theme: readTheme(body),
       tool,
+      firstPrompt: launchPrompt(body),
+      purpose: body.purpose === 'login' ? 'login' : 'work',
     });
     if (!r.ok) { sendJson(res, 409, { error: r.error, code: r.code }); return true; }
     sendJson(res, 200, { ok: true, actualTool: r.actualTool, sessionId: r.sessionId, notes: r.notes });
@@ -173,10 +199,67 @@ export async function handleAiApi(
     return true;
   }
 
-  if (url.pathname === '/api/pty/waiting' && method === 'POST') {
-    const r = ptySessions.startWaiting();
-    if (!r.ok) { sendJson(res, 409, { error: r.error }); return true; }
+  // AI タブの土台: 画面の状況（主画面の台帳）。画面は 2 秒ごとに送り、閉じる時は beacon で release を送る。
+  if (url.pathname === '/api/ai/focus' && method === 'GET') {
+    sendJson(res, 200, aiFocus.view());
+    return true;
+  }
+  if (url.pathname === '/api/ai/focus' && method === 'POST') {
+    const body = await readBodySafe(req);
+    try { sendJson(res, 200, aiFocus.beat(body)); }
+    catch { sendJson(res, 400, { error: '画面の状況の形が正しくありません' }); }
+    return true;
+  }
+  if (url.pathname === '/api/ai/focus/release' && method === 'POST') {
+    const body = await readBodySafe(req);
+    if (typeof body.pageId === 'string') aiFocus.release(body.pageId);
     sendJson(res, 200, { ok: true });
+    return true;
+  }
+  // AI タブの土台: 画面のボタンの依頼。記録を作って AI の入力欄に貼るだけ（送るのは利用者の Enter）。
+  if (url.pathname === '/api/ai/requests' && method === 'POST') {
+    const input = validateInstructionInput(await readJsonBody(req, JOB_BODY_MAX_BYTES));
+    if (ptySessions.state() !== 'running') {
+      sendJson(res, 409, { error: 'AI が起動していません。AI タブ（AI の作業）を開いて AI が起動してから、もう一度押してください', code: 'AI_NOT_RUNNING' });
+      return true;
+    }
+    const { record, created } = instructionInbox.enqueuePasted({ ...input, projectDir: resolveProjectDir(getProjectRoot(), input.projectId) });
+    if (created) {
+      const pasted = ptySessions.paste(withRequestNumber(record.text, record.id));
+      if (!pasted.ok) {
+        instructionInbox.updateStatus(record.id, 'failed', 'AI の入力欄に貼れませんでした');
+        sendJson(res, 409, { error: pasted.error, code: 'AI_NOT_RUNNING' });
+        return true;
+      }
+    }
+    sendJson(res, 200, record);
+    return true;
+  }
+  // サムネの AI: 画面の「AI タブに入れる」と、欄の下の状態の照会。
+  if (url.pathname === '/api/ai/thumbnail-requests') {
+    const deps: ThumbnailAiApiDeps = { agent: thumbnailAgent, inbox: instructionInbox, running: () => ptySessions.state() === 'running',
+      paste: text => ptySessions.paste(text), projectDir: projectId => resolveProjectDir(getProjectRoot(), projectId) };
+    if (method === 'POST') { const result = createThumbnailAiButtonRequest(await readJsonBody(req, JOB_BODY_MAX_BYTES), deps); sendJson(res, result.status, result.body); return true; }
+    if (method === 'GET') {
+      const projectId = url.searchParams.get('id');
+      if (!projectId) { sendJson(res, 400, { error: 'プロジェクトIDが必要です' }); return true; }
+      try { sendJson(res, 200, thumbnailAiLatest(projectId, deps)); } catch { sendJson(res, 404, { error: '案件が見つかりません' }); }
+      return true;
+    }
+  }
+  // 「AI が使えるか」: 端末が起動していて、その起動の後に AI タブの MCP 接続が来た（受け箱の待機ではなく）。
+  if (url.pathname === '/api/ai/presence' && method === 'GET') {
+    const terminal = ptySessions.state(), startedAt = ptySessions.startedAt(), seen = aiTabMcpLastSeen();
+    const mcp = terminal === 'running' && startedAt !== null && seen !== null && seen >= startedAt;
+    const presence: AiPresence = { terminal, tool: ptySessions.currentTool(), mcp, connected: mcp, focus: aiFocus.view() };
+    sendJson(res, 200, presence);
+    return true;
+  }
+
+  if (url.pathname === '/api/ai/login' && method === 'GET') {
+    const tool = url.searchParams.get('tool');
+    if (!isAiToolId(tool)) { sendJson(res, 400, { error: '対応していない AI ツールです' }); return true; }
+    sendJson(res, 200, { state: await aiLoginState(tool, { editorDir: ctx.editorDir, env: ctx.env }) });
     return true;
   }
 
@@ -245,6 +328,8 @@ export function smeAi(): Plugin {
     name: 'sme-ai',
     configureServer(server) {
       server.httpServer?.on('upgrade', handlePtyUpgrade);
+      // AI が終了したら、貼り付けの依頼を「送られませんでした」「結果不明」にする（再起動後に結果を照会して送り直す）。
+      ptySessions.onExit(() => { instructionInbox.failPasted(); });
       server.httpServer?.on('close', () => {
         claudeInstallJob.killAll();
         ptySessions.killAll();

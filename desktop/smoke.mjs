@@ -5,6 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {createRequire} from 'node:module';
+const {childHasExited}=createRequire(import.meta.url)('./policy.cjs');
 const build=JSON.parse(await readFile(new URL('../dist/desktop/latest.json',import.meta.url),'utf8'));
 const testRoot=await mkdtemp(join(tmpdir(),'harness-desktop-smoke-'));
 const extracted=join(testRoot,'解凍したアプリ');
@@ -33,7 +35,7 @@ async function launch(){
   return page;
 }
 async function close(){
-  if(!app||app.process().exitCode!==null)return;
+  if(!app||childHasExited(app.process()))return;
   const closed=app.waitForEvent('close',{timeout:10000}).catch(()=>{});
   await app.evaluate(({dialog,app})=>{dialog.showMessageBoxSync=()=>1;app.quit();});await closed;
 }

@@ -26,17 +26,18 @@ function restoredCut(document:SequenceDocument,entry:ArchiveEntry):RestoredCut{
 /** Only a waveform needs the audio plan; a filmstrip never asks for one. */
 function restoredPlan(cut:RestoredCut):ScenePlan{return cut.plan??=new ScenePlan(cut.graph);}
 
-interface Props {document:SequenceDocument;projectId:string;map:FinishDisplayMap;trackId:string;pixels:number;scrollLeft:number;viewportWidth:number;height:number;gain:number}
+interface Props {document:SequenceDocument;projectId:string;map:FinishDisplayMap;trackId:string;pixels:number;scrollLeft:number;viewportWidth:number;height:number;gain:number;
+ /** 最初のプレビューの絵が出るまで、コマ絵を取りに行かない（設計 §2-1）。 */held?:boolean}
 /** Saved source clocks stay local to each archive; only placement uses the display axis. */
-export function NativeArchivedMedia({document,projectId,map,trackId,pixels,scrollLeft,viewportWidth,height,gain}:Props){
+export function NativeArchivedMedia({document,projectId,map,trackId,pixels,scrollLeft,viewportWidth,height,gain,held}:Props){
  const entries=useMemo(()=>new Map((document.cutArchive?.entries??[]).map(entry=>[entry.id,entry])),[document]);
  return <>{map.blocks.map(block=>{
   if(block.kind!=='archived'||!waveformViewport(block.displayStart,block.localEnd,pixels,scrollLeft,viewportWidth))return null;
   const entry=entries.get(block.entryId);if(!entry)return null;
-  return <ArchivedBlock key={block.entryId} {...{document,entry,projectId,trackId,pixels,scrollLeft,viewportWidth,height,gain}} start={block.displayStart} entryId={block.entryId}/>;
+  return <ArchivedBlock key={block.entryId} {...{document,entry,projectId,trackId,pixels,scrollLeft,viewportWidth,height,gain,held}} start={block.displayStart} entryId={block.entryId}/>;
  })}</>;
 }
-function ArchivedBlock({document,entry,projectId,trackId,pixels,scrollLeft,viewportWidth,height,gain,start,entryId}:Omit<Props,'map'> & {entry:ArchiveEntry;start:number;entryId:string}){
+function ArchivedBlock({document,entry,projectId,trackId,pixels,scrollLeft,viewportWidth,height,gain,held,start,entryId}:Omit<Props,'map'> & {entry:ArchiveEntry;start:number;entryId:string}){
  // 位置と尺は保存済みのクリップだけで決まる。復元グラフを作る前に判定し、画面に映らない
  // カットや、このトラックに映像・音声を持たないカットでは 1 件も復元しない。
  const spans=useMemo(()=>archivedEntrySpans(entry,trackId),[entry,trackId]);
@@ -50,7 +51,7 @@ function ArchivedBlock({document,entry,projectId,trackId,pixels,scrollLeft,viewp
   if(!restored){if(import.meta.env.DEV)console.warn('[native-archived-media] 復元グラフに保存済みクリップがありません',{entryId,clipId:clip.id});return null;}
   return <div key={restored.id} className={`native-archived-media native-archived-${restored.content.kind}`} data-archive-entry={entryId} aria-hidden="true"
    style={{position:'absolute',pointerEvents:'none',left:NATIVE_TIMELINE_GUTTER+(start+from)*pixels,width:duration*pixels,top:5,bottom:5,overflow:'hidden',borderRadius:4}}>
-   {restored.content.kind==='video'?<NativeFilmstrip document={cut.graph} projectId={projectId} clip={restored} sourceOffsetFrames={from-restored.startFrame} displayStartFrame={start+from} displayDuration={duration} pixelsPerFrame={pixels} scrollLeft={scrollLeft} viewportWidth={viewportWidth}/>
+   {restored.content.kind==='video'?<NativeFilmstrip document={cut.graph} projectId={projectId} clip={restored} sourceOffsetFrames={from-restored.startFrame} displayStartFrame={start+from} displayDuration={duration} pixelsPerFrame={pixels} scrollLeft={scrollLeft} viewportWidth={viewportWidth} held={held}/>
     :<NativeWaveform projectId={projectId} clip={restored} plan={restoredPlan(cut)} viewport={viewport} height={Math.max(8,height-18)} displayGain={gain} sourceOffsetFrames={from-restored.startFrame} displayStartFrame={from} displayDuration={duration}/>}
   </div>;
  })}</>;

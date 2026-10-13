@@ -5,6 +5,7 @@ import type { ProjectSteps, ProjectSummary } from '../../shared/types';
 import { formatClock, formatSize } from '../../shared/format';
 import { timeNumber } from '../../core/sequence/time';
 import { readExportRecord } from './exportRecords';
+import { thumbnailCoverOf } from '../thumbnail/cover';
 
 export const sequenceFile = (directory: string) => join(directory, '.harness', 'project.v2.json');
 /** Presence is distinct from validity: a broken v2 file must never fall back to old TSX. */
@@ -48,7 +49,8 @@ export function readSequenceSummary(directory: string): Omit<ProjectSummary, 'st
   for (const asset of doc.assets) {
     try { const info = lstatSync(join(directory, asset.file)); if (info.isFile() && !info.isSymbolicLink()) size += info.size; } catch { /* Missing assets are reported when opened. */ }
   }
-  return { name: doc.name, dir: directory, orientation: doc.resolution.width === doc.resolution.height ? 'sq' : doc.resolution.width > doc.resolution.height ? 'h' : 'v',
+  const thumbnailCover = thumbnailCoverOf(directory);
+  return { name: doc.name, dir: directory, ...(thumbnailCover ? { thumbnailCover } : {}), orientation: doc.resolution.width === doc.resolution.height ? 'sq' : doc.resolution.width > doc.resolution.height ? 'h' : 'v',
     durationLabel: formatClock(doc.sequenceEndFrame / timeNumber(doc.fps)), sizeLabel: formatSize(size), videoFile: null,
     ...(video ? { videoAssetId: video.id } : {}), ...(imageAssetId ? { imageAssetId } : {}), ...(audioOnly ? { audioOnly: true } : {}), lastEditedAt: lstatSync(sequenceFile(directory)).mtimeMs, steps: sequenceSteps(directory, saved) };
 }

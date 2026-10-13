@@ -22,7 +22,7 @@ vi.mock('../layout/useTheme', () => ({ useTheme: () => ({ theme: 'dark', toggle:
 
 function stubFetch(tutorialEnabled: boolean, projects: unknown[] = []): void {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
-    ok: true, json: async () => (String(url).startsWith('/api/config') ? { tutorialEnabled } : { projects }),
+    ok: true, json: async () => (String(url).startsWith('/api/config') ? { tutorialEnabled } : String(url).startsWith('/api/slides/') ? { projects: [] } : { projects }),
   })));
 }
 const CARD = { id: 'p-card', name: 'p-card', orientation: 'v', durationLabel: '1:00', sizeLabel: '1 MB', videoFile: null, status: 'telop',

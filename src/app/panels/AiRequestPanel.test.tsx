@@ -6,9 +6,10 @@ import { ClaudePanel } from './ClaudePanel';
 
 const state = vi.hoisted(() => ({ receive: (_message: unknown) => {}, post: vi.fn(), get: vi.fn() }));
 vi.mock('../eventBus', () => ({ useEventChannel: (_ch: string, receive: (m: unknown) => void) => { state.receive = receive; } }));
-vi.mock('../useAgentConnected', () => ({ useAgentConnected: () => ({ global: false, dedicated: false }) }));
+vi.mock('../useAiPresence', () => ({ useAiPresence: () => ({ terminal: 'idle', tool: null, mcp: false, connected: false, focus: { primary: null, request: null, lastRead: null } }) }));
 vi.mock('../fetchJson', () => ({ putJsonPost: (...args: unknown[]) => state.post(...args), fetchJson: (...args: unknown[]) => state.get(...args) }));
 vi.mock('./AiTerminal', () => ({ AiTerminal: () => <div data-testid="actual-terminal">接続画面</div> }));
+vi.mock('../useAiFocus', () => ({ useAiFocus: () => ({ pageId: 'page-test', screen: null, beat: () => ({ pageId: 'page-test', seq: 1, screen: null }) }) }));
 const context = () => ({ frame: 30, timeSec: 1, selection: null });
 const props = { open: true, onToggle: () => {}, buildContext: context, embedded: true };
 function receipt(input: InstructionInput, extra: Partial<InstructionRecord> = {}): InstructionRecord {
@@ -43,7 +44,7 @@ it('replays exactly the same receipt request after lost acknowledgement, even af
   const original = state.post.mock.calls[0]![1];first.unmount();
   render(<ClaudePanel {...props} projectId="A" buildContext={() => ({ frame: 999, timeSec: 33.3, selection: null })} />);
   fireEvent.click(screen.getByRole('button', { name: 'この依頼の受付を確認' }));
-  await screen.findByText('受付済み・AI待ち');
+  await screen.findByText('送信待ち（AI タブで Enter）');
   expect(state.post.mock.calls[1]![1]).toEqual(original);
   expect(state.post.mock.calls[1]![1].context.frame).toBe(30);
   expect(screen.getAllByText('受付番号：inst-1')).toHaveLength(1);
@@ -71,7 +72,7 @@ it('keeps an acknowledged event when the HTTP response later fails', async () =>
   act(() => state.receive({ type: 'update', record: receipt(state.post.mock.calls[0]![1]) }));
   await act(async () => reject(new Error('lost response')));
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(screen.getByText('受付済み・AI待ち')).toBeTruthy();
+  expect(screen.getByText('送信待ち（AI タブで Enter）')).toBeTruthy();
 });
 
 it('does not regress history on stale events or infer save from the agent reply', async () => {

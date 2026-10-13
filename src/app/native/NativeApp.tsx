@@ -12,12 +12,16 @@ import { HelpModal } from '../help/HelpModal';
 import { TutorialOverlay } from '../tutorial/TutorialOverlay';
 import { useNativeTutorial } from '../tutorial/useNativeTutorial';
 import { NativeWorkspace } from './NativeWorkspace';
-import { createNativeImageProject, createNativeProject } from './api';
+import { abandonImportItems, cancelImportBatch, createImportBatch, createNativeEmptyProject, createNativeImageProject, createNativeProject, referenceImportItem, retryOnce, savedNativeDocument, uploadImportItem } from './api';
+import {desktopFilePath} from './fileReference';
+import {createWithDurations,handOverImportSeconds} from './importSeconds';
+import {deleteProjectRequest} from '../trashApi';
 import {useNativeFileReference} from './useNativeFileReference';
 import './native.css';
 import './native-polish.css';
 import type {TransferProgress} from '../components/TaskProgress';
 import {useNativeNavigation} from './useNativeNavigation';
+import { SlidesHomeSection } from './slides/SlidesHomeSection';
 
 /** Keep the established project dashboard while making native editing the normal entry. */
 export function NativeApp() {
@@ -30,6 +34,19 @@ export function NativeApp() {
     return () => { window.removeEventListener('dragover', prevent); window.removeEventListener('drop', prevent); };
   }, []);
   return projectId ? <NativeWorkspace key={`${projectId}:${workspaceVersion}`} projectId={projectId} navigation={navigation} onReload={()=>setWorkspaceVersion(value=>value+1)} /> : <NativeHome navigate={id=>void navigation.navigate(id)} />;
+}
+
+/** 空の作品の版（作成時の文書は版0。createDocuments の buildEmptyDocument）。 */
+const UNTOUCHED_REVISION = 0;
+/**
+ * 複数の動画からの作成に失敗した時、作ったばかりの空の作品をゴミ箱へ移す（一覧に空の作品だけが残らないように）。
+ * クリップ・素材が無く、版が作成時のまま（誰も編集していない）と確かめられた時だけ。確かめられない・移せない時は残す。
+ */
+async function dropUntouchedProject(id: string): Promise<void> {
+  try {
+    const document = await savedNativeDocument(id);
+    if (document && document.clips.length === 0 && document.assets.length === 0 && document.revision === UNTOUCHED_REVISION) await deleteProjectRequest(id);
+  } catch { /* 残す */ }
 }
 
 /** 編集画面へ全ページ遷移する（テストでは NativeHome の navigate で差し替える）。 */
@@ -73,6 +90,36 @@ export function NativeHome({ navigate = navigateToProject }: { navigate?: (id: s
     stages.current.set(id, task); void task.finally(() => { if (stages.current.get(id) === task) stages.current.delete(id); });
   };
   const create = async (name: string, source: CreateSource,preferCopy:boolean,onProgress?:(progress:TransferProgress)=>void) => {
+    if (source.kind === 'empty') { const result = await createNativeEmptyProject(name); pick(result.id); return; }
+    if (source.kind === 'videos') {
+      // 空の作品を作り、ホームの束（開いた編集画面が準備完了で自動確定する）を作ってから開く（設計 §1 ③）。
+      // デスクトップ版のリンクは実パスを渡す。コピーは実パスを渡さず画面から送る（編集画面の「コピーして追加」と同じ。許可された場所の外の動画もコピーできる）。
+      // 長さの先読み（デスクトップ版）は束の作成と並行に行い、遷移の直前に読めている分を開く作品へ引き継ぐ。ブラウザ版は受け渡しを終えてから開く。
+      const { id } = await createNativeEmptyProject(name), paths = source.files.map(desktopFilePath), desktop = paths.every(Boolean), link = desktop && !preferCopy;
+      const { view, stop } = await createWithDurations(desktop ? source.files : null, () => createImportBatch(id, { requestId: crypto.randomUUID(), mode: preferCopy ? 'copy' : 'link', origin: 'home',
+        items: source.files.map((file, index) => ({ key: String(index), name: file.name, ...(link ? { path: paths[index] } : {}) })) }))
+        .catch(async (error: unknown) => { await dropUntouchedProject(id); throw error; });
+      // デスクトップ版のリンクは、束の作成で実パスを渡し終えている（サーバは応答の後に準備を始めるので、応答の項目は waiting のまま）。
+      // もう一度渡すとサーバが「受け付け済み」で断るので、何も渡さずに開く（編集画面の importVideos の `if(link)` と同じ）。
+      // ブラウザ版の参照（実パスなし）とコピーは、受付順に1本ずつ渡す。最初に渡せなかった素材で止め、渡せなかった分は束の中で失敗にする（1本も渡せなければ束を取り消して理由を出す）。
+      const waiting = link ? [] : view.items.filter(entry => entry.phase === 'waiting'), undelivered: string[] = []; let delivered = 0, failure: unknown;
+      for (const item of waiting) {
+        if (failure !== undefined) { undelivered.push(item.itemId); continue; }
+        const file = source.files[Number(item.key)]!;
+        try {
+          if (preferCopy) await uploadImportItem(id, view.batchId, item.itemId, file, onProgress);
+          else { const reference = await fileReference.resolve(file, onProgress); await referenceImportItem(id, { batchId: view.batchId, itemId: item.itemId, ...reference }); }
+          delivered++;
+        } catch (error) { undelivered.push(item.itemId); failure = error ?? new Error('動画を取り込めませんでした'); }
+      }
+      if (waiting.length && !delivered) {
+        stop(); await cancelImportBatch(id, view.batchId).catch(() => undefined); await dropUntouchedProject(id); throw failure;
+      }
+      // ページを読み直す遷移（既定の navigateToProject）では要求が途中で切れうる。失敗の印が届いてから開く（届かないと束が準備中のまま残り、自動で並ばない）。
+      if (undelivered.length) await retryOnce(() => abandonImportItems(id, view.batchId, undelivered)).catch(() => undefined);
+      handOverImportSeconds(id, view.batchId);
+      pick(id); return;
+    }
     if (source.kind === 'upload-images' || source.kind === 'link-images') {
       const result = await createNativeImageProject(name, source.kind === 'upload-images' ? source.files : source.files.map(file => file.path), onProgress);
       pick(result.id); return;
@@ -90,7 +137,7 @@ export function NativeHome({ navigate = navigateToProject }: { navigate?: (id: s
     </header>
     {error && <div className="native-notice" role="alert"><span>{error}</span><button onClick={() => void refresh()}>一覧を再読み込み</button></div>}
     <HomeDashboardWithAgentBoard managedMedia projects={projects} error={projects.length ? null : error} notice={notice} loading={loading} onPick={pick} onSetStage={setStage}
-      onCreate={create} onProjectsChanged={() => void refresh()} />
+      onCreate={create} onProjectsChanged={() => void refresh()} extraSection={<SlidesHomeSection />} />
     {fileReference.picker}
     {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} onRestartTutorial={() => { setHelpOpen(false); tutorial.start(); }} />}
     <TutorialOverlay tutorial={tutorial} options={tutorial.overlayOptions} />

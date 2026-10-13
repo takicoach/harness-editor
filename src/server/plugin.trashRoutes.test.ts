@@ -245,7 +245,7 @@ describe('DELETE /api/project', () => {
    * 種別を 1 つ足したのに DELETE 経路へ繋ぎ忘れる事故（jobRegistries.ts の正本化で
    * 構造的に防いでいる登録簿＋別経路の aiInstruction）を 1 件でループ検証する。
    */
-  it('実行中のジョブ・AI 指示があれば 409 busy でディスクに残る（登録簿 7 種）', async () => {
+  it('実行中のジョブ・AI 指示があれば 409 busy でディスクに残る（登録簿 11 種）', async () => {
     const arm: Record<string, () => void> = {
       ...Object.fromEntries(
         Object.entries(PROJECT_JOB_MANAGERS).map(([name, manager]) => [
@@ -262,7 +262,7 @@ describe('DELETE /api/project', () => {
       },
     };
     expect(Object.keys(arm)).toEqual([
-      'render', 'transcribe', 'nativeTranscribe', 'nativeRender', 'denoise', 'normalize', 'previewProxy', 'aiInstruction',
+      'render', 'transcribe', 'nativeTranscribe', 'nativeRender', 'thumbnailExport', 'thumbnailPreview', 'slidesExport', 'slidesPreview', 'denoise', 'normalize', 'previewProxy', 'aiInstruction',
     ]);
 
     for (const [name, makeBusy] of Object.entries(arm)) {

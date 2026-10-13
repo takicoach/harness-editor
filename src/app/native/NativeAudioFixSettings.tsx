@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { SequenceAsset, SequenceDocument } from '../../core/sequence/model';
 import type { NativeCommand } from './api';
 import { TaskProgress } from '../components/TaskProgress';
+import { audioFixCandidates, audioFixKey, audioFixLabels } from './audioFixTarget';
 
 type Fix = 'denoise' | 'normalize';
 /** `origin` は import 由来（音楽・効果音）も入る union。系譜を辿るのは audio-fix の枝だけ。 */
@@ -58,7 +59,11 @@ export function NativeAudioFixSettings({ projectId, document: doc, readDocument,
     const timer = setInterval(() => poll(controller.signal, value => { if (active) setRemote(value); }), 400);
     return () => { active = false; controller.abort(); clearInterval(timer); };
   }, [poll, running]);
-  const speech = doc.clips.find(clip => clip.content.kind === 'audio' && clip.content.role === 'speech');
+  // 対象はメインの原音の素材から選べる（設計 §1）。原音が1本なら従来どおり最初の原音だけ。選んだ候補が文書から消えたら先頭へ戻す。
+  const candidates = audioFixCandidates(doc), [chosen, setChosen] = useState<string | null>(null);
+  const missing = chosen !== null && !candidates.some(candidate => audioFixKey(candidate) === chosen);
+  useEffect(() => { if (missing) setChosen(null); }, [missing]);
+  const target = candidates.find(candidate => audioFixKey(candidate) === chosen) ?? candidates[0], speech = target?.clip;
   const content = speech?.content.kind === 'audio' ? speech.content : null;
   const asset = content ? doc.assets.find(item => item.id === content.assetId) : undefined;
   // 系譜: 原本 →（補正）→（補正）。origin.from を辿って何が掛かっているか読む。
@@ -135,6 +140,11 @@ export function NativeAudioFixSettings({ projectId, document: doc, readDocument,
     : chain.length ? `${chain.map(fix => LABEL[fix]).join('と')}を適用しています。元の音声は残っています。` : null;
   return <fieldset className="native-audio-fix" disabled={disabled}><section data-setting="audio">
     <h3>音声の補正</h3>
+    {/* 選んだ原音の系譜が壊れていても選び直せるよう、選択は分岐の外に置く。 */}
+    {candidates.length > 1 && <label className="native-audio-fix-target">補正する原音
+      <select value={target ? audioFixKey(target) : ''} disabled={locked} onChange={event => setChosen(event.target.value)}>
+        {audioFixLabels(doc, candidates).map((label, index) => { const key = audioFixKey(candidates[index]!); return <option key={key} value={key}>{label}</option>; })}
+      </select></label>}
     {!asset || !source ? <p className="native-subtle">原音のトラックがありません。</p> : <>
       <p className="native-subtle">主音声「{source.name}」に掛けます。元の音声は残り、いつでも戻せます。</p>
       {statusText && <p role="status">{statusText}</p>}

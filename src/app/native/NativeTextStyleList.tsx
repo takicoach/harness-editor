@@ -13,6 +13,9 @@ import {NativeTelopTemplateUpdate,type TelopTemplateUpdateHandle} from './Native
 import {NativeTelopPackUpdate} from './NativeTelopPackUpdate';
 import {isEscape} from './keyboard';
 
+/** 調整の欄に並べる標準スタイルの上限。これより多い時は選択画面だけにする。 */
+export const INLINE_BUILTIN_STYLE_LIMIT=6;
+
 /** テロップカタログ（本体 15＋拡張 77 の見本）。外部リンクは定数で 1 箇所に置く。 */
 export const TEXT_STYLE_CATALOG_URL='https://telop-catalog.pages.dev/';
 
@@ -43,15 +46,6 @@ function currentAssetId(props:TextStyleListProps):string|undefined {
 export const NativeTextStyleList=forwardRef<TelopTemplateUpdateHandle,TextStyleListProps>(function NativeTextStyleList(props,ref) {
   const [query,setQuery]=useState(''),[showHidden,setShowHidden]=useState(false),[confirming,setConfirming]=useState<{assetId:string;styleId:number}|null>(null);
   const [preparing,setPreparing]=useState(false);
-  const autoPrepared=useRef<string|null>(null);
-  useEffect(()=>{
-    if(props.preparation!=='needs-builtin'||props.disabled)return;
-    const key=`${props.projectId}:${props.document.id}`;
-    if(autoPrepared.current===key)return;
-    autoPrepared.current=key;
-    setPreparing(true);
-    void props.onPrepare().catch(()=>false).finally(()=>setPreparing(false));
-  },[props.preparation,props.disabled,props.projectId,props.document.id,props.onPrepare]);
   // F15: 112 枚のカードは常設せず、「現在の 1 行」から開くポップオーバーの中だけで描く。
   const [open,setOpen]=useState(false),[pickedAsset,setPickedAsset]=useState<string|undefined>(undefined);
   const picker=useRef<HTMLDivElement>(null),anchor=useRef<HTMLButtonElement>(null);
@@ -119,13 +113,11 @@ export const NativeTextStyleList=forwardRef<TelopTemplateUpdateHandle,TextStyleL
   // 同じ packId が並ぶときだけ、後発の版に「（版 x）」を足す。先頭は基準として無印のまま。
   const seenPack=new Map<string,number>();
   const prepare=async()=>{setPreparing(true);try{return await props.onPrepare();}finally{setPreparing(false);}};
-  if(props.preparation==='needs-builtin'){
-    const waiting=!props.disabled&&(preparing||autoPrepared.current!==`${props.projectId}:${props.document.id}`);
-    return <div className="native-style-inline" role="region" aria-label="文字のスタイル">
-      <p className="native-subtle">{waiting?'テロップスタイル3種を準備しています…':props.disabled?'テロップスタイルはまだありません。':'テロップスタイルを準備できませんでした。'}</p>
-      {!waiting&&<button type="button" className="native-text-button" disabled={props.disabled} onClick={()=>void prepare()}>テロップスタイルを用意する</button>}
-    </div>;
-  }
+  // 用意は利用者が押した時だけ。字幕を選ぶとこの一覧が出るので、自動で用意すると選択が編集になる（Undo と版が動き、AI の対象確認や監査の前提が崩れる）。
+  if(props.preparation==='needs-builtin')return <div className="native-style-inline" role="region" aria-label="文字のスタイル">
+    <p className="native-subtle">この案件にテロップスタイルをまだ用意していません。標準の3種を用意できます。</p>
+    <button type="button" className="native-text-button" disabled={props.disabled||preparing} onClick={()=>void prepare()}>テロップスタイルを用意する</button>
+  </div>;
   // Codex P2: 取り込み字幕（preparation:'needs-project'）は currentAssetId がそのコンポーネント ID を
   // 返すが、props.assets にはカタログ持ちの資産しか無い。currentStyleEntry と同じ規則
   // （`assets.find(...)??assets[0]`）で利用可能なカタログへフォールバックしないと、タブも節も出ず空になる。
@@ -138,7 +130,8 @@ export const NativeTextStyleList=forwardRef<TelopTemplateUpdateHandle,TextStyleL
       return pickedCatalogAsset.textStyleCatalog!.entries.filter(entry=>entry.name.toLocaleLowerCase().includes(needle)&&(showHidden||!off.has(entry.id))).length;})()
     :0;
   const current=currentStyleEntry(props.assets,props.content,currentAssetId(props));
-  const builtin=props.assets.find(asset=>asset.textStyleCatalog?.source==='builtin');
+  // 標準のスタイルが少ない時（無料版の 3 種など）だけ調整の欄に並べる。多い時は「変更…」の選択画面で選ぶ（欄が長くならないように）。
+  const builtin=props.assets.find(asset=>asset.textStyleCatalog?.source==='builtin'&&asset.textStyleCatalog.entries.length<=INLINE_BUILTIN_STYLE_LIMIT);
   const freeForm=!!activeTextAppearance(props.content);   // 自由書式（スタイル未使用）のとき 1 行は「自由書式」と出す（textStyle.ts:4）
   const sourceTabs=props.assets.map(asset=>{
     const off=new Set(props.hidden[asset.id]??[]);

@@ -1,5 +1,4 @@
 import type { ScenePlan } from '../../core/sequence/scenePlan';
-import { serializeSequence } from '../../core/sequence/validate';
 import type {RenderedSceneGeometry} from './renderGeometry';
 import { previewFailure } from './previewError';
 import type { LegacyMeasurementRequest, LegacyMeasurementDisplaySnapshot } from './legacyMeasurement';
@@ -16,16 +15,17 @@ export class NativePreviewBridge {
   private frame = document.createElement('iframe');
   private ready!: Promise<void>;
   private disposed = false;
-  private previousPlan?: ScenePlan;
-  private serialized = '';
-  constructor(private readonly container: HTMLElement, private readonly projectId: string, private readonly legacyContext?: string) {
+  constructor(private readonly container: HTMLElement, private readonly projectId: string, private readonly legacyContext?: string,
+    /** 'thumbnail' はサムネ、'slides' はスライドのキャンバス。素材を原本の経路（/api/thumbnail/asset・/api/slides/asset）から読む。 */
+    private readonly assetSource?: 'thumbnail' | 'slides') {
     this.mount();
   }
   private mount(): void {
     this.frame = document.createElement('iframe');
     this.frame.dataset.nativePreview = 'true'; this.frame.title = '映像プレビュー'; this.frame.tabIndex = -1;
     this.frame.style.cssText = 'border:0;display:block;pointer-events:none';
-    this.frame.src = `/native-render.html?${new URLSearchParams({ id: this.projectId, preview: '1', ...(this.legacyContext ? { legacyContext: this.legacyContext } : {}) })}`;
+    this.frame.src = `/native-render.html?${new URLSearchParams({ id: this.projectId, preview: '1', ...(this.legacyContext ? { legacyContext: this.legacyContext } : {}),
+      ...(this.assetSource === 'thumbnail' ? { thumbnail: '1' } : this.assetSource === 'slides' ? { slides: '1' } : {}) })}`;
     this.container.appendChild(this.frame);
     this.ready = new Promise((resolve, reject) => {
       const deadline = performance.now() + 30000;
@@ -46,7 +46,6 @@ export class NativePreviewBridge {
     if(this.disposed)throw new Error('プレビューは閉じられています');
     const old=this.frame;
     old.contentWindow?.harnessNativeDispose?.();old.remove();
-    this.previousPlan=undefined;this.serialized='';
     this.mount();
     await this.ready;
   }
@@ -54,9 +53,9 @@ export class NativePreviewBridge {
     const {width,height}=plan.document.resolution;
     this.frame.width=String(width);this.frame.height=String(height);this.container.style.width=`${width}px`;this.container.style.height=`${height}px`;
     await this.ready; if (!isCurrent() || this.disposed) return;
-    if (this.previousPlan !== plan) { this.previousPlan = plan; this.serialized = serializeSequence(plan.document); }
     let geometry: RenderedSceneGeometry | null;
-    try { geometry=await this.frame.contentWindow!.harnessNativePreviewFrame!(this.serialized, frame, bypass, isCurrent); }
+    // 場面計画は親で検証済み・変更不可（凍結した文書を持つ）。iframe は同一オリジンなのでそのまま渡す（設計 §2-5）。
+    try { geometry=await this.frame.contentWindow!.harnessNativePreviewPlan!(plan, frame, bypass, isCurrent); }
     catch (error) { throw parentError(error); }
     if (!isCurrent() || this.disposed) return;
     this.frame.dataset.nativeFrame=String(frame);this.frame.dataset.nativeRevision=String(plan.document.revision);this.frame.dataset.nativeLutBypass=String(bypass);

@@ -42,6 +42,9 @@ export function useEditorAgentConnection(bridge: Bridge | AsyncEditorBridge, pro
   onResult: (operation: PublicEditorOperation) => void, projectFailed = false) {
   const key = useRef(crypto.randomUUID());
   const sequence = useRef(0);
+  // The server rejects a heartbeat older than the last one it saw (409 STALE_HEARTBEAT). A remounted effect
+  // (StrictMode in the dev build, which the desktop app also serves) must wait for the former one's heartbeat.
+  const heartbeatTurn = useRef<Promise<void>>(Promise.resolve());
   const latest = useRef({ bridge, projectId, onResult, projectFailed });
   latest.current = { bridge, projectId, onResult, projectFailed };
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'offline'>('connecting');
@@ -96,7 +99,12 @@ export function useEditorAgentConnection(bridge: Bridge | AsyncEditorBridge, pro
     async function poll() {
       if (polling || !alive) return;
       polling = true;
+      const previous = heartbeatTurn.current;
+      let release!: () => void;
+      heartbeatTurn.current = new Promise<void>(resolve => { release = resolve; });
       try {
+        await previous;
+        if (!alive) return;
         if (needsDisconnect) {
           try { await editorAgentPost('disconnect', identity); }
           catch (e) { if (!(e instanceof ApiError && e.status === 404)) throw e; }
@@ -130,7 +138,7 @@ export function useEditorAgentConnection(bridge: Bridge | AsyncEditorBridge, pro
             ? 'AIとの接続を確認しています。自動で再接続します。'
             : '接続できません。自動で再接続します。');
         }
-      } finally { polling = false; }
+      } finally { polling = false; release(); }
     }
     const onPageHide = () => {
       navigator.sendBeacon('/api/editor/disconnect', new Blob([JSON.stringify(identity)], { type: 'application/json' }));

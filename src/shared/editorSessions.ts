@@ -37,6 +37,8 @@ export const editorSessionSnapshotSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('error'), projectId: id }).strict(),
   z.object({ status: z.literal('ready'), projectId: id, revision: id,
     documentFormat:z.literal('sequence-v2').optional(),
+    /** AI タブの土台: 編集画面が今どちらを開いているか（サムネは動画の案件の中のモード）。旧画面は送らない。 */
+    mode: z.enum(['video', 'thumbnail']).optional(),
     dirty: z.boolean(), saving: z.boolean(), humanBusy: z.boolean(),
     scriptEditingHash: sha256.optional(),
     elements: z.array(z.object({ id, text: z.string().max(10000),
@@ -54,4 +56,6 @@ export type EditorSessionHeartbeat = z.infer<typeof editorSessionHeartbeatSchema
 export interface EditorSessionSummary {
   sessionId: string; status: EditorSessionSnapshot['status']; projectId: string | null;
   revision: string | null; dirty: boolean; saving: boolean; humanBusy: boolean; elementCount: number; expiresAt: number;
+  /** ready の snapshot が mode を持つ時だけ載る。 */
+  mode?: 'video' | 'thumbnail';
 }

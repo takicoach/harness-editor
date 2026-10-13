@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AI_TOOLS, DEFAULT_AI_TOOL, isAiToolId } from './aiTools';
@@ -37,7 +37,7 @@ describe('claude アダプタ', () => {
 
   it('MCP の URL が port を反映する', () => {
     const parsed = JSON.parse(AI_TOOLS.claude.launchArgs(2110, 'dark')[1] ?? '');
-    expect(parsed.mcpServers['sme-editor'].url).toBe('http://127.0.0.1:2110/mcp');
+    expect(parsed.mcpServers['sme-editor'].url).toBe('http://127.0.0.1:2110/mcp?client=ai-tab');
     expect(parsed.mcpServers['sme-editor'].type).toBe('http');
   });
 
@@ -61,8 +61,9 @@ describe('claude アダプタ', () => {
     expect(t.installPackage).toEqual({ name: '@anthropic-ai/claude-code', version: '2.1.220' });
   });
 
-  it('待機プロンプトは並列版', () => {
-    expect(t.waitingPrompt).toBe(AGENT_LOOP_PROMPT);
+  it('待機プロンプトは持たない（AI タブは待機せず、最初の依頼を起動の引数で渡す）', () => {
+    expect(Object.hasOwn(AI_TOOLS.claude, 'waitingPrompt')).toBe(false);
+    expect(Object.hasOwn(AI_TOOLS.codex, 'waitingPrompt')).toBe(false);
   });
 });
 
@@ -71,7 +72,7 @@ describe('codex アダプタ', () => {
 
   it('launchArgs は -c による MCP インライン注入の 2 要素', () => {
     const args = t.launchArgs(2112, 'light');
-    expect(args).toEqual(['-c', 'mcp_servers.sme-editor.url="http://127.0.0.1:2112/mcp"']);
+    expect(args).toEqual(['-c', 'mcp_servers.sme-editor.url="http://127.0.0.1:2112/mcp?client=ai-tab"']);
   });
 
   it('theme を渡しても引数は変わらない（tui.theme は構文ハイライト専用で地色を変えられない）', () => {
@@ -89,11 +90,6 @@ describe('codex アダプタ', () => {
 
   it('最低版が 0.145.0', () => {
     expect(t.minVersion).toBe('0.145.0');
-  });
-
-  it('待機プロンプトは直列版（subagent 委譲を前提にしない）', () => {
-    expect(t.waitingPrompt).toBe(SERIAL_LOOP_PROMPT);
-    expect(t.waitingPrompt).not.toContain('subagent');
   });
 
   it('prepare を持つ（隔離 CODEX_HOME を用意する）', () => {
@@ -138,5 +134,13 @@ describe('SERIAL_LOOP_PROMPT', () => {
   });
   it('並列版とは別文面', () => {
     expect(SERIAL_LOOP_PROMPT).not.toBe(AGENT_LOOP_PROMPT);
+  });
+});
+
+describe('MCP接続マニュアル', () => {
+  it('貼り付け用の待機プロンプトはコードの文言と同文（直列版と /loop の全体待機）', () => {
+    const manual = readFileSync(new URL('../../docs/MCP接続マニュアル.md', import.meta.url), 'utf8');
+    expect(manual).toContain(SERIAL_LOOP_PROMPT);
+    expect(manual).toContain(`/loop ${AGENT_LOOP_PROMPT}`);
   });
 });

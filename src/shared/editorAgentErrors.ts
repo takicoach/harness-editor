@@ -1,6 +1,7 @@
+import { TARGET_CONFIRM_RECOVERY } from './aiFocus';
 export type EditorAgentRecoveryAction = 'retry_same_request' | 'fix_request' | 'read_current_state'
   | 'wait_then_revalidate' | 'open_editor' | 'inspect_run' | 'reconcile_result'
-  | 'use_current_session' | 'contact_operator';
+  | 'use_current_session' | 'contact_operator' | 'confirm_with_user';
 
 export interface EditorAgentRecovery {
   action: EditorAgentRecoveryAction;
@@ -106,6 +107,12 @@ const RULES: Readonly<Record<string, ErrorRule>> = {
   CANCELLED_BEFORE_START: { action: 'inspect_run', message: INSPECT_RUN },
   CANCELLED_BEFORE_APPLY: { action: 'inspect_run', message: INSPECT_RUN },
   CANCELLED_AFTER_APPLY: { action: 'inspect_run', message: `${INSPECT_RUN} 適用済みの内容は必要に応じて人がUndoしてください。` },
+  IMPORT_PATH_NOT_ALLOWED: { action: 'fix_request', message: '許可された場所（外付け・デスクトップ・ダウンロード・ムービー）にある動画を指定してください。', status: 403 },
+  IMPORT_INVALID: { action: 'fix_request', message: FIX_INPUT, status: 400 },
+  IMPORT_NOT_FOUND: { action: 'inspect_run', message: 'editor_import_runsで現在の取り込みを確認してください。', status: 404 },
+  IMPORT_FINISHED: { action: 'inspect_run', message: 'editor_import_runsで束の段を確認してください。配置済みの取り込みは人がUndoで戻します。' },
+  IMPORT_SPEED_REGISTERED: { action: 'fix_request', message: '速度を設定した案件のメインには取り込めません。理由を人に伝え、同じ要求を再送しないでください。', status: 409 },
+  TARGET_NOT_REQUESTED: { action: 'confirm_with_user', message: TARGET_CONFIRM_RECOVERY, status: 409 },
 };
 
 const INTERNAL_ERROR = 'AI編集の処理に失敗しました';

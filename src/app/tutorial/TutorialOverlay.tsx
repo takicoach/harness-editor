@@ -1,4 +1,4 @@
-import { useAgentConnected } from '../useAgentConnected';
+import { useAiPresence } from '../useAiPresence';
 import { useFeatureBadge } from '../useFeatureBadge';
 import { resolveTarget, resolveText } from './tutorialMachine';
 import type { TutorialApi } from './useTutorial';
@@ -37,7 +37,7 @@ export interface TutorialOverlayOptions {
 export function TutorialOverlay({ tutorial, options }: { tutorial: TutorialApi; options?: TutorialOverlayOptions }) {
   const { step, ctx } = tutorial;
   // MCP ステップ表示中だけ接続状態をポーリング（接続済みなら手順を出さない）。
-  const agentConnected = useAgentConnected(step?.body === 'mcp');
+  const aiPresence = useAiPresence(step?.body === 'mcp');
   // 新機能を説明するステップは、初めて見た回だけ吹き出しに NEW バッジを出す（見た時点で既読）。
   const showNew = useFeatureBadge(step?.id ?? null, step?.addedIn);
   if (!tutorial.active || step === null) return null;
@@ -128,14 +128,14 @@ export function TutorialOverlay({ tutorial, options }: { tutorial: TutorialApi; 
           <p className="tut-text">{text}</p>
           {step.body === 'mcp' && (
             <div className="tut-mcp">
-              {agentConnected.global === true ? (
+              {aiPresence?.connected === true ? (
                 <p className="tut-mcp-ok">接続済みですね！ このまま進みましょう。</p>
               ) : (
                 <p className="cl-setup-note">
                   動画を開いて「AI」タブを押すだけです。まだ AI が入っていなければ
                   「AI と接続する（Claude Code を導入）」ボタンが出るので、導入 → ログインまで進めてください
-                  （すでに入っていれば、この画面は出ずにそのまま繋がります）。最後に
-                  「待機を開始（編集指示を受け付ける）」を押すと、指示を受け付ける状態になります。
+                  （すでに入っていれば、この画面は出ずにそのまま繋がります）。AI は今開いている案件を分かった状態で
+                  起動するので、入力欄に打って Enter で頼めます。
                 </p>
               )}
             </div>

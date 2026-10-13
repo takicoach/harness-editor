@@ -1,5 +1,11 @@
 // e2e 用の偽 claude。起動バナーを出し、stdin をそのままエコーする。
 process.stdout.write('FAKE-CLAUDE READY\r\n');
+// AI タブの土台: 起動の引数で受け取った最初の依頼のモードを出す（1 回だけ渡ることを e2e が数える）。
+const firstPrompt = process.argv[2];
+if (firstPrompt !== undefined) {
+  const mode = /（(動画|スライド|サムネ)）を見ています/.exec(firstPrompt)?.[1] ?? (firstPrompt.includes('ホームにいます') ? 'ホーム' : 'なし');
+  process.stdout.write(`FAKE-CLAUDE PROMPT ${mode}\r\n`);
+}
 // 入力（直近32文字のローリングバッファ、チャンク境界をまたぐ "exit" も検出）に
 // "exit" が来たら自死する。claude-terminal.spec.ts の exited→restart 回帰テスト
 // （C-1）が pty を落とすために使う。既存テストの入力（"ping-123" 等）には

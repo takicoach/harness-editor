@@ -118,3 +118,18 @@ describe('編集画面の接続と現在状態', () => {
     expect(registry.list()).toEqual([]);
   });
 });
+
+describe('画面のモード（AI タブの土台）', () => {
+  it('ready の snapshot に mode があれば一覧に載せ、無ければ載せない（既存の一覧の形を変えない）', () => {
+    const registry = new EditorSessionRegistry(vi.fn(), () => 1000, 100);
+    registry.heartbeat(heartbeat({ snapshot: { ...heartbeat().snapshot, mode: 'thumbnail' } }));
+    registry.heartbeat(heartbeat({ sessionId: 'window-b', sessionKey: 'b'.repeat(32) }));
+    const [withMode, without] = registry.list();
+    expect(withMode).toMatchObject({ sessionId: 'window-a', mode: 'thumbnail' });
+    expect(without).not.toHaveProperty('mode');
+  });
+  it('知らないモードは断る', () => {
+    const registry = new EditorSessionRegistry(vi.fn(), () => 1000, 100);
+    expect(() => registry.heartbeat(heartbeat({ snapshot: { ...heartbeat().snapshot, mode: 'slides' } }))).toThrow();
+  });
+});

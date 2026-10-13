@@ -65,3 +65,13 @@ Playwright + プロジェクト固有 Chromium で `index.html` / `native-render
   bold フラグが `font-weight: 700` を指定し、ブラウザが同一 family 内で該当ウェイトの
   `@font-face` を自動選択する前提（`fontStack()` は family 名の組み立てのみ）。T16 で
   太字トグルと font-weight の対応を明示的に検証すること。
+
+## サムネ用の極太（2026-10-03 追加）
+
+| id | family | 取得元 | ライセンス全文（複製） | 900 |
+|---|---|---|---|---|
+| noto-sans-jp-black | Noto Sans JP Black | google/fonts `ofl/notosansjp/NotoSansJP[wght].ttf`（instancer で 900 静的化） | `licenses/noto-sans-jp-black-OFL.txt` | 1966 KB |
+
+SIL Open Font License 1.1（OFL）。既存の `Noto Sans JP`（400/700）と別の書体名にしているのは、
+同じ書体名に 900 を足すと動画側で 800 を指定した文字の面が 700 から 900 に変わってしまうため。
+作り方: `tools/fonts/build-subsets.py --only noto-sans-jp-black`（他の書体のファイルは作り直さない）。

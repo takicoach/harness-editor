@@ -109,6 +109,22 @@ describe('useProjectsWatch', () => {
     expect(onStatus).toHaveBeenCalledWith('p1', expect.objectContaining({ status: 'telop' }));
   });
 
+  it('サムネの書き出し（thumbnailCover）も差分として渡す。無い差分は消去として undefined を渡す', () => {
+    const onStatus = vi.fn();
+    render(
+      <EventBusProvider>
+        <Probe enabled={true} onStatus={onStatus} />
+      </EventBusProvider>,
+    );
+    const es = FakeEventSource.instances[0]!;
+    act(() => {
+      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'telop', thumbnailCover: { file: 'サムネ/サムネ_p1.png', mtimeMs: 7 } });
+      es.triggerMessage('projects', { type: 'status', id: 'p1', status: 'telop' });
+    });
+    expect(onStatus.mock.calls[0]![1]).toMatchObject({ thumbnailCover: { file: 'サムネ/サムネ_p1.png', mtimeMs: 7 } });
+    expect(onStatus.mock.calls[1]![1]).toHaveProperty('thumbnailCover', undefined);
+  });
+
   it('他チャネル（watch 等）のメッセージは無視する', () => {
     const onStatus = vi.fn();
     render(

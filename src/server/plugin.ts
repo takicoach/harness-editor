@@ -13,10 +13,11 @@ import { isUploadKind, materialRelPath, sanitizeUploadName, saveMaterialFile } f
 import { scanMaterialUsage } from './materialUsage';
 import { findBusyJobs } from './projectBusy';
 import { PROJECT_JOB_MANAGERS, killAllProjectJobs } from './jobRegistries';
+import { sequenceExports } from './sequence/exports';
 import { emptyTrash, listTrash, moveToTrash, restoreFromTrash } from './trashStore';
 import { makeAssetKey, type AssetKind } from '../shared/assetKey';
 import { precheckCreateImages, precheckCreateProject, precheckProjectName } from './projectCreationChecks';
-import { createSequenceImageProject, createSequenceProject } from './sequence/create';
+import { createEmptySequenceProject, createSequenceImageProject, createSequenceProject } from './sequence/create';
 import { receiveImageUploads } from './sequence/imageUpload';
 import { IMAGE_UPLOAD_MANIFEST_MAX_BYTES } from '../shared/imageUploadFrame';
 import { MAX_CREATE_IMAGE_BYTES, MAX_CREATE_IMAGES } from '../shared/createMedia';
@@ -111,20 +112,25 @@ import { validateStatusRequest, writeStatusStage } from './projectStatus';
 import { handleMcpRequest } from './mcp/server';
 import { markSelfWrite, isSelfWriting, isSelfWriteContent, recordSelfWriteContent, selfWriteRemainingMs, clearSelfWrite } from './selfWrite';
 import { projectContentSignature } from './projectWatchPaths';
-import { handleEventsSse, handleEventsSync,restoreRenderObservations } from './eventsApi';
+import { copyJobChannelMessages, handleEventsSse, handleEventsSync, importChannelMessages, restoreRenderObservations } from './eventsApi';
 import { handleCaptureEngineStatus } from './captureEngineApi';
 import { bundleCaptureEntry, bundleCaptureRuntime } from './bundleCapture';
 import { buildCapturePageHtml } from '../capturePage/html';
 import { setServerOrigin, wireServerOrigin } from './serverOrigin';
 import { applyKeepAliveTimeouts } from './keepAlive';
 import { installProcessSafetyNet } from './processSafetyNet';
+import { handleLibraryApi } from './library/api';
 import { handleSequenceApi } from './sequence/api';
+import { handleThumbnailApi } from './thumbnail/api';
+import { handleSlidesApi } from './slides/api';
+import { handleSlidesImportsApi } from './slides/videoImportApi';
 import { handleLegacyPreviewApi } from './sequence/legacyPreviewApi';
 import { assertLegacySequenceAuthority } from './sequence/authority';
 import { hasSequenceDocument } from './sequence/summary';
 import { SequenceStore } from './sequence/store';
 import { sequenceEditorTargets } from '../core/sequence/editorCommands';
 import {createNativeEditorAgentAdapter} from './nativeEditorAgentAdapter';
+import { createEditorImportAdapter } from './sequence/importAgent';
 
 /** URL から必須クエリパラメータを取り出す。無ければ HttpError。 */
 export function requireParam(url: URL, name: string): string {
@@ -196,7 +202,11 @@ export async function handleApi(
   const method = (req.method ?? 'GET').toUpperCase();
 
   if (await handleLegacyPreviewApi(req, res, url, root)) return;
+  if (await handleLibraryApi(req, res, url, root)) return;
   if (await handleSequenceApi(req, res, url, root, undefined, editor)) return;
+  if (await handleThumbnailApi(req, res, url, root)) return;
+  if (await handleSlidesApi(req, res, url, root)) return;
+  if (await handleSlidesImportsApi(req, res, url, root)) return;
 
   if (url.pathname === '/api/ping') {
     sendJson(res, 200, { ok: true });
@@ -494,6 +504,15 @@ export async function handleApi(
       },
     );
     sendJson(res, 200, result);
+    return;
+  }
+  if (url.pathname === '/api/create-project-empty') {
+    // 素材なしの作品（設計 第A段）。最初に足した動画の fps・解像度に合わせる。
+    if (method !== 'POST') throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    if (url.searchParams.get('native') !== '1') throw new HttpError(410, '旧形式での新規作成は終了しました。独自編集画面から作成してください。');
+    const name = requireParam(url, 'name');
+    precheckProjectName(root, name);
+    sendJson(res, 200, { ...(await createEmptySequenceProject(root, { name })), projects: scanProjects(root) });
     return;
   }
   if (url.pathname === '/api/create-project') {
@@ -1107,7 +1126,7 @@ export async function handleApi(
     }
     const id = requireParam(url, 'id');
     const ch = requireParam(url, 'ch');
-    sendJson(res, 200, ch==='render'?{messages:await restoreRenderObservations(root,id)}:handleEventsSync(id, ch));
+    sendJson(res, 200, ch==='render'?{messages:await restoreRenderObservations(root,id)}:ch==='imports'?{messages:importChannelMessages(root,id)}:ch==='copy-jobs'?{messages:await copyJobChannelMessages(root,id)}:handleEventsSync(id, ch));
     return;
   }
 
@@ -1576,6 +1595,9 @@ export async function handleCaptureRoute(
 export function smeServer(): Plugin {
   return {
     name: 'sme-server',
+    // Vite awaits this on server.close() (the desktop app gives it 5 seconds): let running exports close
+    // their browsers and FFmpeg before the process exits. The 'close' handler below only signals them.
+    async closeBundle() { await sequenceExports.stopAll(); },
     // configureServer 内で直接 use するとミドルウェアは Vite 内部処理より先に走る。
     configureServer(server) {
       // X-1 最後の砦: この dev サーバー自体が製品のプロセス。個別の握り潰し
@@ -1599,7 +1621,7 @@ export function smeServer(): Plugin {
         const loaded = loadProjectFromDir(directory);
         return { elements: loaded.project.telops.map((telop) => ({ id: String(telop.id), text: telop.text,
           sourceFrameRange: { start: telop.originalStart, end: telop.originalEnd } })), fingerprint: JSON.stringify(loaded.save.fingerprint) };
-      }, new EditorAgentContext(root),createNativeEditorAgentAdapter(root));
+      }, new EditorAgentContext(root),createNativeEditorAgentAdapter(root),createEditorImportAdapter(root));
       console.log(`[sme] プロジェクトルート: ${root}`);
       // Viteは旧サーバのcloseより先に新configureを呼ぶ。listen時に永続化を取得する。
       wireInboxPersistence(server.httpServer ?? null, instructionInbox, join(root, '.sme-inbox.json'), {

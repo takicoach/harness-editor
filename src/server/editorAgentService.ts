@@ -7,6 +7,7 @@ import { EditorOperationStore, editorOperationHash } from './editorOperationStor
 import { EditorSessionRegistry } from './editorSessionRegistry';
 import type { EditorAgentContext, EditorPreferencePage } from './editorAgentContext';
 import type {NativeEditorAgentAdapter,NativeEditorReadOptions} from './nativeEditorAgentAdapter';
+import type {EditorImportAdapter,EditorImportInput} from './sequence/importAgent';
 
 /** A thin bridge between the existing local UI and durable typed-edit receipts. No model or file editor. */
 export class EditorAgentService {
@@ -14,7 +15,7 @@ export class EditorAgentService {
   constructor(readonly operations: EditorOperationStore, private readonly requireProject: (id: string) => void,
     private readonly now = Date.now, ttlMs = 15000,
     private readonly readSaved?: (projectId: string) => { elements: EditorTextTarget[]; fingerprint: string },
-    private readonly context?: EditorAgentContext,private readonly native?:NativeEditorAgentAdapter) {
+    private readonly context?: EditorAgentContext,private readonly native?:NativeEditorAgentAdapter,private readonly imports?:EditorImportAdapter) {
     this.sessions = new EditorSessionRegistry((id) => operations.disconnect(id), now, ttlMs);
   }
   projects(offset?: number, limit?: number) {
@@ -134,6 +135,26 @@ export class EditorAgentService {
     return this.context ? this.context.review(operations) : operations.map(publicEditorOperation);
   }
   cancel(runId: string) { this.sessions.expire(); return this.expose(this.operations.cancel(runId)); }
+  /** AI の取り込み（設計 §2-8）。同じ操作 ID の再送は人の編集が始まった後も同じ束を返す。新しい取り込みは既存の編集の道具と同じ条件で受ける。 */
+  importMedia(sessionId:string,input:EditorImportInput){
+    if(!this.imports)throw new Error('CONTEXT_UNAVAILABLE: 取り込みに接続していません');
+    this.requireProject(input.projectId);
+    if(this.imports.find(input.projectId,input.operationId))return this.imports.start(input);
+    const snapshot=this.sessions.snapshot(sessionId);
+    if(snapshot.status!=='ready')throw new Error('EDITOR_NOT_READY: 案件の読み込み完了を待ってください');
+    if(snapshot.projectId!==input.projectId)throw new Error('PROJECT_MISMATCH: 対象の案件が異なります');
+    if(snapshot.documentFormat!=='sequence-v2')throw new Error('NATIVE_EDITOR_REQUIRED: 独自編集の案件を開いてください');
+    if(snapshot.humanBusy)throw new Error('HUMAN_BUSY: 人がダイアログを操作中です');
+    if(snapshot.dirty)throw new Error('UNSAVED_CHANGES: 人の未保存編集があります');
+    if(snapshot.saving)throw new Error('SAVE_IN_PROGRESS: 保存完了を待ってください');
+    return this.imports.start(input);
+  }
+  importRuns(projectId:string,batchId?:string){
+    if(!this.imports)throw new Error('CONTEXT_UNAVAILABLE: 取り込みに接続していません');this.requireProject(projectId);return this.imports.runs(projectId,batchId);
+  }
+  cancelImport(projectId:string,batchId:string){
+    if(!this.imports)throw new Error('CONTEXT_UNAVAILABLE: 取り込みに接続していません');this.requireProject(projectId);return this.imports.cancel(projectId,batchId);
+  }
   prepareReconciliation(sessionId: string, runId: string) {
     const snapshot = this.sessions.snapshot(sessionId);
     const operation = this.operations.get(runId);

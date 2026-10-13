@@ -3,8 +3,6 @@ import { createRoot, type Root } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { CaptureFrameProvider, setStaticFileResolver } from '../../captureRuntime';
 import { CaptureTelopLayer, CaptureTitleLayer } from '../../capturePage/layers';
-import { shapeSvgGeometry, thicknessToPx, fadeOpacity } from '../../core/shapeStyle';
-import { angleDecorations, trianglePoints } from '../../core/shapeGeometry';
 import { animStyleAt, DEFAULT_FADE } from '../../core/elementAnim';
 import type { SequenceAsset, SequenceDocument } from '../../core/sequence/model';
 import { ScenePlan, type PlannedVisual } from '../../core/sequence/scenePlan';
@@ -12,10 +10,12 @@ import { timeNumber } from '../../core/sequence/time';
 import { pickTelopExport, type TelopComponent } from '../loadTelopComponent';
 import { pickInsertImageExport, type InsertImageComponent } from '../loadInsertImageComponent';
 import { NativeCompositor } from './compositor';
-import { Mp4FrameSource, httpByteSource, type AcquiredFrame } from './mp4FrameSource';
+import { Mp4FrameSource, httpByteSource, nativeDecodeStats, type AcquiredFrame } from './mp4FrameSource';
+import { sourcesToRelease, videoSourceKey, videoSourceUses, type FrameSpan, type NativeFrameSample, type RendererSourceOptions } from './exportSourceRelease';
 import { parseCube, type CubeLut } from './lut';
 import { NativeText } from './NativeText';
 import { NativeImage } from './NativeImage';
+import { NativeShape } from './NativeShape';
 import {activeTextAppearance,textComponentId} from '../../core/sequence/textStyle';
 import type { TelopSegment } from '../../core/types';
 import {fitDecodedVideo,fitDecodedImage,unplaceBorderBox,staticTextBorderSize,assertRenderableGraphicPosition,measurableGraphicBox,type LocalVisualBounds,type RenderedSceneGeometry,type RenderedVideoGeometry} from './renderGeometry';
@@ -24,51 +24,29 @@ import {titleGeometryIssue} from './titleGeometry';
 import { previewResourceError } from './previewError';
 import { measureLegacyVisuals, type LegacyMeasurementRequest, type LegacyMeasurementSnapshot } from './legacyMeasurement';
 import { applyLegacyCaptionFont } from '../legacyCaptionFont';
+import {expandBounds,textInkInsets} from '../../core/textDecoration';
 
 export function sequenceAssetUrl(projectId: string, assetId: string, component = false): string {
   return `/api/sequence/${component ? 'component' : 'asset'}?${new URLSearchParams({ id: projectId, asset: assetId })}`;
 }
 const fill: React.CSSProperties = { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+/** 利用者の部品（自作テロップ・画像部品・旧形式の部品ファイル）へ渡す入れ子のデータ。プレビューは親の計画をそのまま受け取るので（設計 §2-5）、
+ * 部品が instanceof Array などで判定しても今までどおり動くよう、この画面のレルムの物に複製して渡す。元はクリップの変更不可の値なので、値ごと（＝クリップごと）に1回だけ複製し、
+ * 変更不可も保つ。この画面の計画（書き出し・外からの文書）は複製しない。 */
+const ownRealm=new WeakMap<object,object>();
+function ownRealmValue<T>(value:T):T {
+  if(!value||typeof value!=='object'||value instanceof Object)return value;
+  let copy=ownRealm.get(value);if(!copy){copy=deepFreeze(structuredClone(value));ownRealm.set(value,copy);}return copy as T;
+}
+function deepFreeze<T>(value:T):T {
+  if(value&&typeof value==='object'){Object.freeze(value);for(const child of Object.values(value))deepFreeze(child);}
+  return value;
+}
 class DrawingBoundary extends Component<{ children: ReactNode; failed: (error: Error) => void }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   componentDidCatch(error: Error) { this.props.failed(error); }
   render() { return this.state.failed ? null : this.props.children; }
-}
-
-function Shape({ visual, width, height }: { visual: PlannedVisual; width: number; height: number }) {
-  if (visual.clip.content.kind !== 'shape') return null;
-  const shape = visual.clip.content.data, g = shapeSvgGeometry(shape, width, height), stroke = thicknessToPx(shape.thickness, height);
-  const arrow = `native-arrow-${visual.clip.id}`;
-  const explicit=visual.clip.visual?.enter||visual.clip.visual?.exit;
-  const opacity=(shape.opacity ?? 1) * (explicit?1:fadeOpacity(visual.effectFrame, visual.effectDuration, 8));
-  let body: ReactNode;
-  if (shape.kind === 'arrow' || shape.kind === 'line') {
-    body = <line x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke={shape.color} strokeWidth={stroke} strokeLinecap="round" markerEnd={shape.kind === 'arrow' ? `url(#${arrow})` : undefined} />;
-  } else if (shape.kind === 'rect') {
-    body = <rect data-native-shape-box x={g.rectX} y={g.rectY} width={g.rectW} height={g.rectH} stroke={shape.color} strokeWidth={stroke} fill="none" strokeLinejoin="round" />;
-  } else if (shape.kind === 'triangle') {
-    const points = trianglePoints(g.x1, g.y1, g.x2, g.y2);
-    body = <polygon data-native-shape-box points={points.map(p => `${p.x},${p.y}`).join(' ')} stroke={shape.color} strokeWidth={stroke} fill="none" strokeLinejoin="round" />;
-  } else if (shape.kind === 'angle') {
-    // 装飾の式は core/shapeGeometry が正本。書き出し側（server/shapeRaster）と同じ関数を呼ぶ。
-    const { p1, p2, p3, arcPath, arcStroke, label, fontSize, degrees } = angleDecorations(shape, width, height, stroke);
-    body = <g>
-      <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={shape.color} strokeWidth={stroke} strokeLinecap="round" />
-      <line x1={p1.x} y1={p1.y} x2={p3.x} y2={p3.y} stroke={shape.color} strokeWidth={stroke} strokeLinecap="round" />
-      <path d={arcPath} stroke={shape.color} strokeWidth={arcStroke} fill="none" />
-      <text data-native-angle-readout x={label.x} y={label.y} fill={shape.color} textAnchor="middle" dominantBaseline="middle"
-        style={{ fontSize: `${fontSize}px`, fontWeight: 700 }}>
-        {degrees.toFixed(1)}°
-      </text>
-    </g>;
-  } else {
-    body = <ellipse data-native-shape-box cx={g.cx} cy={g.cy} rx={g.rx} ry={g.ry} stroke={shape.color} strokeWidth={stroke} fill="none" />;
-  }
-  return <svg viewBox={`0 0 ${width} ${height}`} style={{ ...fill, opacity }}>
-    <defs><marker id={arrow} markerWidth="3" markerHeight="3" refX="3" refY="1.5" orient="auto"><polygon points="0 0, 3 1.5, 0 3" fill={shape.color} /></marker></defs>
-    {body}
-  </svg>;
 }
 
 /** Same explicit-frame DOM/GPU renderer for interactive playback and reference export. */
@@ -79,6 +57,9 @@ export class NativeSceneRenderer {
   private readonly scratch = document.createElement('canvas');
   private readonly gpu: NativeCompositor;
   private decoders = new Map<string, Promise<Mp4FrameSource>>();
+  /** Opened sources of the decoders Map, for releasing them (export only). */
+  private opened = new Map<string, Mp4FrameSource>();
+  private uses: {plan: ScenePlan; spans: Map<string, FrameSpan[]>} | undefined;
   private bundles = new Map<string, Promise<Record<string, unknown>>>();
   private luts = new Map<string, Promise<CubeLut>>();
   private buffers = new Map<string, HTMLCanvasElement>();
@@ -88,10 +69,18 @@ export class NativeSceneRenderer {
   private drawingError: Error | undefined;
   private errorRevision = -1;
   private boundaryGeneration = 0;
+  /** Export only (options.freshTree): every draw mounts a new tree. */
+  private draws = 0;
+  /** Measurement only (renderPage harnessNativeFrameTiming): where the last draw spent its time, in ms per phase. */
+  private lastTiming: Record<string, number> | null = null;
+  lastDrawTiming(): Record<string, number> | null { return this.lastTiming; }
   private restoreCaptionFonts: () => void = () => {};
   private renderedGeometry:RenderedSceneGeometry|null=null;
   private measurement: {geometry:RenderedSceneGeometry;visuals:readonly PlannedVisual[];isCurrent:()=>boolean}|null=null;
   geometry():RenderedSceneGeometry|null {return this.renderedGeometry;}
+  private samples: NativeFrameSample[] = [];
+  /** The source sample each video layer of the last drawn frame used, in layer order (export measurement). */
+  frameSamples(): NativeFrameSample[] { return structuredClone(this.samples); }
   measureLegacy(request:LegacyMeasurementRequest):LegacyMeasurementSnapshot|null {
     const snapshot=this.measurement;
     if(this.disposed||!snapshot||!snapshot.isCurrent())return null;
@@ -99,7 +88,17 @@ export class NativeSceneRenderer {
   }
 
   constructor(readonly container: HTMLElement, readonly projectId: string,
-    private readonly assetUrl: (assetId: string, component?: boolean) => string = (assetId, component) => sequenceAssetUrl(projectId, assetId, component)) {
+    private readonly assetUrl: (assetId: string, component?: boolean) => string = (assetId, component) => sequenceAssetUrl(projectId, assetId, component),
+    /** Export only (renderPage with retain=N): per-source retention and releasing sources.
+     * The preview passes nothing and keeps the default byte budget and every source open. */
+    private readonly sources: RendererSourceOptions = {},
+    /** freshTree (export only): draw every frame into newly created elements. Chromium draws an element that has
+     * changed (opacity, translate) differently ever after: text that faded in keeps other edge pixels than the same
+     * text drawn on a page that never saw the fade, by up to 2 steps, and an icon in a panel moved by a pixel (up to
+     * 180). An export frame must depend on its frame number only, not on the frames this page drew before (parallel
+     * workers draw from other places in the sequence). The preview
+     * keeps its elements between frames. */
+    private readonly options: { freshTree?: boolean } = {}) {
     this.mount.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;font-family:Arial,sans-serif;font-size:16px;line-height:1.5;color:#000;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility';
     container.appendChild(this.mount); this.root = createRoot(this.drawingRoot); this.gpu = new NativeCompositor(this.scratch);
   }
@@ -129,15 +128,22 @@ export class NativeSceneRenderer {
   private async frame(plan:ScenePlan, visual: PlannedVisual): Promise<AcquiredFrame> {
     const document=plan.document;
     const content = visual.clip.content; if (content.kind !== 'video') throw new Error('映像クリップが必要です');
-    const asset = this.asset(document, content.assetId), key = `${asset.fingerprint}:${content.streamIndex}`;
+    const asset = this.asset(document, content.assetId), key = videoSourceKey(asset, content.streamIndex);
     let decoder = this.decoders.get(key);
     if (!decoder) {
       const index = asset.streams.filter(s => s.kind === 'video').findIndex(s => s.index === content.streamIndex);
       const originalUrl=this.assetUrl(asset.id);
       // Export/legacy URLs keep their original source. Only native preview opts in.
       const url=originalUrl.startsWith('/api/sequence/asset?')?originalUrl+'&preview=1':originalUrl;
-      decoder = httpByteSource(url, this.abort.signal).then(bytes => Mp4FrameSource.open(bytes, index));
-      this.decoders.set(key, decoder);
+      const retention = this.sources.retention;
+      const opening: Promise<Mp4FrameSource> = httpByteSource(url, this.abort.signal)
+        .then(bytes => retention ? Mp4FrameSource.open(bytes, index, retention) : Mp4FrameSource.open(bytes, index))
+        .then(source => {
+          nativeDecodeStats.sourcesOpened++;
+          if (this.decoders.get(key) === opening && !this.disposed) this.opened.set(key, source);
+          return source;
+        });
+      decoder = opening; this.decoders.set(key, decoder);
     }
     return (await decoder).acquire(visual.sourceTime!, content.endBehavior === 'hold', plan.videoSourceWindow(visual.clip.id));
   }
@@ -147,6 +153,9 @@ export class NativeSceneRenderer {
   }
   private async draw(plan: ScenePlan, frame: number, bypassLut: boolean, isCurrent: () => boolean): Promise<void> {
     if (this.disposed) throw new Error('プレビューは閉じられています');
+    this.samples = [];
+    const marks: Record<string, number> = {}; let mark = performance.now();
+    const lap = (name: string) => { const now = performance.now(); marks[name] = now - mark; mark = now; };
     const doc = plan.document, scene = plan.frame(frame), { width, height } = doc.resolution;
     if (this.scratch.width !== width) this.scratch.width = width;
     if (this.scratch.height !== height) this.scratch.height = height;
@@ -176,9 +185,15 @@ export class NativeSceneRenderer {
       // late frames are owned before the common finally closes them on failure.
       // Bound the work even when a document has many simultaneous video layers.
       await Promise.all(Array.from({ length: Math.min(2, videoVisuals.length) }, acquireNext));
+      lap('decodeMs');
       if (failures.length) throw failures.sort((a, b) => a.index - b.index)[0]!.error;
       if (this.disposed) throw new Error('プレビューは閉じられています');
       if (!isCurrent()) return;
+      this.samples = videoVisuals.flatMap(visual => {
+        const decoded = videoFrames.get(visual.clip.id), content = visual.clip.content;
+        return decoded && content.kind === 'video' ? [{ clip: visual.clip.id, source: videoSourceKey(this.asset(doc, content.assetId), content.streamIndex),
+          sample: decoded.identity.sample, pts: structuredClone(decoded.identity.pts) }] : [];
+      });
       for (const visual of scene.visuals) {
         const { clip, effectFrame, effectDuration, transform } = visual, content = clip.content;
         if (used.has(clip.id)) continue;
@@ -249,7 +264,7 @@ export class NativeSceneRenderer {
           }
           const animation = clip.visual?.enter || clip.visual?.exit
             ? animStyleAt(effectFrame, effectDuration, clip.visual.enter ?? DEFAULT_FADE, clip.visual.exit ?? DEFAULT_FADE) : { opacity: 1, transform: '' };
-          node = <canvas width={width} height={height} style={{ ...fill, ...animation }} ref={target => {
+          node = <canvas width={width} height={height} style={{ ...fill, ...animation, ...(clip.visual?.look?.blur ? { filter: `blur(${clip.visual.look.blur}px)` } : {}) }} ref={target => {
             const ctx = target?.getContext('2d'); if (ctx) { ctx.clearRect(0, 0, width, height); ctx.drawImage(snapshot, 0, 0); }
           }} />;
         } else if (content.kind === 'telop') {
@@ -258,16 +273,16 @@ export class NativeSceneRenderer {
             : componentId?pickTelopExport(await this.bundle(componentId)):undefined;
           if (!Text) throw new Error('字幕の描画部品がありません');
           if (!appearance && componentId && this.asset(doc, componentId).textStyleCatalog?.source !== 'builtin') legacyTextIds.add(clip.id);
-          node = <CaptureTelopLayer Telop={Text} telops={[{ ...content.data, id: content.legacyId ?? 1, startFrame: 0, endFrame: effectDuration }]} />;
+          node = <CaptureTelopLayer Telop={Text} telops={[{ ...ownRealmValue(content.data), id: content.legacyId ?? 1, startFrame: 0, endFrame: effectDuration }]} />;
         } else if (content.kind === 'title') {
-          node = <CaptureTitleLayer titles={[{ ...content.data, id: content.legacyId ?? 1, startFrame: 0, endFrame: effectDuration }]} titleStyle={content.style} animate={titleGeometryIssue(clip.visual)==='inner-animation'} measureTitleBox />;
-        } else if (content.kind === 'shape') node = <Shape visual={visual} width={width} height={height} />;
+          node = <CaptureTitleLayer titles={[{ ...ownRealmValue(content.data), id: content.legacyId ?? 1, startFrame: 0, endFrame: effectDuration }]} titleStyle={ownRealmValue(content.style)} animate={titleGeometryIssue(clip.visual)==='inner-animation'} measureTitleBox />;
+        } else if (content.kind === 'shape') node = <NativeShape visual={visual} width={width} height={height} />;
         else if (content.kind === 'scene-fade') node = <div style={{ ...fill, background: content.color, opacity: transform.opacity }} />;
         else if (content.kind === 'image') {
           const imageUrl = this.assetUrl(content.assetId);
           node = InsertImage ? <InsertImage segment={{ id: content.legacyId ?? 1, startFrame: 0, endFrame: effectDuration, file: this.asset(doc, content.assetId).name, imageUrl,
             type: content.style ?? 'plain', position: { x: transform.x, y: transform.y }, scale: transform.scale,
-            opacity: transform.opacity, rotation: transform.rotation, enter: clip.visual?.enter, exit: clip.visual?.exit }} />
+            opacity: transform.opacity, rotation: transform.rotation, enter: ownRealmValue(clip.visual?.enter), exit: ownRealmValue(clip.visual?.exit) }} />
             : <NativeImage visual={visual} src={imageUrl}/>;
         }
         if(content.kind==='telop'||content.kind==='title'||content.kind==='shape') {
@@ -290,11 +305,14 @@ export class NativeSceneRenderer {
         return this.assetUrl(asset);
       });
       this.restoreCaptionFonts(); this.restoreCaptionFonts = () => {};
-      flushSync(() => this.root.render(<DrawingBoundary key={`${doc.revision}:${this.boundaryGeneration}`} failed={error => { this.drawingError = error; }}>
+      lap('composeMs');
+      const tree = this.options.freshTree ? `:${this.draws++}` : '';
+      flushSync(() => this.root.render(<DrawingBoundary key={`${doc.revision}:${this.boundaryGeneration}${tree}`} failed={error => { this.drawingError = error; }}>
         <style>{'* { box-sizing: border-box; }'}</style>
         <div style={{ ...fill, background: doc.background, overflow: 'hidden' }}>{nodes}</div>
       </DrawingBoundary>));
       if (this.drawingError) throw this.drawingError;
+      lap('reactMs');
       const fontCleanups = Array.from(this.drawingRoot.querySelectorAll('[data-native-clip]'))
         .filter(element => legacyTextIds.has(element.getAttribute('data-native-clip')!)).map(applyLegacyCaptionFont);
       this.restoreCaptionFonts = () => fontCleanups.forEach(cleanup => cleanup());
@@ -313,6 +331,7 @@ export class NativeSceneRenderer {
           throw error;
         }
       }));
+      lap('assetsMs');
       if(!isCurrent())return;
       const images:RenderedVideoGeometry[]=[];
       if(!InsertImage)for(const img of this.drawingRoot.querySelectorAll<HTMLImageElement>('img[data-native-plain-image]')){
@@ -350,6 +369,12 @@ export class NativeSceneRenderer {
             localBounds=unplaceBorderBox({x:(box.x+box.width/2-rootBounds.x)*width/rootBounds.width,
               y:(box.y+box.height/2-rootBounds.y)*height/rootBounds.height},
               size,{width,height},transform);
+            // 縁取り・影・傾きは帯の外へはみ出すので選択枠にも含める（描画と同じ関数で求める）。
+            const appearance=activeTextAppearance(content);
+            if(localBounds&&appearance){
+              const unscaled={width:parseFloat(style.width),height:parseFloat(style.height)},factor=size.width/unscaled.width,insets=textInkInsets(appearance,unscaled);
+              localBounds=expandBounds(localBounds,{top:insets.top*factor,right:insets.right*factor,bottom:insets.bottom*factor,left:insets.left*factor});
+            }
           }
         }else if(content.kind==='title'&&!titleGeometryIssue(visual.clip.visual)){
           // Measure the background band's border box, not the skewed text or
@@ -386,14 +411,32 @@ export class NativeSceneRenderer {
       }
       this.renderedGeometry={documentId:doc.id,revision:doc.revision,frame,resolution:{width,height},videos,images,elements};
       this.measurement={geometry:this.renderedGeometry,visuals:scene.visuals,isCurrent};
+      lap('measureMs'); this.lastTiming = marks;
       this.mount.dataset.nativeFrame = String(frame); this.mount.dataset.nativeRevision = String(doc.revision); this.mount.dataset.nativeLutBypass = String(bypassLut);
       for (const key of this.buffers.keys()) if (!used.has(key)) this.buffers.delete(key);
-    } finally { for (const decoded of acquired) decoded.frame.close(); }
+    } finally {
+      for (const decoded of acquired) decoded.frame.close();
+      // Every acquire of this frame has settled and its clone is closed.
+      this.releaseSources(plan, frame);
+    }
+  }
+  /** Export only: dispose the sources sourcesToRelease names; a later request opens them again. */
+  private releaseSources(plan: ScenePlan, frame: number): void {
+    const release = this.sources.release;
+    if (!release || this.disposed || !this.opened.size) return;
+    if (this.uses?.plan !== plan) this.uses = { plan, spans: videoSourceUses(plan.document) };
+    const open = [...this.opened].map(([key, source]) => ({ key, bytes: source.retainedBytes }));
+    for (const { key, reason } of sourcesToRelease(frame, open, this.uses.spans, release.totalBytes)) {
+      const source = this.opened.get(key)!;
+      this.opened.delete(key); this.decoders.delete(key);
+      source.dispose(); nativeDecodeStats.sourcesReleased[reason]++;
+    }
   }
   dispose(): void {
     this.restoreCaptionFonts(); this.restoreCaptionFonts = () => {};
     this.disposed = true; this.abort.abort();
     for (const decoder of this.decoders.values()) void decoder.then(value => value.dispose(), () => undefined);
+    this.opened.clear();
     this.gpu.dispose(); this.buffers.clear();
     queueMicrotask(() => { this.root.unmount(); this.mount.remove(); });
   }

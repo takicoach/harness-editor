@@ -3,15 +3,19 @@ import type { SequenceCommand } from '../../core/sequence/commands';
 import type { SequenceSessionState } from '../../server/sequence/service';
 import type {TransferProgress} from '../components/TaskProgress';
 import {imageUploadPrefix} from '../../shared/imageUploadFrame';
+import type {ImportBatchView} from '../../shared/importBatches';
 
-function uploadWithProgress<T>(url:string,file:Blob,onProgress:(progress:TransferProgress)=>void):Promise<T>{
+/** signal が止まったら送信を中断する（取り込みの束の取り消し）。断られた理由の code（IMPORT_CLOSED など）も返す。 */
+function uploadWithProgress<T>(url:string,file:Blob,onProgress:(progress:TransferProgress)=>void,signal?:AbortSignal):Promise<T>{
   return new Promise((resolve,reject)=>{
-    const xhr=new XMLHttpRequest();xhr.open('POST',url);xhr.responseType='json';
+    if(signal?.aborted)return reject(new NativeApiError('取り込みを中止しました。',0));
+    const xhr=new XMLHttpRequest(),abort=()=>xhr.abort(),settle=()=>signal?.removeEventListener('abort',abort);
+    signal?.addEventListener('abort',abort,{once:true});xhr.open('POST',url);xhr.responseType='json';
     xhr.upload.onprogress=event=>onProgress({phase:'uploading',loaded:event.loaded,...(event.lengthComputable?{total:event.total}:{})});
     xhr.upload.onload=()=>onProgress({phase:'preparing'});
-    xhr.onerror=()=>reject(new NativeApiError('接続が切れました。取り込み結果を確認してから再試行してください。',0));
-    xhr.onabort=()=>reject(new NativeApiError('取り込みを中止しました。',0));
-    xhr.onload=()=>{const result=xhr.response;if(xhr.status>=200&&xhr.status<300&&result)resolve(result);else reject(new NativeApiError(result?.error??'素材を取り込めません',xhr.status));};
+    xhr.onerror=()=>{settle();reject(new NativeApiError('接続が切れました。取り込み結果を確認してから再試行してください。',0));};
+    xhr.onabort=()=>{settle();reject(new NativeApiError('取り込みを中止しました。',0));};
+    xhr.onload=()=>{settle();const result=xhr.response;if(xhr.status>=200&&xhr.status<300&&result)resolve(result);else reject(new NativeApiError(result?.error??'素材を取り込めません',xhr.status,typeof result?.code==='string'?result.code:undefined));};
     onProgress({phase:'uploading',loaded:0,total:file.size});xhr.send(file);
   });
 }
@@ -50,6 +54,10 @@ export async function createNativeProject(name:string,source:File|string,onProgr
   const response=await fetch(`/api/${linked?'create-project-link':'create-project'}?${query}`,{method:'POST',...(linked&&expectedFingerprint?{headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedFingerprint})}:{body:linked?undefined:source})});
   const result=await response.json();if(!response.ok)throw new NativeApiError(result.error??'動画を作成できません',response.status);return result;
 }
+export async function createNativeEmptyProject(name:string):Promise<{id:string}>{
+  const response=await fetch(`/api/create-project-empty?${new URLSearchParams({name,native:'1'})}`,{method:'POST'});
+  const result=await response.json();if(!response.ok)throw new NativeApiError(result.error??'空のプロジェクトを作成できません',response.status);return result;
+}
 /** Ordered manifest followed by the File objects, without reading their bytes into app memory. */
 export function imageUploadBody(files:readonly File[]):Blob{
   return new Blob([imageUploadPrefix(files.map(file=>({name:file.name,size:file.size}))),...files]);
@@ -66,6 +74,8 @@ export async function createNativeImageProject(name:string,images:readonly File[
   const response=await fetch(`/api/create-project-images?${query}`,{method:'POST',body});
   const result=await response.json();if(!response.ok)throw new NativeApiError(result.error??'画像から作成できません',response.status);return result;
 }
+/** 保存済みの文書だけを読む（編集のセッションは作らない）。 */
+export async function savedNativeDocument(projectId:string):Promise<SequenceDocument|null>{return (await nativeRequest<{document:SequenceDocument|null}>(projectId,'')).document;}
 export async function openNativeSequence(projectId: string, signal?: AbortSignal): Promise<NativeSession | null> {
   const saved = await nativeRequest<{ document: SequenceDocument | null }>(projectId, '', undefined, signal);
   return saved.document ? nativeRequest<NativeSession>(projectId, '/session', {}, signal) : null;
@@ -78,3 +88,28 @@ export async function uploadNativeAsset(projectId: string, file: File,onProgress
   if (!response.ok) throw new NativeApiError(result.error ?? '素材を取り込めません', response.status);
   return result.asset;
 }
+/** 取り込みの束を作る。応答が届かなかった時だけ同じ要求 ID で1回再送する（サーバは同じ要求 ID の束を返す）。 */
+export async function createImportBatch(projectId:string,body:{requestId:string;mode:'link'|'copy';origin:'ui'|'home';items:Array<{key:string;name:string;path?:string}>}):Promise<ImportBatchView>{
+  try{return await nativeRequest<ImportBatchView>(projectId,'/imports',body);}
+  catch(error){if(error instanceof NativeApiError)throw error;return nativeRequest<ImportBatchView>(projectId,'/imports',body);}
+}
+/** 束の1本を送る（ブラウザ版のコピー）。signal が止まったら送信を中断する（束の取り消し・案件の切り替え）。 */
+export async function uploadImportItem(projectId:string,batchId:string,itemId:string,file:File,onProgress?:(progress:TransferProgress)=>void,signal?:AbortSignal):Promise<ImportBatchView>{
+  const url=`/api/sequence/imports/upload?${new URLSearchParams({id:projectId,batch:batchId,item:itemId})}`;
+  if(onProgress)return uploadWithProgress<ImportBatchView>(url,file,onProgress,signal);
+  const response=await fetch(url,{method:'POST',body:file,...(signal?{signal}:{})});const result=await response.json();
+  if(!response.ok)throw new NativeApiError(result.error??'動画を取り込めません',response.status,result.code);return result;
+}
+export function referenceImportItem(projectId:string,body:{batchId:string;itemId:string;path:string;expectedFingerprint?:string}):Promise<ImportBatchView>{
+  return nativeRequest<ImportBatchView>(projectId,'/imports/reference',body);
+}
+/** 画面が送れなかった（送るのをやめた）素材を束の中で失敗にする（残りは「失敗分を除いて並べる」で並べられる）。 */
+export function abandonImportItems(projectId:string,batchId:string,itemIds:readonly string[]):Promise<ImportBatchView>{
+  return nativeRequest<ImportBatchView>(projectId,'/imports/abandon',{batchId,itemIds});
+}
+/**
+ * 失敗したら1回だけやり直す（取り込みの後始末の要求。abandon が届かないと、渡せなかった素材が受け渡し待ちのまま残って判断の案内も確定も止まり、
+ * 再起動すると判定済みの素材まで失敗になるため）。2回目の失敗はそのまま返す。
+ */
+export function retryOnce<T>(request:()=>Promise<T>):Promise<T>{return request().catch(()=>request());}
+export function cancelImportBatch(projectId:string,batchId:string):Promise<ImportBatchView>{return nativeRequest<ImportBatchView>(projectId,'/imports/cancel',{batchId});}

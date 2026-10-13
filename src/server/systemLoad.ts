@@ -9,6 +9,8 @@ import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
 import { sequenceTranscriptions } from './sequence/transcriptions';
 import { sequenceExports } from './sequence/exports';
+import { slidesExports } from './slides/exports';
+import { slidesVideoImports } from './slides/videoImport';
 
 /**
  * 環境（CPU コア数・メモリ）から推奨される重ジョブの最大同時実行数を算出する。
@@ -59,7 +61,7 @@ export function heavyJobGate(force: boolean, deps: HeavyJobGateDeps): HeavyJobGa
   return { allowed: false, running, recommendedMax };
 }
 
-/** 5 マネージャ（render/transcribe/denoise/normalize/preview-proxy）の activeCount を束ねる。 */
+/** 重い処理の各マネージャ（render/transcribe/denoise/normalize/preview-proxy・新形式の文字起こしと書き出し・スライドの書き出しと動画取り込み）。スライドの縮小画像は自動で走る背景処理なので数えない（数えると利用者が押した書き出しが断られる。縮小画像の側が他の重い処理に道を譲る）の activeCount を束ねる。 */
 export function heavyJobCounts(): Array<() => number> {
   return [
     () => renderJobs.activeCount(),
@@ -69,5 +71,7 @@ export function heavyJobCounts(): Array<() => number> {
     () => denoiseJobs.activeCount(),
     () => normalizeJobs.activeCount(),
     () => previewProxyJobs.activeCount(),
+    () => slidesExports.activeCount(),
+    () => slidesVideoImports.activeCount(),
   ];
 }

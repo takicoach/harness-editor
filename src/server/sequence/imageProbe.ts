@@ -1,4 +1,4 @@
-import { open } from 'node:fs/promises';
+import { open, type FileHandle } from 'node:fs/promises';
 
 /** 画像の表示上の寸法（EXIF の向きを反映した後）。 */
 export interface ImageDisplaySize { width: number; height: number }
@@ -13,13 +13,15 @@ export interface ImageInspection { displaySize?: ImageDisplaySize; orientation: 
 /** 先頭だけ読む量。EXIF（APP1）と WebP の見出しはこの範囲にある。 */
 export const IMAGE_HEAD_BYTES = 256 * 1024;
 
+/** 開いたファイル記述子から画像の先頭を読む（参照の取り込みは同じ実体を調べる）。 */
+export async function readImageHeadFromHandle(handle: FileHandle): Promise<Buffer> {
+  const buffer = Buffer.alloc(IMAGE_HEAD_BYTES);
+  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  return buffer.subarray(0, bytesRead);
+}
 export async function readImageHead(path: string): Promise<Buffer> {
   const handle = await open(path, 'r');
-  try {
-    const buffer = Buffer.alloc(IMAGE_HEAD_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead);
-  } finally { await handle.close(); }
+  try { return await readImageHeadFromHandle(handle); } finally { await handle.close(); }
 }
 
 function tiffOrientation(tiff: Buffer): number | undefined {

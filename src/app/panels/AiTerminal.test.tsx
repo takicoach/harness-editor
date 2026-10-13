@@ -51,6 +51,8 @@ describe('AiTerminal — 再確認ボタン (I1)', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       calls.push(url);
+      if (url.startsWith('/api/ai/login')) return jsonRes({ state: 'ok' });
+      if (url === '/api/ai/presence') return jsonRes({ terminal: 'idle', tool: null, mcp: false, connected: false, focus: { primary: null, request: null, lastRead: null } });
       if (url.startsWith('/api/ai/tools')) {
         return jsonRes({ tools: [claudeTool({ status: 'unverified' }), codexTool()], current: null, notes: [] });
       }
@@ -84,6 +86,8 @@ describe('AiTerminal — 片方接続中でももう一方を導入できる (I2
       if (url === '/api/ai/install/status') {
         return jsonRes({ phase: 'done', log: ['done'] });
       }
+      if (url.startsWith('/api/ai/login')) return jsonRes({ state: 'ok' });
+      if (url === '/api/ai/presence') return jsonRes({ terminal: 'idle', tool: null, mcp: false, connected: false, focus: { primary: null, request: null, lastRead: null } });
       if (url.startsWith('/api/ai/tools')) {
         toolsCallCount++;
         return jsonRes({

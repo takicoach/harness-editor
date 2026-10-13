@@ -83,9 +83,9 @@ describe('heavyJobGate', () => {
 });
 
 describe('heavyJobCounts', () => {
-  it('独自文字起こしと書き出しを含む7マネージャ分の activeCount を返す（既定は全て 0）', () => {
+  it('独自文字起こしと書き出し、スライドの書き出し・動画への取り込み（縮小画像は数えない）を含む9マネージャ分の activeCount を返す（既定は全て 0）', () => {
     const counts = heavyJobCounts();
-    expect(counts).toHaveLength(7);
+    expect(counts).toHaveLength(9);
     for (const count of counts) {
       expect(typeof count).toBe('function');
       expect(count()).toBe(0);

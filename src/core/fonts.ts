@@ -14,6 +14,7 @@ export const FONTS: readonly FontDef[] = [
   { id: 'system-mincho', family: 'Hiragino Mincho ProN', label: '明朝（システム）', file: null, group: 'system' },
   { id: 'system-arial', family: 'Arial', label: 'Arial（システム）', file: null, group: 'system' },
   { id: 'noto-sans-jp', family: 'Noto Sans JP', label: '標準ゴシック（Noto Sans JP）', file: 'noto-sans-jp-400.woff2', group: 'bundled' },
+  { id: 'noto-sans-jp-black', family: 'Noto Sans JP Black', label: '極太ゴシック（Noto Sans JP 900）', file: 'noto-sans-jp-black.woff2', group: 'bundled' },
   { id: 'zen-kaku-gothic-new', family: 'Zen Kaku Gothic New', label: '読みやすいゴシック（Zen Kaku Gothic New）', file: 'zen-kaku-gothic-new-400.woff2', group: 'bundled' },
   { id: 'biz-udpgothic', family: 'BIZ UDPGothic', label: 'UD ゴシック（BIZ UDPGothic）', file: 'biz-udpgothic-400.woff2', group: 'bundled' },
   { id: 'm-plus-rounded-1c', family: 'M PLUS Rounded 1c', label: '丸ゴシック（M PLUS Rounded 1c）', file: 'm-plus-rounded-1c-400.woff2', group: 'bundled' },

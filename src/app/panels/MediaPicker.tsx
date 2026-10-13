@@ -20,6 +20,13 @@ interface MediaPickerProps {
   onPick: (file: PickedFile) => void;
   /** 画像を2枚以上選んで「選んだ画像で作成」を押した（選んだ順）。multiple のときだけ使う。 */
   onPickMany?: (files: PickedFile[]) => void;
+  /**
+   * フォルダーを選ぶ（コピー先の「場所を指定」）。表示中のフォルダーを選ぶボタンを出す。起点の一覧では選べない。
+   * この時のファイルは中身の目安として見せるだけ（押しても選ばない）。
+   */
+  onPickFolder?: (path: string) => void;
+  /** フォルダーを選ぶボタンの文言。 */
+  folderLabel?: string;
   onCancel: () => void;
 }
 const fileIcon = (name: string): string => ({ audio: '🎵', image: '🖼' } as Record<string, string>)[createMediaKind(name) ?? ''] ?? '🎬';
@@ -31,7 +38,7 @@ const fileIcon = (name: string): string => ({ audio: '🎵', image: '🖼' } as 
  * `/api/browse` を叩いて一覧する。走査できるのはサーバが許可した起点の配下だけ。
  * （サイドバーの `FolderBrowser` はプロジェクト一覧で、別物。）
  */
-export function MediaPicker({ title, note, onPick, onCancel,media,multiple=false,onPickMany }: MediaPickerProps) {
+export function MediaPicker({ title, note, onPick, onCancel,media,multiple=false,onPickMany,onPickFolder,folderLabel }: MediaPickerProps) {
   const [listing, setListing] = useState<BrowseListing | null>(null);
   const [chosen, setChosen] = useState<PickedFile[]>([]);
   const toggle = (file: PickedFile) => setChosen((current) => current.some((item) => item.path === file.path)
@@ -111,7 +118,7 @@ export function MediaPicker({ title, note, onPick, onCancel,media,multiple=false
               {listing.files.map((f) => {
                 const selectable = multiple && createMediaKind(f.name) === 'image', order = chosen.findIndex((item) => item.path === f.path);
                 return (
-                  <button key={f.path} type="button" className={'mp-row mp-file' + (order >= 0 ? ' mp-selected' : '')}
+                  <button key={f.path} type="button" className={'mp-row mp-file' + (order >= 0 ? ' mp-selected' : '')} disabled={onPickFolder !== undefined}
                     aria-pressed={selectable ? order >= 0 : undefined} onClick={() => (selectable ? toggle(f) : onPick(f))}>
                     <span className="mp-icon" aria-hidden="true">{fileIcon(f.name)}</span>
                     <span className="mp-name">{f.name}</span>
@@ -120,8 +127,8 @@ export function MediaPicker({ title, note, onPick, onCancel,media,multiple=false
                   </button>
                 );
               })}
-              {listing.path !== null && listing.dirs.length === 0 && listing.files.length === 0 && (
-                <div className="mp-empty">このフォルダに{media==='all'?'素材':'動画'}はありません</div>
+              {listing.path !== null && listing.dirs.length === 0 && (onPickFolder !== undefined || listing.files.length === 0) && (
+                <div className="mp-empty">{onPickFolder ? 'この中にフォルダーはありません。このフォルダーを選べます' : `このフォルダに${media==='all'?'素材':'動画'}はありません`}</div>
               )}
               {listing.path === null && listing.roots.length === 0 && (
                 <div className="mp-empty">選べる場所がありません（外付けを接続してください）</div>
@@ -135,6 +142,12 @@ export function MediaPicker({ title, note, onPick, onCancel,media,multiple=false
 
         <div className="export-actions">
           <button type="button" className="export-cancel" onClick={onCancel}>キャンセル</button>
+          {onPickFolder && (
+            <button type="button" className="export-start" data-testid="mp-pick-folder" disabled={!listing?.path}
+              onClick={() => { if (listing?.path) onPickFolder(listing.path); }}>
+              {folderLabel ?? 'このフォルダーを選ぶ'}
+            </button>
+          )}
           {multiple && chosen.length > 0 && (
             <button type="button" className="export-start" data-testid="mp-confirm"
               onClick={() => (chosen.length === 1 ? onPick(chosen[0]!) : onPickMany?.(chosen))}>

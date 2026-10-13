@@ -9,6 +9,7 @@ import type {SequenceCommand} from './commands';
  * 受理集合はこの定数から導出し、ずれは下の型検査とテストで止める。
  */
 export const SEQUENCE_COMMAND_TYPES = [
+  'apply-silence-cut',
   'adopt-legacy-cut-history',
   'adopt-source-gap',
   'resize-cut-boundary',
@@ -40,11 +41,15 @@ export const SEQUENCE_COMMAND_TYPES = [
   'unlink',
   'add-track',
   'remove-track',
+  'set-main-tracks',
+  'set-sequence-format',
   'insert',
   'register-assets',
   'set-track-enabled',
   'move-track',
   'update-clip',
+  'update-archived-clip',
+  'swap-usage-content',
   'replace-audio-source',
   'replace-text-style-asset',
   'remove-asset',
@@ -57,12 +62,19 @@ export type SequenceCommandType = (typeof SEQUENCE_COMMAND_TYPES)[number];
 
 /** `/command` 以外の専用ルートだけが発行する編集操作（transport の明示的な拒否リスト）。 */
 export const SEQUENCE_COMMAND_TYPES_NOT_OVER_HTTP = [
+  'apply-silence-cut',
   // 旧カットの引き継ぎ。/legacy-cuts/adopt が planId/planDigest の同一性を検証してから発行する。
   'adopt-legacy-cut-history',
   // 文字起こしの取り込み。/transcribe/apply が素材の指紋一致を検証してから発行する。
   'set-transcript',
   // 台本の構成変更。/script/edit-review の下見を通した結果からサーバーが組み立てる。
   'reorder-ranges',
+  // 退避クリップの書き換え。画面から単独で使う経路は無く、swap-usage-content の中の部品としてだけ使う。
+  'update-archived-clip',
+  // メインの記録。/main/append と取り込みの確定がサーバで組み立てる batch の部品としてだけ使う。
+  'set-main-tracks',
+  // 書式の決定。未初期化の案件に最初の動画を足す batch の先頭としてだけ使う（Undo 1回で配置ごと戻る）。
+  'set-sequence-format',
 ] as const satisfies readonly SequenceCommandType[];
 
 /**
@@ -70,6 +82,12 @@ export const SEQUENCE_COMMAND_TYPES_NOT_OVER_HTTP = [
  * transport（api.ts）が数え、UI（まとめドラッグ）も同じ値で先に断る。
  */
 export const MAX_SEQUENCE_COMMAND_LEAVES = 50;
+
+/**
+ * swap-usage-content（使用箇所をまとめて書き換える。葉としては1件）が1回で書き換える片の上限（live と退避の合計）。
+ * 試し差し替えは、これを超える使用箇所を試しの前に断る（trialSwap.ts）。
+ */
+export const MAX_USAGE_SWAP_TARGETS = 5000;
 
 /** 履歴操作は SequenceCommand ではないが EditRequest の一部として /command が受ける。 */
 export const SEQUENCE_HISTORY_COMMAND_TYPES = ['undo', 'redo'] as const;

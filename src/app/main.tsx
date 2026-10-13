@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { EventBusProvider } from './eventBus';
 import { NativeApp } from './native/NativeApp';
+import { SlidesApp } from './native/slides/SlidesApp';
 
 // Temporary explicit route for verifying old features during their migration.
 // Normal entry never imports the legacy Player or old editing state.
@@ -15,7 +16,8 @@ createRoot(rootEl).render(
   <React.StrictMode>
     {/* SSE 1 本統合（/api/events）。App が useEventBusProjectId で選択中プロジェクトを伝える。 */}
     <EventBusProvider>
-      {query.get('legacy') === '1' ? <React.Suspense fallback={<p>読み込んでいます…</p>}><LegacyApp /></React.Suspense> : <NativeApp />}
+      {query.get('legacy') === '1' ? <React.Suspense fallback={<p>読み込んでいます…</p>}><LegacyApp /></React.Suspense>
+        : query.get('slides') ? <SlidesApp slidesId={query.get('slides')!} /> : <NativeApp />}
     </EventBusProvider>
   </React.StrictMode>,
 );

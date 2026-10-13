@@ -14,7 +14,7 @@ export const PRODUCT_TELOP_SIGNATURE='TAKICOACH_TELOP_STYLES';
 
 /**
  * 自動更新の対象にする版（設計 7 の未確定を 2026-09-17 の実測で確定）。
- * 測り方は計画 Task 18 Step 1。証跡 docs/research/2026-09-17-feedback-after/telop-template-versions.txt。
+ * 測り方は計画 Task 18 Step 1。
  *
  * 署名付き 1 行（899 行・a73685d6cea1c0c9）は project-template 自身の移行前の本文
  * （コミット f7f82cb9 時点）。project-template は Task 11/13 でこの表の先（移行先）に

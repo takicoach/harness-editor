@@ -1,6 +1,7 @@
 /* 書き出しの headless Chromium も同一オリジンでこの CSS を読む（index.html と native-render.html の両方から link する）。 */
 @font-face { font-family: 'Noto Sans JP'; src: url('/fonts/noto-sans-jp-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
 @font-face { font-family: 'Noto Sans JP'; src: url('/fonts/noto-sans-jp-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
+@font-face { font-family: 'Noto Sans JP Black'; src: url('/fonts/noto-sans-jp-black.woff2') format('woff2'); font-weight: 900; font-display: block; }
 @font-face { font-family: 'Zen Kaku Gothic New'; src: url('/fonts/zen-kaku-gothic-new-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
 @font-face { font-family: 'Zen Kaku Gothic New'; src: url('/fonts/zen-kaku-gothic-new-700.woff2') format('woff2'); font-weight: 700; font-display: block; }
 @font-face { font-family: 'BIZ UDPGothic'; src: url('/fonts/biz-udpgothic-400.woff2') format('woff2'); font-weight: 400; font-display: block; }

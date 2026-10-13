@@ -69,6 +69,7 @@
 .native-cut-source-controls label{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
 .native-cut-source-controls select{min-width:0;max-width:260px;flex:1}
 .native-cut-source-controls button{white-space:nowrap}
+.native-trial-controls>span{flex:1;min-width:0}
 .native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=audio]) .native-ducking-settings{display:none}
 .native-ducking-settings .tb-ducking{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .native-ducking-settings .tb-duck-strength{display:flex;gap:5px}
@@ -150,12 +151,15 @@
 .native-safe-area-frame {position:absolute;border:1px dashed color-mix(in srgb,var(--fg-0) 45%,transparent)}
 .native-safe-area-band {position:absolute;background:color-mix(in srgb,var(--fg-0) 12%,transparent);border-top:1px dashed color-mix(in srgb,var(--fg-0) 35%,transparent)}
 .native-preview-box:fullscreen {background:#000;display:flex;align-items:center;justify-content:center}
-/* T28: 素材の試聴・「案件から外す」・「ゴミ箱へ移す」。
+/* T28: 素材の試聴・「案件から外す」・「ゴミ箱へ移す」（複数素材: 「メインの末尾に追加」も同じ群）。
    .native-asset-place は native.css で position:absolute のホバー表示のまま残す。
    試聴・案件から外すボタンは通常のフロー内に並べ、素材名の右で折り返す。 */
 .native-asset-row {display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .native-asset-audition,
+.native-asset-append,
 .native-asset-remove,
+.native-asset-save,
+.native-asset-copy,
 .native-asset-trash {
   min-height:0;
   padding:4px 8px;
@@ -166,7 +170,10 @@
   border-radius:var(--radius-sm);
 }
 .native-asset-audition,
-.native-asset-remove {
+.native-asset-append,
+.native-asset-remove,
+.native-asset-save,
+.native-asset-copy {
   color:var(--fg-0);
 }
 /* cf2034b9 の #d32f2f 直書きをトークンへ。--danger はテーマごとに定義済み
@@ -176,7 +183,10 @@
   background:color-mix(in srgb,var(--danger) 88%,#000);
 }
 .native-asset-audition:hover:not(:disabled),
-.native-asset-remove:hover:not(:disabled) {
+.native-asset-append:hover:not(:disabled),
+.native-asset-remove:hover:not(:disabled),
+.native-asset-save:hover:not(:disabled),
+.native-asset-copy:hover:not(:disabled) {
   background:color-mix(in srgb,var(--bg-2) 24%,transparent);
 }
 .native-asset-trash:hover:not(:disabled) {
@@ -265,3 +275,8 @@
 .native-telop-template-update > p[role='alert'] { color: var(--danger); margin: 0; }
 .native-telop-template-applied { display: flex; flex-wrap: wrap; gap: 6px; }
 .native-style-confirm ul { margin: 6px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+/* 素材置場に保存ダイアログ */
+.native-library-save-field {display:flex;flex-direction:column;gap:4px;margin:8px 0;font-size:var(--native-font-sub);color:var(--fg-2)}
+.native-library-save-field input,.native-library-save-field textarea {font:inherit;color:var(--fg-0);background:var(--bg-2);border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:6px 8px}
+.native-library-save-error {color:var(--danger);font-size:var(--native-font-sub);margin:6px 0}
+.native-library-save-actions {display:flex;justify-content:flex-end;gap:8px;margin-top:10px}

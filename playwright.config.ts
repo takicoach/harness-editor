@@ -70,6 +70,11 @@ export default defineConfig({
       SUPERMOVIE_LEARNING_HOME: resolve(import.meta.dirname, 'tests/.learning-home'),
       // 保存先の解決は HARNESS_LEARNING_HOME が先。開発者のシェルに設定があっても実際の学習フォルダへ書かないよう同じ場所へ固定する。
       HARNESS_LEARNING_HOME: resolve(import.meta.dirname, 'tests/.learning-home'),
+      // 重い処理の枠（heavyJobGate）の既定は CPU・メモリから算出され、機械ごとに 1〜2 本まで下がる。
+      // e2e は複数 worker が同じ server へ Chromium を使う書き出し・プレビューを同時に投げるため、
+      // 既定のままだと枠が埋まって 429 で書き出しが始まらず、並列度しだいで赤くなる（実測: slides の書き出し系）。
+      // 枠の挙動そのものは systemLoad.test.ts と heavy-job-confirm.spec.ts が見るので、e2e の server では十分に広げて固定する。
+      SME_MAX_HEAVY_JOBS: '8',
       SME_RENDER_MOCK: '1',
       // 4s: 進捗ステップは delay/4=1s 刻み（25%→50%→75%→100%）。
       // スモークは 1s 時点の進捗％を確実に観測でき、キャンセルテストも

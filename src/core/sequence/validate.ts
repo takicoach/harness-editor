@@ -8,6 +8,7 @@ import {TELOP_ANIMATION_IDS, type TelopAnimation} from '../types';
 import {validateNativeSpeedMetadata} from './speedMetadata';
 import {validateInsertOwnSpeed} from './insertOwnSpeed';
 import {validateCutArchive} from './cutArchive';
+import {shapeExtrasIssue,textExtrasIssue,visualLookIssue} from './renderExtras';
 
 function fail(message: string, targets: string[] = []): never {
   throw new SequenceError('INVALID_DOCUMENT', message, targets);
@@ -207,6 +208,8 @@ function validateDocument(value: unknown, shared?: SequenceDocument): asserts va
           || typeof a.lineHeight !== 'number' || a.lineHeight < .5 || a.lineHeight > 5
           || typeof a.letterSpacing !== 'number' || Math.abs(a.letterSpacing) > 100
           || !['left', 'center', 'right'].includes(a.align)) fail('文字の書式が不正です', [clip.id]);
+        const extras = textExtrasIssue(a);
+        if (extras) fail(extras, [clip.id]);
       }
     } else if (content.kind === 'shape') {
       const d = content.data as unknown as Record<string, unknown>;
@@ -216,6 +219,8 @@ function validateDocument(value: unknown, shared?: SequenceDocument): asserts va
         || !['thin', 'medium', 'thick'].includes(String(d.thickness))
         || (d.opacity !== undefined && (!number(d.opacity) || (d.opacity as number) < 0 || (d.opacity as number) > 1)))
         fail('図形の内容が不正です', [clip.id]);
+      const shapeIssue = shapeExtrasIssue(content);
+      if (shapeIssue) fail(shapeIssue, [clip.id]);
       if (d.kind === 'angle') {
         if (![d.x3, d.y3].every(number)) fail('分度器には3つ目の点が必要です', [clip.id]);
         const zero = (ax: number, ay: number, bx: number, by: number): boolean => ax === bx && ay === by;
@@ -263,6 +268,8 @@ function validateDocument(value: unknown, shared?: SequenceDocument): asserts va
       if (v.keyframesOutside !== undefined && v.keyframesOutside !== 'base' && v.keyframesOutside !== 'hold') fail('キーフレーム範囲外の設定が不正です', [clip.id]);
       if (v.lut !== undefined && (!record(v.lut) || assets.get(v.lut.assetId)?.kind !== 'lut'
         || typeof v.lut.intensity !== 'number' || v.lut.intensity < 0 || v.lut.intensity > 1)) fail('LUTの設定が不正です', [clip.id]);
+      const lookIssue = visualLookIssue(v, content.kind);
+      if (lookIssue) fail(lookIssue, [clip.id]);
     }
   }
   for (const clip of doc.clips) {
@@ -330,6 +337,12 @@ function validateDocument(value: unknown, shared?: SequenceDocument): asserts va
   }
   if (doc.legacy !== undefined && (!record(doc.legacy) || !text(doc.legacy.sourceFingerprint)
     || !assets.has(doc.legacy.primaryAssetId) || !integer(doc.legacy.originalEndFrame))) fail('移行元の記録が不正です');
+  // Explicit main tracks belong to the live document only; archive/window graphs never carry them (readArchivedCutGraph).
+  if(!shared&&doc.main!==undefined){
+    const main=doc.main as unknown;
+    if(!record(main)||Object.keys(main).some(k=>!['videoTrackId','audioTrackId'].includes(k))||!id(main.videoTrackId)||tracks.get(main.videoTrackId)?.kind!=='visual'
+      ||(main.audioTrackId!==undefined&&(!id(main.audioTrackId)||tracks.get(main.audioTrackId)?.kind!=='audio')))fail('メインのトラックの記録が不正です');
+  }
   if(doc.scriptDocument!==undefined && !scriptDocumentSchema.safeParse(doc.scriptDocument).success) fail('台本の形式が不正です');
   if(doc.textStylePrefs!==undefined){
     const prefs=doc.textStylePrefs as unknown as Record<string,unknown>;

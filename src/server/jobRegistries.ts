@@ -18,6 +18,10 @@ import { previewProxyJobs } from './previewProxyApi';
 import type { JobLookup } from './projectBusy';
 import { sequenceTranscriptions } from './sequence/transcriptions';
 import { sequenceExports } from './sequence/exports';
+import { thumbnailExports } from './thumbnail/exports';
+import { thumbnailPreviews } from './thumbnail/previews';
+import { slidesExports } from './slides/exports';
+import { slidesPreviews } from './slides/previews';
 
 /** busy 照会（get）と後始末（killAll）の両方に使える、プロジェクト単位のジョブ登録簿。 */
 export interface ProjectJobManager extends JobLookup {
@@ -33,6 +37,10 @@ export const PROJECT_JOB_MANAGERS: Record<string, ProjectJobManager> = {
   transcribe: transcribeJobs,
   nativeTranscribe: sequenceTranscriptions,
   nativeRender: sequenceExports,
+  thumbnailExport: thumbnailExports,
+  thumbnailPreview: thumbnailPreviews,
+  slidesExport: slidesExports,
+  slidesPreview: slidesPreviews,
   denoise: denoiseJobs,
   normalize: normalizeJobs,
   previewProxy: previewProxyJobs,

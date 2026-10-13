@@ -86,3 +86,10 @@ export function buildImageDocument(name: string, placements: readonly ImagePlace
   return { schemaVersion: 2, id: newId(), name, revision: 0, fps: CREATE_FPS, resolution: imageProjectResolution(display), sequenceEndFrame: per * placements.length,
     background: '#000000', assets, tracks: [{ id: 'v-main', name: '映像1', kind: 'visual', enabled: true }], clips, ...emptyParts() };
 }
+
+/** 空の作品（設計 第A段）: 1920x1080・30fps・長さ0。映像1／原音1 の空のトラックをメインとして記録する。最初に足した動画で書式を決める。 */
+export function buildEmptyDocument(name: string, newId: NewId = randomUUID): SequenceDocument {
+  return { schemaVersion: 2, id: newId(), name, revision: 0, fps: CREATE_FPS, resolution: { ...DEFAULT_RESOLUTION }, sequenceEndFrame: 0, background: '#000000', assets: [],
+    tracks: [{ id: 'v-main', name: '映像1', kind: 'visual', enabled: true }, { id: 'a-main', name: '原音1', kind: 'audio', enabled: true }],
+    main: { videoTrackId: 'v-main', audioTrackId: 'a-main' }, clips: [], ...emptyParts() };
+}

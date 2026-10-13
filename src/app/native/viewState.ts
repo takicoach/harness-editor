@@ -8,6 +8,7 @@ export interface NativeViewState {
   /** 調整タブの群の開閉。鍵は `${kind}:${group}`（F14）。 */
   inspectorOpen: Record<string, boolean>;
   activeCutId?: string | null;
+  // サムネの画面を開いているかは覚えない。案件は常に動画のモードで開き、サムネは利用者が切り替えた時だけ開く。
 }
 const defaults: NativeViewState = {mode:'edit',tab:'video',frame:0,selected:[],zoom:1.5,left:248,right:296,bottom:280,bottomAuto:true,inspectorOpen:{},leftHidden:false,rightHidden:false,ripple:true};
 /** 旧 tab 値（T…〜B 以前）の移行表。ここに無い値はすべて 'video' に落とす。 */
@@ -32,5 +33,7 @@ export function readNativeView(project: string): NativeViewState {
   } catch { return fallback; }
 }
 export function writeNativeView(project: string, view: NativeViewState): void {
-  try { sessionStorage.setItem(key(project),JSON.stringify(view)); } catch { /* Editing data is persisted separately on the server. */ }
+  // 前の版の型（thumbnail を持つ値）が渡されても書かない。
+  const { thumbnail: _thumbnail, ...rest } = view as NativeViewState & { thumbnail?: unknown };
+  try { sessionStorage.setItem(key(project),JSON.stringify(rest)); } catch { /* Editing data is persisted separately on the server. */ }
 }

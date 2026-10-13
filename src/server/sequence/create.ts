@@ -1,12 +1,12 @@
 import { mkdir, rm, lstat, realpath, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { sanitizeProjectName, precheckCreateProject, precheckCreateImages } from '../projectCreationChecks';
+import { sanitizeProjectName, precheckCreateProject, precheckCreateImages, precheckProjectName } from '../projectCreationChecks';
 import { HttpError } from '../http';
 import { importSequenceAssetDetailed, type RegisteredSequenceAsset } from './assets';
 import { registerSequenceReferenceDetailed } from './references';
 import { SequenceStore } from './store';
-import { buildAudioDocument, buildImageDocument, buildVideoDocument, type ImagePlacement } from './createDocuments';
+import { buildAudioDocument, buildEmptyDocument, buildImageDocument, buildVideoDocument, type ImagePlacement } from './createDocuments';
 import { imageLimitMessage, MAX_CREATE_IMAGES } from '../../shared/createMedia';
 import type { SequenceDocument } from '../../core/sequence/model';
 import type { ImageDisplaySize } from './imageProbe';
@@ -91,4 +91,9 @@ export async function createSequenceImageProject(root: string, input: { name: st
     }
     return buildImageDocument(id, placements, display);
   });
+}
+
+/** 素材なしの作品。名前の検査だけで作り、文書を1回だけ保存して確定する（設計 第A段）。 */
+export async function createEmptySequenceProject(root: string, input: { name: string }, signal?: AbortSignal): Promise<{ id: string }> {
+  return createInOwnedDirectory(root, input.name, (parent, id) => { precheckProjectName(parent, id); }, signal, async (_directory, id) => buildEmptyDocument(id));
 }

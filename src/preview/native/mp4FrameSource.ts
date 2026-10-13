@@ -1,9 +1,9 @@
-import { createFile, DataStream, type MP4BoxBuffer, type Movie, type Sample } from 'mp4box';
-import { addTime, compareTime, rational, subtractTime, type Rational } from '../../core/sequence/time';
+import { DataStream } from 'mp4box';
+import { addTime, compareTime, rational, type Rational } from '../../core/sequence/time';
 import {videoOnlyMp4Bytes} from './videoOnlyMp4Bytes';
 import { sampleInVideoSourceWindow, type VideoSourceWindow } from './videoSourceWindow';
 import { previewResourceError } from './previewError';
-import {mp4Presentation} from './mp4Presentation';
+import { mp4EditTimeline, mp4SampleTimeline, readMp4Movie, type IndexedSample } from './mp4Timeline';
 
 export interface ByteSource {
   size: number;
@@ -48,7 +48,6 @@ export async function httpByteSource(url: string, signal?: AbortSignal): Promise
   } };
 }
 
-interface IndexedSample { sample: Sample; identity: FrameIdentity; timestamp: number }
 interface CompressedGroup { firstByte: number; encoded: ArrayBuffer }
 interface PrefetchedGroup {
   start: number; end: number; request: AbortController; work: Promise<CompressedGroup>;
@@ -71,6 +70,35 @@ function decodeTimeoutError(stage: DecodeStage, origin: ByteSource['origin']): E
   return new Error(`${STAGE_LABEL[stage]}がタイムアウトしました${origin ? `（${ORIGIN_LABEL[origin]}）` : ''}。再試行してください`);
 }
 
+/** Page-wide decoder counters for export-speed measurement (read through
+ * window.harnessNativeDecodeStats). Counting only: nothing is logged or sent. */
+export const nativeDecodeStats = {
+  acquires: 0, cacheHits: 0, sessionsOpened: 0,
+  /** Why a request opened a new decode session from a keyframe. none = no live session
+   * (first use, idle close, or the previous one finished); seek = outside the live
+   * session's range; completed = flushed; evicted = this session already produced the
+   * requested frame, but it was dropped from the decoded-frame cache. */
+  openReasons: { none: 0, seek: 0, completed: 0, evicted: 0 },
+  idleCloses: 0, groupsAdvanced: 0, framesDecoded: 0, framesDropped: 0, maxCachedFrames: 0,
+  /** Decoded frames held by all sources of the page now, and the most at any time. */
+  retainedFrames: 0, retainedBytes: 0, maxRetainedFrames: 0, maxRetainedBytes: 0,
+  /** Sources a renderer opened, and released before its own disposal: lastUse = past
+   * their last use in the export; overBudget = idle while all sources held too much. */
+  sourcesOpened: 0, sourcesReleased: { lastUse: 0, overBudget: 0 },
+};
+export type NativeDecodeStats = typeof nativeDecodeStats;
+
+/** How many decoded frames one source keeps. The preview uses the byte budget alone
+ * (64 MiB). An export also keeps at least minFrames, up to maxBytes, so a decoder that
+ * outputs a burst ahead of the request does not drop the frames asked for next. */
+export interface FrameRetention { budgetBytes?: number; minFrames?: number; maxBytes?: number;
+  /** Export only: never close the decoder for idleness (DECODE_IDLE_TIMEOUT_MS). A parallel-export worker
+   * can wait on its full queue for as long as the head block takes, and closing would make every resume
+   * decode again from a keyframe. The export releases a source after its last use (exportSourceRelease). */
+  keepDecoderOpen?: boolean }
+export const DEFAULT_FRAME_CACHE_BYTES = 64 * 1024 * 1024;
+const frameBytes = (frame: VideoFrame) => frame.codedWidth * frame.codedHeight * 4;
+
 /** Shared random-access decoder. Every returned VideoFrame is owned by the caller. */
 export class Mp4FrameSource {
   private cache = new Map<number, VideoFrame>();
@@ -86,29 +114,23 @@ export class Mp4FrameSource {
     private readonly bytes: ByteSource,
     readonly config: VideoDecoderConfig,
     private readonly samples: IndexedSample[],
-    private readonly cacheBudget: number,
+    retention: number | FrameRetention,
     private readonly presentation: readonly {identity: FrameIdentity}[] = samples,
-  ) {}
+  ) {
+    const value = typeof retention === 'number' ? { budgetBytes: retention } : retention;
+    this.cacheBudget = value.budgetBytes ?? DEFAULT_FRAME_CACHE_BYTES;
+    this.minFrames = value.minFrames ?? 0; this.maxBytes = value.maxBytes ?? Infinity;
+    this.keepDecoderOpen = value.keepDecoderOpen ?? false;
+  }
+  private readonly keepDecoderOpen: boolean;
+  private readonly cacheBudget: number;
+  private readonly minFrames: number;
+  private readonly maxBytes: number;
 
-  static async open(bytes: ByteSource, videoTrackIndex = 0, cacheBudget = 64 * 1024 * 1024): Promise<Mp4FrameSource> {
+  static async open(bytes: ByteSource, videoTrackIndex = 0, retention: FrameRetention = {}): Promise<Mp4FrameSource> {
     if (typeof VideoDecoder === 'undefined') throw new Error('このブラウザではWebCodecsの動画再生に対応していません');
     bytes=await videoOnlyMp4Bytes(bytes);
-    const file = createFile(false);
-    let movie: Movie | undefined, error: string | undefined, offset = 0, metadataBytes = 0;
-    file.onReady = info => { movie = info; };
-    file.onError = (...args) => { error = args.map(String).join(': '); };
-    while (!movie && !error && offset < bytes.size) {
-      const end = Math.min(bytes.size, offset + 256 * 1024);
-      const buffer = await bytes.read(offset, end) as MP4BoxBuffer;
-      buffer.fileStart = offset;
-      metadataBytes += buffer.byteLength;
-      if (metadataBytes > 32 * 1024 * 1024) throw new Error('映像の索引が大きすぎます。編集用プロキシを作成してください');
-      const next = file.appendBuffer(buffer, end === bytes.size);
-      offset = Math.max(end, next);
-    }
-    if (error || !movie) throw new Error(`MP4の索引を読み取れません: ${error ?? 'moovがありません'}`);
-    const info = movie as Movie;
-    if (info.isFragmented) throw new Error('分割MP4は編集用プロキシへ変換してください');
+    const { file, movie: info } = await readMp4Movie(bytes);
     const track = info.videoTracks[videoTrackIndex];
     if (!track?.video) throw new Error('映像トラックが見つかりません');
     const entries = file.getTrackById(track.id).mdia.minf.stbl.stsd.entries;
@@ -126,35 +148,14 @@ export class Mp4FrameSource {
       ...(description ? { description } : {}), hardwareAcceleration: 'no-preference', optimizeForLatency: true,
     };
     if (!(await VideoDecoder.isConfigSupported(config)).supported) throw new Error(`この映像形式には編集用プロキシが必要です: ${config.codec}`);
-    let mediaStart = rational(0), leading = rational(0), editDuration: Rational | undefined;
-    if (track.edits?.length) {
-      let active = false;
-      for (const edit of track.edits) {
-        if (edit.media_rate_integer !== 1 || edit.media_rate_fraction !== 0) throw new Error('速度付きMP4編集リストはプロキシへ変換してください');
-        if (edit.media_time === -1 && !active) leading = addTime(leading, rational(edit.segment_duration, track.movie_timescale));
-        else if (!active && edit.media_time >= 0) {
-          mediaStart = rational(edit.media_time, track.timescale);
-          editDuration = rational(edit.segment_duration, track.movie_timescale); active = true;
-        }
-        else throw new Error('複雑なMP4編集リストはプロキシへ変換してください');
-      }
-      if (!active) throw new Error('表示区間のないMP4編集リストはプロキシへ変換してください');
-    }
-    const samples = file.getTrackSamplesInfo(track.id).map((sample, index) => {
-      if (![sample.cts, sample.duration, sample.offset, sample.size, sample.timescale].every(Number.isSafeInteger)
-        || sample.duration <= 0 || sample.timescale <= 0 || sample.offset < 0 || sample.size <= 0 || sample.offset + sample.size > bytes.size) {
-        throw new Error('映像フレームの索引が不正です');
-      }
-      return { sample, timestamp: Math.round(sample.cts / sample.timescale * 1e6),
-        identity: { sample: index, pts: addTime(subtractTime(rational(sample.cts, sample.timescale), mediaStart), leading), duration: rational(sample.duration, sample.timescale) } };
-    });
-    if (!samples.length || new Set(samples.map(s => s.timestamp)).size !== samples.length) throw new Error('映像フレームの時刻を一意に識別できません');
-    const presentation=mp4Presentation(samples.map(s=>s.identity),leading,editDuration).map(identity=>({identity}));
-    if (!presentation.length) throw new Error('映像の表示区間がありません');
-    return new Mp4FrameSource(bytes, config, samples, cacheBudget, presentation);
+    const timeline = mp4EditTimeline(track);
+    const { samples, presentation } = mp4SampleTimeline(file.getTrackSamplesInfo(track.id), timeline, bytes.size);
+    return new Mp4FrameSource(bytes, config, samples, retention, presentation.map(identity => ({ identity })));
   }
 
   get frameCount(): number { return this.samples.length; }
+  /** Bytes of decoded frames this source holds (RGBA size of each coded frame). */
+  get retainedBytes(): number { return this.cacheBytes; }
   /** Display intervals exclude edit preroll; frameCount still counts raw codec samples. */
   get identities(): FrameIdentity[] { return this.presentation.map(s => structuredClone(s.identity)); }
 
@@ -187,6 +188,7 @@ export class Mp4FrameSource {
     }
     if (target < 0) throw new Error('指定時刻に映像フレームがありません');
     this.retentionTarget = target;
+    nativeDecodeStats.acquires++; if (this.cache.has(target)) nativeDecodeStats.cacheHits++;
     if (this.session?.failure) { const error = this.session.failure; this.closeSession(error); throw error; }
     if (!this.cache.has(target)) await this.decodeGroup(target);
     const frame = this.cache.get(target);
@@ -194,8 +196,8 @@ export class Mp4FrameSource {
     return { frame: frame.clone(), identity: structuredClone(this.presentation.find(s=>s.identity.sample===target)!.identity) };
     } finally {
       const session = this.session;
-      if (session && !this.disposed) this.idleTimer = setTimeout(() => {
-        if (this.session === session) this.closeSession();
+      if (session && !this.disposed && !this.keepDecoderOpen) this.idleTimer = setTimeout(() => {
+        if (this.session === session) { nativeDecodeStats.idleCloses++; this.closeSession(); }
       }, DECODE_IDLE_TIMEOUT_MS);
     }
   }
@@ -203,6 +205,13 @@ export class Mp4FrameSource {
     let start = target, end = target + 1;
     while (start > 0 && !this.samples[start]!.sample.is_sync) start--;
     if (!this.samples[start]!.sample.is_sync) throw new Error('映像のキーフレームがありません');
+    // Open GOP (HEVC RASL): a frame decoded after its keyframe but shown before it references
+    // the previous GOP, and a decoder starting at that keyframe drops it. Start one keyframe
+    // earlier. Closed GOPs have no such frame. readGroup's byte limit covers both GOPs.
+    if (start > 0 && this.samples[target]!.timestamp < this.samples[start]!.timestamp) {
+      start--;
+      while (start > 0 && !this.samples[start]!.sample.is_sync) start--;
+    }
     while (end < this.samples.length && !this.samples[end]!.sample.is_sync) end++;
     try {
       // An evicted frame that this session already produced requires a new
@@ -211,6 +220,8 @@ export class Mp4FrameSource {
       const inRange = active && start >= active.start && start < active.end;
       const nextGroup = active && start === active.end && active.next === active.end;
       if (!active || (!inRange && !nextGroup) || active.completed || active.outputSamples.has(target)) {
+        nativeDecodeStats.openReasons[!active ? 'none' : active.completed ? 'completed' : active.outputSamples.has(target) ? 'evicted' : 'seek']++;
+        nativeDecodeStats.sessionsOpened++;
         this.closeSession();
         this.session = await this.openSession(start, end);
       }
@@ -224,7 +235,7 @@ export class Mp4FrameSource {
           // must reach flush instead of reading the entire movie.
           if (session.end < this.samples.length && advancedGroups === 0 && session.outputSamples.size > 0) {
             try {
-              if (await this.advanceSession(session, target)) advancedGroups++;
+              if (await this.advanceSession(session, target)) { advancedGroups++; nativeDecodeStats.groupsAdvanced++; }
               continue;
             } catch (error) {
               // The target may already be in the decoder's reorder buffer.
@@ -261,7 +272,7 @@ export class Mp4FrameSource {
       output: frame => {
         const index = session.byTimestamp.get(frame.timestamp);
         if (this.disposed || this.session !== session || index === undefined) { frame.close(); return; }
-        session.outputSamples.add(index); this.retainFrame(index, frame);
+        session.outputSamples.add(index); nativeDecodeStats.framesDecoded++; this.retainFrame(index, frame);
         for (const notify of session.listeners) notify();
       },
       error: error => { session.failure = error; for (const notify of session.listeners) notify(); },
@@ -344,11 +355,19 @@ export class Mp4FrameSource {
     }
     finally { request.abort(); }
   }
+  private account(frames: number, bytes: number): void {
+    this.cacheBytes += bytes;
+    nativeDecodeStats.retainedFrames += frames; nativeDecodeStats.retainedBytes += bytes;
+  }
+  /** Over the byte budget and above minFrames, or over the per-source ceiling. */
+  private overRetention(): boolean {
+    return this.cacheBytes > this.maxBytes || (this.cacheBytes > this.cacheBudget && this.cache.size > this.minFrames);
+  }
   private retainFrame(index: number, frame: VideoFrame): void {
     const old = this.cache.get(index);
-    if (old) { this.cacheBytes -= old.codedWidth * old.codedHeight * 4; old.close(); }
-    this.cache.set(index, frame); this.cacheBytes += frame.codedWidth * frame.codedHeight * 4;
-    while (this.cacheBytes > this.cacheBudget && this.cache.size > 1) {
+    if (old) { this.account(-1, -frameBytes(old)); old.close(); }
+    this.cache.set(index, frame); this.account(1, frameBytes(frame));
+    while (this.cache.size > 1 && this.overRetention()) {
       const target = this.retentionTarget, targetTime = this.samples[target]!.timestamp;
       const candidates = [...this.cache.keys()].filter(id => id !== target);
       // Use presentation time, including reordered B-frames. The anchor follows
@@ -361,9 +380,14 @@ export class Mp4FrameSource {
       })[0];
       if (farthest === undefined) break;
       const remove = this.cache.get(farthest)!;
-      this.cacheBytes -= remove.codedWidth * remove.codedHeight * 4;
-      remove.close(); this.cache.delete(farthest);
+      this.account(-1, -frameBytes(remove));
+      remove.close(); this.cache.delete(farthest); nativeDecodeStats.framesDropped++;
     }
+    // Held after eviction (the frame just output is briefly one more).
+    const stats = nativeDecodeStats;
+    stats.maxCachedFrames = Math.max(stats.maxCachedFrames, this.cache.size);
+    stats.maxRetainedFrames = Math.max(stats.maxRetainedFrames, stats.retainedFrames);
+    stats.maxRetainedBytes = Math.max(stats.maxRetainedBytes, stats.retainedBytes);
   }
   private assertSession(session: DecodeSession): void {
     if (this.disposed) throw new Error('映像は閉じられています');
@@ -413,7 +437,7 @@ export class Mp4FrameSource {
     this.disposed = true;
     for (const cancel of this.pending) cancel(new Error('映像は閉じられています'));
     this.closeSession();
-    for (const frame of this.cache.values()) frame.close();
-    this.cache.clear(); this.cacheBytes = 0;
+    for (const frame of this.cache.values()) { this.account(-1, -frameBytes(frame)); frame.close(); }
+    this.cache.clear();
   }
 }

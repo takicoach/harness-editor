@@ -7,7 +7,7 @@ import { makeMediaSamples, type MediaSamples } from '../src/server/sequence/__fi
 import { imageUploadPrefix } from '../src/shared/imageUploadFrame';
 
 /**
- * 新画面: 音声・画像から作品を作る（spec: docs/specs/2026-09-26-native-media-import-design.md）。
+ * 新画面: 音声・画像から作品を作る。
  * jsdom では確かめられない「実ブラウザの入口・実際の MP4 書き出し・EXIF の表示の縦横・チュートリアルの再開」をここで確かめる。
  * 作成物は SME_PROJECT_ROOT（src/server/__fixtures__）に専用名で作り、前後で消す。名前に worker 番号を混ぜる（create-project.spec.ts と同じ理由）。
  * 単一の素材は「コピーして取り込む」にチェックして作る（参照を優先する既定の経路は e2e 環境で保存場所の確認に入るため。着手前の赤 create-project.spec.ts 5 件と同じ事情）。

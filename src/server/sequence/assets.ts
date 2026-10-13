@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { constants, createWriteStream, type Stats } from 'node:fs';
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { Transform } from 'node:stream';
@@ -10,8 +10,13 @@ import { probeSequenceAsset, managedAssetPath } from './media';
 import type { ImageInspection } from './imageProbe';
 import { validateSequenceDocument } from '../../core/sequence/validate';
 import {isSequenceReferenceFile,openSequenceReference,registeredSequenceReferences} from './references';
+import {assertStillResolved,SOURCE_MOVED_MESSAGE,type ImportSourceOptions} from './sourceCheck';
+import {FileChangedError,fileIdentity,sharedFileDigest,sharedFileDigestUntilStalled} from './sharedDigest';
+import {watchedFs,type ReadLimit} from './fsWatch';
 
 export interface RegisteredSequenceAsset { asset: SequenceAsset; image?: ImageInspection }
+/** 取り込みの束へ段を知らせる（設計 §2-5）。知らせるだけで、照合の手順・順序は変えない。 */
+export interface ImportHooks { onPhase?(phase: 'probing' | 'fingerprinting'): void; onProbed?(streams: readonly MediaStream[]): void }
 
 /** Old registrations may retain an attached cover stream; preserve them only when every other stream matches. */
 export function onlyAttachedPicturesDiffer(recorded: readonly MediaStream[], current: readonly MediaStream[], attachedPictureIndexes: readonly number[]): boolean {
@@ -24,8 +29,10 @@ export function onlyAttachedPicturesDiffer(recorded: readonly MediaStream[], cur
 export async function importSequenceAsset(projectDirectory: string, sourcePath: string, name = basename(sourcePath), signal?: AbortSignal): Promise<SequenceAsset> {
   return (await importSequenceAssetDetailed(projectDirectory, sourcePath, name, signal)).asset;
 }
-export async function importSequenceAssetDetailed(projectDirectory: string, sourcePath: string, name = basename(sourcePath), signal?: AbortSignal): Promise<RegisteredSequenceAsset> {
+export async function importSequenceAssetDetailed(projectDirectory: string, sourcePath: string, name = basename(sourcePath), signal?: AbortSignal, hooks?: ImportHooks, options?: ImportSourceOptions): Promise<RegisteredSequenceAsset> {
+  await assertStillResolved(sourcePath, options);
   const root = await realpath(projectDirectory), source = await realpath(sourcePath), before = await stat(source);
+  if (options?.resolvedSource && source !== sourcePath) throw new Error(SOURCE_MOVED_MESSAGE);
   if (!before.isFile()) throw new Error('取り込む素材が通常のファイルではありません');
   const extension = (extname(name) || extname(sourcePath)).toLowerCase();
   if (!/^\.(mp4|mov|m4v|mkv|webm|avi|mp3|wav|m4a|aac|flac|ogg|png|jpe?g|webp|gif|avif|bmp|cube)$/.test(extension)) throw new Error('未対応の素材形式です');
@@ -36,16 +43,26 @@ export async function importSequenceAssetDetailed(projectDirectory: string, sour
     if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('素材の保存先が不正です');
   }
   const temporary = join(directory, `${randomUUID()}${extension}`), digest = createHash('sha256');
+  const same = (info: Stats) => info.dev === before.dev && info.ino === before.ino && info.size === before.size && info.mtimeMs === before.mtimeMs && info.ctimeMs === before.ctimeMs;
   try {
-    await pipeline(createReadStream(source), new Transform({ transform(chunk: Buffer, _encoding, callback) {
-      digest.update(chunk); callback(null, chunk);
-    } }), createWriteStream(temporary, { flags: 'wx', mode: 0o600 }), { signal });
-    const after = await stat(source);
-    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.ino !== after.ino)
-      throw new Error('取り込み中に元の素材が変更されました');
+    // リンクをたどらずに開き、開いたファイルが上で確かめたものと同じか（dev・ino・大きさ・更新時刻）を照合して、そのファイルから読む（パスを開き直さない）。
+    // 確かめた後・開く前だけ別のファイルに差し替えて、読み終えてから戻す経路も、開いたファイルの照合で断る。
+    const sourceHandle = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      if (!same(await sourceHandle.stat())) throw new Error('取り込み中に元の素材が変更されました');
+      hooks?.onPhase?.('fingerprinting');
+      await pipeline(sourceHandle.createReadStream({ autoClose: false, start: 0 }), new Transform({ transform(chunk: Buffer, _encoding, callback) {
+        digest.update(chunk); callback(null, chunk);
+      } }), createWriteStream(temporary, { flags: 'wx', mode: 0o600 }), { signal });
+      if (!same(await sourceHandle.stat()) || !same(await stat(source))) throw new Error('取り込み中に元の素材が変更されました');
+    } finally { await sourceHandle.close(); }
+    // 受付時に実パスへ解決した素材は、読んだ後にも今も同じ実パスかを確かめる（途中のフォルダをリンクへ差し替えたままの経路を断る）。
+    await assertStillResolved(sourcePath, options);
     const fingerprint = digest.digest('hex');
     // Probe before publication; invalid files cannot become registered assets.
+    hooks?.onPhase?.('probing');
     const probed = await probeSequenceAsset(root, `.harness/assets/${basename(temporary)}`, name, signal), inspected = probed.asset;
+    hooks?.onProbed?.(probed.asset.streams);
     if (inspected.fingerprint !== fingerprint) throw new Error('取り込んだ素材の内容が一致しません');
     const handle = await open(temporary, 'r'); try { await handle.sync(); } finally { await handle.close(); }
     const file = `.harness/assets/${fingerprint}${extension}`, destination = join(root, file);
@@ -131,11 +148,11 @@ export async function verifiedSequenceAssetPath(projectDirectory: string, asset:
   if ((await lstat(join(projectDirectory, asset.file))).isSymbolicLink()) throw new Error('管理素材がシンボリックリンクに置き換わっています');
   const signature = JSON.stringify([asset.fingerprint, before.dev, before.ino, before.size, before.mtimeMs, before.ctimeMs]);
   if (verified.get(path) === signature) return path;
-  const digest = createHash('sha256');
-  for await (const chunk of createReadStream(path, { signal })) digest.update(chunk);
-  const after = await stat(path);
-  if (digest.digest('hex') !== asset.fingerprint || before.size !== after.size || before.mtimeMs !== after.mtimeMs
-    || before.ctimeMs !== after.ctimeMs || before.ino !== after.ino) throw new Error(`素材「${asset.name}」が変更されています。保存時の素材を復元してください`);
+  const changed = () => new Error(`素材「${asset.name}」が変更されています。保存時の素材を復元してください`);
+  let digest: string;
+  try { digest = await sharedFileDigest(path, fileIdentity(before), signal); }
+  catch (error) { if (error instanceof FileChangedError) throw changed(); throw error; }
+  if (digest !== asset.fingerprint || fileIdentity(await stat(path)) !== fileIdentity(before)) throw changed();
   verified.set(path, signature);
   while (verified.size > 128) verified.delete(verified.keys().next().value!);
   return path;
@@ -144,13 +161,14 @@ export async function verifiedSequenceAssetPath(projectDirectory: string, asset:
 export interface SequenceAssetLease {
   path:string;handle:Awaited<ReturnType<typeof open>>;verify():Promise<void>;close():Promise<void>;
 }
-/** Pin the verified file for consumers that would otherwise reopen a mutable path. */
-export async function openSequenceAsset(projectDirectory:string,asset:SequenceAsset,signal?:AbortSignal):Promise<SequenceAssetLease>{
-  if(isSequenceReferenceFile(asset.file))return openSequenceReference(projectDirectory,asset,signal);
+/** Pin the verified file for consumers that would otherwise reopen a mutable path.
+ * limit.unresponsiveMs (書き出し前の確認): 開く・確かめる処理が戻らない時、読みが進まない時にその長さで待つのをやめる（UnresponsiveFileError）。 */
+export async function openSequenceAsset(projectDirectory:string,asset:SequenceAsset,signal?:AbortSignal,limit:ReadLimit={}):Promise<SequenceAssetLease>{
+  if(isSequenceReferenceFile(asset.file))return openSequenceReference(projectDirectory,asset,signal,limit);
   if(!/^[a-f0-9]{64}$/.test(asset.fingerprint))throw new Error('素材の指紋が不正です');
-  const path=await managedAssetPath(projectDirectory,asset.file);
+  const path=await managedAssetPath(projectDirectory,asset.file),limitMs=limit.unresponsiveMs;
   if((await lstat(join(projectDirectory,asset.file))).isSymbolicLink())throw new Error('管理素材がシンボリックリンクに置き換わっています');
-  const handle=await open(path,'r');let closed=false;
+  const handle=await watchedFs('open',path,()=>open(path,'r'),{limitMs,dispose:late=>late.close()});let closed=false;
   const close=async()=>{if(!closed){closed=true;await handle.close();}};
   try{
     const before=await handle.stat();
@@ -158,15 +176,15 @@ export async function openSequenceAsset(projectDirectory:string,asset:SequenceAs
     const signature=JSON.stringify([asset.fingerprint,before.dev,before.ino,before.size,before.mtimeMs,before.ctimeMs]);
     const verify=async()=>{
       signal?.throwIfAborted();
-      if(closed||identity(await handle.stat())!==identity(before)||identity(await stat(path))!==identity(before)
+      if(closed||identity(await handle.stat())!==identity(before)||identity(await watchedFs('stat',path,()=>stat(path),{limitMs}))!==identity(before)
         ||(await lstat(join(projectDirectory,asset.file))).isSymbolicLink())throw new Error('読み取り中に素材が変更されました');
     };
     if(verified.get(path)!==signature){
-      // FileHandle streams can emit an unhandled error if born aborted.
-      // Check after the awaited file operations, immediately before creation.
-      signal?.throwIfAborted();
-      const digest=createHash('sha256');for await(const chunk of handle.createReadStream({start:0,autoClose:false,signal}))digest.update(chunk);
-      if(digest.digest('hex')!==asset.fingerprint)throw new Error('保存時の素材と内容が一致しません');
+      // The shared digest opens its own descriptor and proves it is this same file (dev/ino/size/mtime/ctime).
+      let digest:string;
+      try{digest=await (limitMs===undefined?sharedFileDigest(path,fileIdentity(before),signal):sharedFileDigestUntilStalled(path,fileIdentity(before),signal,limitMs));}
+      catch(error){if(error instanceof FileChangedError)throw new Error('読み取り中に素材が変更されました');throw error;}
+      if(digest!==asset.fingerprint)throw new Error('保存時の素材と内容が一致しません');
       await verify();verified.set(path,signature);while(verified.size>128)verified.delete(verified.keys().next().value!);
     }
     await verify();return {path,handle,verify,close};

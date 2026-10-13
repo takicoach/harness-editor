@@ -1,0 +1,146 @@
+/* スライド画面（設計 2026-10-04）。色・余白・角丸はトークンだけ。ボタンの面・枠・余白は styles.css の「ボタン共通系統」が持つ（ここでは配置だけ）。
+   左のアイコン列・引き出し・右のつまみ・キャンバスの重ね表示は thumbnail.css の部品をそのまま使う（本体に .native-thumbnail も付ける）。 */
+.native-slides-app { height: 100vh; display: flex; flex-direction: column; background: var(--bg-0); color: var(--fg-0); }
+.native-slides-header { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-1); }
+.native-slides-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; overflow: hidden; }
+.native-slides-title strong { white-space: nowrap; font-size: var(--fs-head); }
+.native-slides-title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+.native-slides-dirty { flex-shrink: 0; color: var(--fg-3); font-size: var(--native-font-sub); }
+.native-slides-header-actions { display: flex; align-items: center; gap: 6px; }
+.native-slides { grid-template-rows: minmax(0, 1fr) auto auto; }
+.native-slides-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.native-slides-notice { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 30; max-width: min(720px, 92vw); border-radius: var(--radius-md); box-shadow: var(--panel-shadow); }
+.native-slides-recovery { max-width: 560px; margin: 48px auto; display: grid; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-1); }
+.native-slides-recovery h2 { margin: 0; font-size: 15px; }
+.native-slides-recovery p { margin: 0; color: var(--fg-1); line-height: 1.6; }
+.native-slides-empty { display: grid; place-items: center; }
+.native-slides-empty-card { max-width: 480px; display: grid; gap: 12px; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-1); color: var(--fg-0); }
+.native-slides-empty-card h2 { margin: 0; font-size: 16px; }
+.native-slides-empty-card p { margin: 0; color: var(--fg-1); line-height: 1.6; }
+
+.slides-home { display: grid; gap: 10px; margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-1); }
+.slides-home-head { display: flex; align-items: center; gap: 10px; }
+.slides-home-head h2 { margin: 0; font-size: 15px; }
+.slides-home-count { flex: 1; color: var(--fg-2); font-size: var(--native-font-sub); }
+.slides-home-create { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.slides-home-label { display: grid; gap: 4px; color: var(--fg-1); font-size: var(--native-font-sub); }
+.slides-home-input { min-width: 260px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-0); color: var(--fg-0); }
+.slides-home-error { margin: 0; color: var(--danger); }
+.slides-home-empty { margin: 0; color: var(--fg-2); }
+.slides-home-list { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.slides-home-card { min-width: 200px; display: grid; justify-items: start; gap: 4px; text-align: left; }
+.slides-home-card span { color: var(--fg-2); font-size: var(--native-font-sub); }
+
+/* 編集画面の配置（左の列・引き出し・右のつまみは thumbnail.css の .native-thumbnail-* をそのまま使う）。 */
+.native-slides { flex: 1; min-height: 0; }
+.native-slides .native-thumbnail-drawer[data-wide="true"] { width: 400px; }
+.native-slides > .native-slides-empty { grid-column: 3; grid-row: 1; }
+
+/* 下のページの帯と格子表示。 */
+.native-slides-strip { grid-column: 3; grid-row: 3; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--bg-1); }
+.native-slides-strip-actions { display: flex; flex-direction: column; gap: 4px; }
+.native-slides-pages { flex: 1; min-width: 0; display: flex; gap: 8px; margin: 0; padding: 2px; overflow-x: auto; list-style: none; }
+.native-slides-page { flex: 0 0 auto; width: 132px; display: grid; gap: 4px; }
+.native-slides-page-pick { width: 100%; aspect-ratio: 16 / 9; min-height: 0; overflow: hidden; display: grid; place-items: center; }
+.native-slides-page[data-current="true"] .native-slides-page-pick { outline: 2px solid var(--accent); outline-offset: 1px; }
+.native-slides-page-pick img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.native-slides-page-empty { width: 100%; height: 100%; background: var(--bg-3); }
+.native-slides-page-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: var(--native-font-sub); color: var(--fg-2); }
+.native-slides-page-number { font-weight: 700; color: var(--fg-0); }
+.native-slides-page-layout { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-slides-badge { padding: 0 6px; border-radius: var(--radius-sm); background: var(--bg-3); color: var(--fg-1); }
+.native-slides-badge[data-badge="proposal"], .native-slides-badge[data-badge="failed"] { background: var(--accent-tint); color: var(--accent); }
+.native-slides-grid-sheet { position: fixed; inset: 52px 0 0 0; z-index: 25; display: grid; align-content: start; gap: 12px; padding: 16px 20px; overflow: auto; background: var(--bg-0); }
+.native-slides-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.native-slides-grid .native-slides-page { width: auto; }
+
+/* 話すメモ（キャンバスの下）。 */
+.native-slides-notes { grid-column: 3; grid-row: 2; display: grid; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--border); background: var(--bg-1); }
+.native-slides-notes-count { color: var(--fg-3); font-size: var(--native-font-sub); font-variant-numeric: tabular-nums; }
+.native-slides-notes-input { width: 100%; min-height: 72px; max-height: 160px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-0); color: var(--fg-0); font: inherit; line-height: 1.6; }
+.native-slides-notes-input:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 0; }
+
+/* 「レイアウト」の引き出し。 */
+.native-slides-layouts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.native-slides-layout { display: grid; gap: 4px; }
+.native-slides-layout-pick { display: grid; gap: 4px; justify-items: stretch; text-align: center; }
+.native-slides-sketch { width: 100%; height: auto; display: block; border-radius: var(--radius-sm); }
+.native-slides-sketch-ground { fill: var(--bg-3); }
+.native-slides-sketch-text { fill: var(--fg-3); opacity: .55; }
+.native-slides-sketch-shape { fill: var(--accent); opacity: .35; }
+.native-slides-theme-colors { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.native-slides-theme-color { display: grid; justify-items: center; gap: 4px; font-size: var(--native-font-sub); color: var(--fg-2); }
+.native-slides-theme-font { display: grid; gap: 4px; font-size: var(--native-font-sub); color: var(--fg-2); }
+
+/* 「台本から作る」の引き出し。 */
+.native-slides-script { display: grid; gap: 14px; }
+.native-slides-step { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.native-slides-step h3 { margin: 0; font-size: 13px; color: var(--fg-1); }
+.native-slides-script-input { width: 100%; min-height: 160px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-0); color: var(--fg-0); font: inherit; line-height: 1.6; }
+.native-slides-script-count, .native-slides-progress-count { margin: 0; font-weight: 700; }
+.native-slides-paragraphs ol { max-height: 220px; overflow: auto; margin: 6px 0 0; padding-left: 0; list-style: none; display: grid; gap: 4px; color: var(--fg-1); font-size: var(--native-font-sub); }
+.native-slides-coverage { margin: 0; color: var(--fg-1); }
+.native-slides-coverage[data-complete="false"] { color: var(--danger); }
+.native-slides-outline, .native-slides-progress { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.native-slides-outline-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 110px auto auto auto; grid-template-areas: "n t l u d x" ". r r r r r"; align-items: center; gap: 2px 6px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.native-slides-outline-number { grid-area: n; color: var(--fg-3); font-variant-numeric: tabular-nums; }
+.native-slides-outline-title { grid-area: t; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-slides-outline-range { grid-area: r; color: var(--fg-3); font-size: var(--native-font-sub); }
+.native-slides-progress-row { display: grid; gap: 2px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.native-slides-progress-pick { justify-self: start; text-align: left; }
+.native-slides-status { font-size: var(--native-font-sub); color: var(--fg-2); }
+.native-slides-status[data-status="failed"] { color: var(--danger); }
+.native-slides-status[data-status="generated"] { color: var(--accent); }
+.native-slides-reasons { margin: 0; padding-left: 16px; color: var(--danger); font-size: var(--native-font-sub); }
+
+/* 画面の上に出す欄（貼り付け・書き出し・動画への取り込み）。 */
+.native-slides-dialog { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 40; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 96px); overflow: auto;
+  display: grid; gap: 12px; padding: 16px 18px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--bg-1); color: var(--fg-0); box-shadow: var(--panel-shadow); }
+.native-slides-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.native-slides-dialog-error { margin: 0; color: var(--danger); }
+.native-slides-steps { display: grid; gap: 14px; margin: 0; padding-left: 20px; }
+.native-slides-steps > li { display: grid; gap: 6px; }
+.native-slides-request, .native-slides-answer { width: 100%; min-height: 120px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-0); color: var(--fg-0); font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
+.native-slides-check { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--native-font-sub); }
+.native-slides-check li[data-ok="true"] { color: var(--accent); }
+.native-slides-check li[data-ok="false"] { color: var(--danger); }
+
+/* 右のつまみの下（収まり・元の台本・置き換え案）。 */
+.native-slides-fit { margin: 0; font-weight: 700; }
+.native-slides-fit[data-status="ok"] { color: var(--accent); }
+.native-slides-fit[data-status="overflow"], .native-slides-fit[data-status="small"] { color: var(--danger); }
+.native-slides-fit-list, .native-slides-proposal-list { margin: 0; padding-left: 16px; color: var(--fg-1); font-size: var(--native-font-sub); }
+.native-slides-source p { margin: 4px 0 0; color: var(--fg-1); font-size: var(--native-font-sub); line-height: 1.6; }
+.native-slides-proposal { border-top-color: var(--accent); }
+
+/* 右の「AI の作業」（つまみと同じ場所。つまみを畳んでいても AI の欄は広げて出す）。 */
+.native-slides.native-thumbnail .native-thumbnail-knobs.native-slides-ai { width: 420px; padding: 12px; }
+.native-slides-ai-state { margin: 0; font-weight: 700; }
+.native-slides-ai-state[data-state="offline"], .native-slides-ai-state[data-state="stalled"], .native-slides-ai-state[data-state="failed"] { color: var(--danger); }
+.native-slides-ai-state[data-state="done"], .native-slides-ai-state[data-state="idle"] { color: var(--accent); }
+.native-slides-ai-terminal { min-height: 280px; display: flex; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+
+/* 書き出しの欄。 */
+.native-slides-formats { display: grid; gap: 6px; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.native-slides-formats legend { padding: 0 4px; color: var(--fg-2); font-size: var(--native-font-sub); }
+.native-slides-format { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.native-slides-format span { display: grid; gap: 2px; }
+.native-slides-format small { color: var(--fg-2); font-size: var(--native-font-sub); }
+.native-slides-export-status { margin: 0; font-weight: 700; }
+.native-slides-export-status[data-phase="failed"] { color: var(--danger); }
+.native-slides-export-status[data-phase="complete"] { color: var(--accent); }
+.native-slides-export-files { margin: 0; padding-left: 18px; display: grid; gap: 2px; font-size: var(--native-font-sub); word-break: break-all; }
+
+/* 動画への取り込み（スライド側の欄・動画側の案内）。 */
+.native-slides-field { display: grid; gap: 4px; }
+.native-slides-field > span { color: var(--fg-2); font-size: var(--native-font-sub); }
+.native-slides-import-pages { max-height: 240px; overflow: auto; display: grid; gap: 2px; margin: 0; padding: 6px 8px; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.native-slides-import-pages label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.native-slides-import-notice { gap: 12px; flex-wrap: wrap; }
+
+/* AI の作業欄はつまみの左に並べる（つまみ＝置き換え案の採用・捨てるは常に見える）。 */
+.native-slides.native-thumbnail[data-ai="open"] { grid-template-columns: auto auto minmax(320px, 1fr) auto auto; }
+/* 書き出し済みファイルのリンク（ダークテーマで既定の濃い青にならないように）。 */
+.native-slides-link { color: var(--accent); text-decoration: underline; }
+.native-slides-page-empty[data-failed="true"] { background: color-mix(in srgb, var(--danger) 18%, var(--bg-3)); }
+.native-slides-page-retry { justify-self: start; min-height: 0; padding: 2px 8px; font-size: var(--native-font-sub); }

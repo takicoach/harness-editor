@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SequenceError } from '../../core/sequence/errors';
-import type { SequenceDocument } from '../../core/sequence/model';
+import type { SequenceAsset, SequenceDocument } from '../../core/sequence/model';
 import { parseSequence, sequenceContentBytes, serializeSequence } from '../../core/sequence/validate';
 
 interface SavedReceipt { executionId: string; requestHash: string; savedRevision: number; contentHash: string }
@@ -42,6 +42,9 @@ function remember(file: string, snapshot: Snapshot): void {
     bytes -= snapshots.get(key)!.bytes; snapshots.delete(key);
   }
 }
+// 読むだけの経路専用。保存ファイルの識別情報（dev・ino・size・mtime・ctime）ごとに素材の索引を使い回す（設計 §2-4）。
+const assetIndexes = new Map<string, { identity: string; assets: ReadonlyMap<string, SequenceAsset> }>();
+function deepFreeze<T>(value: T): T { if (value && typeof value === 'object') { for (const child of Object.values(value)) deepFreeze(child); Object.freeze(value); } return value; }
 
 /** The caller must resolve an allowed project first; this class never accepts a client path. */
 export class SequenceStore {
@@ -88,6 +91,29 @@ export class SequenceStore {
   load(): SavedSequence | null {
     const snapshot = this.readSnapshot();
     return snapshot ? { document: structuredClone(snapshot.stored.document), savedRevision: snapshot.stored.document.revision, contentHash: snapshot.contentHash } : null;
+  }
+  /** Revision/hash only. The same read+hash as load() (in-place edits with preserved times stay visible), without cloning the document. */
+  peek(): { savedRevision: number; contentHash: string; clipCount: number } | null {
+    const snapshot = this.readSnapshot();
+    return snapshot ? { savedRevision: snapshot.stored.document.revision, contentHash: snapshot.contentHash, clipCount: snapshot.stored.document.clips.length } : null;
+  }
+  /**
+   * 素材・波形・音声・軽量版・コマ絵の経路だけが使う素材の索引。保存ファイルの識別情報が同じ間は読み直し・SHA-256・複製をしない。
+   * 外部変更の検出（peek/load の内容ハッシュ）とは分ける。
+   */
+  assetIndex(): ReadonlyMap<string, SequenceAsset> | null {
+    this.assertDirectory();
+    if (!existsSync(this.file)) { assetIndexes.delete(this.file); return null; }
+    const info = lstatSync(this.file);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024 * 1024) throw new Error('編集データの保存ファイルが不正です');
+    const identity = JSON.stringify([info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs]), cached = assetIndexes.get(this.file);
+    if (cached?.identity === identity) return cached.assets;
+    const snapshot = this.readSnapshot();
+    if (!snapshot) { assetIndexes.delete(this.file); return null; }
+    const assets: ReadonlyMap<string, SequenceAsset> = new Map(snapshot.stored.document.assets.map(asset => [asset.id, deepFreeze(structuredClone(asset))] as const));
+    assetIndexes.delete(this.file); assetIndexes.set(this.file, { identity, assets });
+    while (assetIndexes.size > 8) assetIndexes.delete(assetIndexes.keys().next().value!);
+    return assets;
   }
 
   hasReceipt(executionId: string, revision: number, contentHash: string): boolean {

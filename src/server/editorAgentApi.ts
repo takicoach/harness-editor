@@ -9,6 +9,7 @@ import { HttpError, sendJson } from './http';
 import { isAllowedLocalRequest } from './localGuard';
 import { readJsonBody } from './readBody';
 import {NATIVE_EDITOR_COMMAND_TYPES} from '../shared/nativeEditorCommands';
+import {MAX_IMPORT_BATCH_ITEMS} from '../shared/importBatches';
 
 const id = z.string().min(1).max(256);
 const credentials = z.object({ sessionId: id, sessionKey: z.string().min(32).max(256) }).strict();
@@ -35,6 +36,9 @@ export const EDITOR_AGENT_CAPABILITIES = {
   schemaVersion: 1, operations: ['set_telop_text'],
   native:{documentFormat:'sequence-v2',operations:NATIVE_EDITOR_COMMAND_TYPES,maxCommandsPerOperation:50,
     readSections:['clips','assets','tracks','cuts','transcripts'],requiresCurrentRevision:true},
+  // AI の取り込み（設計 §2-8）: 許可された場所の動画を実パスへ解決して確かめ、自然順でメインの末尾へ。開いている編集画面が1回の編集で並べる。
+  imports:{tools:['editor_import_media','editor_import_runs','editor_import_cancel'],placement:['append-main'],modes:['link','copy'],maxItemsPerBatch:MAX_IMPORT_BATCH_ITEMS,
+    allowedLocations:'browse_roots_after_realpath',order:'natural_file_name',confirmation:'open_editor_one_undo'},
   requiresOpenEditor: true, maxChangesPerOperation: 100, maxSnapshotPageSize: 100,
   undo: 'one_existing_editor_history_entry', save: 'exact_applied_state_without_overwrite',
   review: 'human_review_separate_from_execution',

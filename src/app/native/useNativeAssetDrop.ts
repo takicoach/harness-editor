@@ -1,12 +1,15 @@
 import {useEffect,useLayoutEffect,useRef,useState,type DragEvent,type RefObject} from 'react';
 
 const ASSET_TYPE='application/x-harness-asset';
+export const LIBRARY_TYPE='application/x-harness-library-item';
 interface Point {x:number;y:number;trackId:string}
 interface Options {
   scroller:RefObject<HTMLDivElement>;ownerKey:string;disabled:boolean;
   position(clientX:number):number;
   valid(assetId:string,trackId:string):boolean;
   drop(assetId:string,frame:number,trackId:string):void;
+  /** Library cards; the placement builder judges track fit against the latest document. */
+  dropLibrary?(key:string,frame:number,trackId:string):void;
 }
 /** HTML drag events do not share the captured-pointer lifecycle of clip editing. */
 export function useNativeAssetDrop(options:Options){
@@ -14,6 +17,7 @@ export function useNativeAssetDrop(options:Options){
   const previous=useRef({ownerKey:options.ownerKey,disabled:options.disabled});
   const point=useRef<Point|null>(null),retired=useRef(false),mounted=useRef(true);
   const [preview,setPreview]=useState<{frame:number;trackId:string}|null>(null);
+  const accepts=(types:readonly string[])=>types.includes(ASSET_TYPE)||(!!live.current.dropLibrary&&types.includes(LIBRARY_TYPE));
   const leave=()=>{point.current=null;setPreview(null);};
   const cancel=()=>{retired.current=true;leave();};
   const refresh=()=>{
@@ -33,7 +37,7 @@ export function useNativeAssetDrop(options:Options){
   },[!!preview,options.scroller]);
   useEffect(()=>{
     mounted.current=true;
-    const start=(event:globalThis.DragEvent)=>{if(event.dataTransfer?.types.includes(ASSET_TYPE))retired.current=false;};
+    const start=(event:globalThis.DragEvent)=>{if(event.dataTransfer&&accepts(event.dataTransfer.types))retired.current=false;};
     const end=()=>{leave();retired.current=false;};
     const outside=(event:globalThis.DragEvent)=>{
       const track=event.target instanceof Element?event.target.closest('[data-native-track]'):null;
@@ -48,14 +52,22 @@ export function useNativeAssetDrop(options:Options){
     preview,refresh,cancel,
     pointer:()=>point.current?{x:point.current.x,y:point.current.y,moved:true}:null,
     over(event:DragEvent,trackId:string){
-      if(!mounted.current||live.current.disabled||retired.current||!event.dataTransfer.types.includes(ASSET_TYPE))return;
+      if(!mounted.current||live.current.disabled||retired.current||!accepts(event.dataTransfer.types))return;
       event.preventDefault();event.dataTransfer.dropEffect='copy';
       point.current={x:event.clientX,y:event.clientY,trackId};refresh();
     },
     leave(event:DragEvent){if(!(event.relatedTarget instanceof Node)||!live.current.scroller.current?.contains(event.relatedTarget))leave();},
     drop(event:DragEvent,trackId:string){
-      if(!mounted.current||!event.dataTransfer.types.includes(ASSET_TYPE))return;
-      event.preventDefault();const assetId=event.dataTransfer.getData(ASSET_TYPE);
+      if(!mounted.current||!accepts(event.dataTransfer.types))return;
+      event.preventDefault();
+      if(!event.dataTransfer.types.includes(ASSET_TYPE)){
+        const key=event.dataTransfer.getData(LIBRARY_TYPE),allowed=!!point.current&&!retired.current&&!live.current.disabled;
+        const frame=allowed?live.current.position(event.clientX):0;
+        leave();retired.current=true;
+        if(allowed)live.current.dropLibrary?.(key,frame,trackId);
+        return;
+      }
+      const assetId=event.dataTransfer.getData(ASSET_TYPE);
       const allowed=!!point.current&&!retired.current&&!live.current.disabled&&live.current.valid(assetId,trackId);
       const frame=allowed?live.current.position(event.clientX):0;
       leave();retired.current=true;

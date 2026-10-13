@@ -2,6 +2,7 @@ import { Icon, type IconName } from '../Icon';
 import type { ProjectSummary } from '../../shared/types';
 import type { OrientationCode } from '../../shared/orientation';
 import { VideoThumb } from './VideoThumb';
+import { ProjectCover } from './projectCover';
 import { useLiveNow } from '../useLiveNow';
 import { resolveStatusView, statusLabel, formatRelativeTime } from './projectStatusView';
 
@@ -37,6 +38,12 @@ function workingClass(p: ProjectSummary, now: number): string {
   if (p.activityLabel === undefined || p.activityLabel === '') return '';
   return resolveStatusView(p, now).spinner ? ' fb-working' : ' fb-working stale';
 }
+/** 従来のカードの絵（動画のコマ。無ければ空）。サムネの書き出しが無い・読み込めない時に出す。 */
+function FolderThumb({ project: p }: { project: ProjectSummary }) {
+  return p.videoAssetId || p.videoFile !== null
+    ? <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({id:p.id,asset:p.videoAssetId})}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
+    : <div className="fb-thumb-inner" />;
+}
 
 export function FolderBrowser({ open, disabled=false, projects, activeId, error, onPick, onToggle, onGoHome }: FolderBrowserProps) {
   const now = useLiveNow();
@@ -60,11 +67,7 @@ export function FolderBrowser({ open, disabled=false, projects, activeId, error,
               title={p.activityLabel !== undefined ? `${p.name} — ${resolveStatusView(p, now).label}` : p.name}
             >
               <div className={'fb-thumb' + (p.orientation === 'h' ? ' h' : p.orientation === 'sq' ? ' sq' : '')}>
-                {p.videoAssetId || p.videoFile !== null ? (
-                  <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({id:p.id,asset:p.videoAssetId})}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
-                ) : (
-                  <div className="fb-thumb-inner" />
-                )}
+                <ProjectCover project={p}><FolderThumb project={p} /></ProjectCover>
               </div>
             </button>
           ))}
@@ -116,11 +119,7 @@ export function FolderBrowser({ open, disabled=false, projects, activeId, error,
             title={working ? `${p.name} — ${view.label}` : p.name}
           >
             <div className={'fb-thumb' + (p.orientation === 'h' ? ' h' : p.orientation === 'sq' ? ' sq' : '')}>
-              {p.videoAssetId || p.videoFile !== null ? (
-                <VideoThumb src={p.videoAssetId ? `/api/sequence/asset?${new URLSearchParams({id:p.id,asset:p.videoAssetId})}` : `/api/video?id=${encodeURIComponent(p.id)}&file=${encodeURIComponent(p.videoFile!)}`} />
-              ) : (
-                <div className="fb-thumb-inner" />
-              )}
+              <ProjectCover project={p}><FolderThumb project={p} /></ProjectCover>
             </div>
             <div className="fb-item-text">
               <div className="fb-item-name">

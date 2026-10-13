@@ -1,14 +1,17 @@
 /** AiTerminal の表示フェーズ状態機械（純関数・DOM 非依存）。 */
+import type { AiLoginState } from '../../shared/aiFocus';
+
 export type Phase =
-  | 'checking' | 'need-install' | 'installing' | 'install-failed'
+  | 'checking' | 'need-install' | 'installing' | 'install-failed' | 'need-login'
   | 'starting' | 'connected' | 'exited' | 'takeover' | 'failed';
 
 export type TermEvent =
-  | { type: 'status'; installed: boolean }
+  | { type: 'status'; installed: boolean; login?: AiLoginState }
   | { type: 'install-start' }
   | { type: 'install-status'; phase: 'idle' | 'running' | 'done' | 'failed' }
+  | { type: 'login-open' }
   | { type: 'ws-auth-ok' }
-  | { type: 'ws-exit'; code: number }
+  | { type: 'ws-exit'; code: number; reason?: 'auth' | null }
   | { type: 'ws-takeover' }
   | { type: 'restart' }
   | { type: 'fail'; message: string };
@@ -16,18 +19,24 @@ export type TermEvent =
 export function nextTerminalPhase(current: Phase, ev: TermEvent): Phase {
   switch (ev.type) {
     case 'status':
-      return current === 'checking' ? (ev.installed ? 'starting' : 'need-install') : current;
+      // 未ログインと分かった時だけ止める（unknown は確かめられないので起動する）。
+      return current === 'checking' ? (!ev.installed ? 'need-install' : ev.login === 'missing' ? 'need-login' : 'starting') : current;
     case 'install-start':
       return current === 'need-install' || current === 'install-failed' ? 'installing' : current;
     case 'install-status':
       if (current !== 'installing') return current;
-      if (ev.phase === 'done') return 'starting';
+      // 導入が終わったら、ログインを確かめ直す（導入直後は未ログインのことが多い）。
+      if (ev.phase === 'done') return 'checking';
       if (ev.phase === 'failed') return 'install-failed';
       return 'installing';
+    case 'login-open':
+      // ログインのための起動（最初の依頼は渡さない）。
+      return current === 'need-login' ? 'starting' : current;
     case 'ws-auth-ok':
       return current === 'starting' ? 'connected' : current;
     case 'ws-exit':
-      return current === 'connected' ? 'exited' : current;
+      // ログインが切れて終わった時は、再起動ではなくログインを案内する（再起動しても同じ理由で終わる）。
+      return current === 'connected' ? (ev.reason === 'auth' ? 'need-login' : 'exited') : current;
     case 'ws-takeover':
       return current === 'connected' ? 'takeover' : current;
     case 'restart':

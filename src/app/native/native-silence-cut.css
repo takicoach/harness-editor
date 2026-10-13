@@ -1,0 +1,22 @@
+.native-silence-panel{display:flex;flex-direction:column;gap:10px;padding:8px 0 14px;min-height:0;box-sizing:border-box;color:var(--fg-1)}
+.native-silence-settings{display:flex;flex-direction:column;gap:16px}
+.native-silence-settings .native-subtle{margin:0;font-size:11px;line-height:1.6}
+.native-silence-panel header{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.native-silence-eyebrow{font-size:11px;opacity:.65;letter-spacing:.06em}
+.native-silence-panel fieldset{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:10px;min-width:0}
+.native-silence-panel legend{font-weight:600;font-size:12px;margin-bottom:8px}
+.native-silence-panel small{font-size:11px;opacity:.7;line-height:1.6}
+.native-silence-track{display:flex;align-items:center;gap:8px;font-size:12px}
+.native-silence-field,.native-silence-actions label{display:flex;flex-direction:column;gap:8px;font-size:12px}
+.native-silence-range-label,.native-silence-number{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.native-silence-range-label{font-size:11px;opacity:.65}
+.native-silence-number input{width:68px;text-align:right}
+.native-silence-panel input[type=range]{width:100%;accent-color:var(--accent)}
+.native-silence-panel details{font-size:12px;border-top:1px solid var(--border);padding-top:12px}
+.native-silence-panel summary{cursor:pointer;margin-bottom:12px}
+.native-silence-panel details label+label{margin-top:10px}
+.native-silence-result{display:flex;flex-direction:column;flex-shrink:0;gap:4px;padding:10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 9%,transparent);border:1px solid color-mix(in srgb,var(--accent) 25%,transparent);font-size:12px}
+.native-silence-result strong{font-size:14px}.native-silence-result progress{width:100%;accent-color:var(--accent)}
+.native-silence-actions{flex-shrink:0;display:flex;flex-direction:column;gap:8px}.native-silence-actions button{min-height:34px}
+.native-silence-error{font-size:12px;line-height:1.6;color:var(--danger,#df6a62);margin:0}
+.native-silence-candidate{position:absolute;top:0;bottom:0;box-sizing:border-box;border:1px dashed var(--warning,#d89a34);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--warning,#d89a34) 22%,transparent) 0 4px,transparent 4px 8px);pointer-events:none;z-index:5;font-size:11px;font-weight:600;color:var(--fg-1);overflow:hidden;padding-left:2px}

@@ -4,6 +4,8 @@ import { join, sep } from 'node:path';
 import { resolveProjectStatus } from './projectStatus';
 import { resolveProjectSteps } from './projectSteps';
 import { isSuperMovieProject } from './scanProjects';
+import { hasSequenceDocument } from './sequence/summary';
+import { THUMBNAIL_EXPORT_FOLDER, thumbnailCoverOf } from './thumbnail/cover';
 import type { ProjectSummary } from '../shared/types';
 
 /** ホーム画面のライブ更新で配信する 1 プロジェクト分のステータス差分。 */
@@ -20,6 +22,8 @@ export type ProjectStatusEvent = Pick<
   // ホームのステッパーだけが古いまま残る（stageManual と同型の取りこぼし）。
   // v2 は project.v2.json の保存で全工程を更新。旧TSX案件は rendered のみライブ更新。
   | 'steps'
+  // サムネのメインの案の書き出し（カードの画像）。書き出しが終わったら一覧を開き直さなくても変わる。
+  | 'thumbnailCover'
   // この差分がどの観測から来たか（単調増加）。クライアントが一覧の全置換と
   // どちらが新しいかを到着順ではなく番号で決めるために必ず載せる。
   | 'statusSeq'
@@ -45,6 +49,8 @@ export function projectIdFromWatchedPath(root: string, path: string): string | n
   if (id === undefined || id === '' || id.startsWith('.')) return null;
   // ステータス由来のパスのみ通す（.sme/status.json は dir 作成イベントも含めて拾う）。
   const sub = parts.slice(1).join('/');
+  // サムネの書き出し（<案件>/サムネ/*.png|jpg）はカードの画像を変える。
+  if (sub === THUMBNAIL_EXPORT_FOLDER || (parts.length === 3 && parts[1] === THUMBNAIL_EXPORT_FOLDER && /\.(?:png|jpg)$/i.test(parts[2]!))) return id;
   if (!['.sme', '.sme/status.json', 'out', 'out/video.mp4', '.harness', '.harness/project.v2.json', '.harness/last-export.json'].includes(sub)) return null;
   return id;
 }
@@ -139,7 +145,7 @@ export function watchAllProjectsStatus(
       const parts = rel.split(sep);
       const sub = parts[1];
       if (sub === '.harness') return parts.length > 2 && !['project.v2.json', 'last-export.json'].includes(parts[2]!);
-      return sub !== undefined && sub !== '.sme' && sub !== 'out';
+      return sub !== undefined && sub !== '.sme' && sub !== 'out' && sub !== THUMBNAIL_EXPORT_FOLDER;
     },
   });
   const timers = new Map<string, NodeJS.Timeout>();
@@ -149,7 +155,9 @@ export function watchAllProjectsStatus(
     try {
       const steps = resolveProjectSteps(dir);
       const status = resolveProjectStatus(dir, steps, now());
-      return { id, ...status, steps };
+      // 一覧（sequence/summary）と同じく、新形式の案件だけカードの画像を載せる。
+      const thumbnailCover = hasSequenceDocument(dir) ? thumbnailCoverOf(dir) : undefined;
+      return { id, ...status, steps, ...(thumbnailCover ? { thumbnailCover } : {}) };
     } catch (err) {
       console.warn(`[sme] watchAllProjectsStatus: プロジェクト "${id}" の解決に失敗:`, err);
       return null;

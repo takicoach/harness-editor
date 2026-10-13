@@ -1,0 +1,32 @@
+/* src/app/native/native-media-copy.css — 遅い媒体の素材のコピー（設計 §6）。色はテーマのトークンだけ（ライト・ダーク共通）。 */
+.native-copy-dialog{width:min(560px,100%)}
+.native-copy-options{display:flex;flex-direction:column;gap:6px}
+.native-copy-option{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg-2);cursor:pointer}
+.native-copy-option:has(input:checked){border-color:var(--accent)}
+.native-copy-option[data-selectable=false]{cursor:default;opacity:.75}
+.native-copy-option input{margin-top:3px}
+.native-copy-option-body{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:var(--native-font-sub);color:var(--fg-1);overflow-wrap:anywhere}
+.native-copy-option-body strong{color:var(--fg-0)}
+.native-copy-recommended{margin-left:6px;padding:0 6px;border-radius:999px;background:var(--accent);color:var(--accent-on);font-size:var(--native-font-sub);font-weight:700}
+.native-copy-reason,.native-copy-error{color:var(--danger);font-size:var(--native-font-sub);margin:0}
+.native-copy-note{color:var(--warn-fg);font-size:var(--native-font-sub);margin:0}
+.native-copy-warning{margin:0;font-weight:700;color:var(--fg-0);font-size:var(--native-font-sub)}
+.native-copy-notes{display:flex;flex-direction:column;gap:2px;color:var(--fg-2);font-size:var(--native-font-sub)}
+.native-copy-jobs{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.native-copy-job{padding:8px;border:1px solid var(--accent);border-radius:var(--radius-sm);background:var(--bg-1);font-size:var(--native-font-sub);color:var(--fg-1)}
+.native-copy-job[data-state=stopped],.native-copy-job[data-state=finished],.native-copy-job[data-state=waiting-volume]{border-color:var(--border)}
+.native-copy-job p,.native-copy-job ul{margin:0 0 4px}
+.native-copy-job ul{padding-left:18px}
+.native-copy-job progress{width:100%;accent-color:var(--accent)}
+.native-copy-group p{color:var(--fg-0)}
+.native-copy-phase{color:var(--fg-2)}
+/* 開いた時の案内（素材の欄）と追加時の判断待ち（取り込みの束の中）。照合のエラーのバナー（画面の上端）より下に出る。 */
+.native-slow-media{display:flex;flex-direction:column;gap:4px;margin:6px 0;padding:8px;border:1px solid var(--accent);border-radius:var(--radius-sm);background:var(--bg-1);font-size:var(--native-font-sub);color:var(--fg-1)}
+.native-slow-media p,.native-slow-media ul{margin:0}
+.native-slow-media ul{padding-left:18px;overflow-wrap:anywhere}
+.native-slow-media strong{color:var(--fg-0)}
+.native-import-decision{margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)}
+.native-import-decision ul{padding-left:18px;overflow-wrap:anywhere}
+/* ［このまま使う］の横の「今後この場所では出さない」（押した時に選んでいれば今後も出さない） */
+.native-slow-keep{display:inline-flex;align-items:center;gap:4px;font-size:var(--native-font-sub);color:var(--fg-1);cursor:pointer}
+.native-slow-keep input{margin:0}

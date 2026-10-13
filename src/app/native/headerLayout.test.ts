@@ -5,9 +5,9 @@ import {headerCompact,HEADER_COMPACT_BELOW} from './headerLayout';
 
 describe('headerCompact',()=>{
   it('1200px 未満で縮める',()=>{
-    expect(HEADER_COMPACT_BELOW).toBe(1200);
-    expect(headerCompact(1199)).toBe(true);
-    expect(headerCompact(1200)).toBe(false);
+    expect(HEADER_COMPACT_BELOW).toBe(1280);
+    expect(headerCompact(1279)).toBe(true);
+    expect(headerCompact(1280)).toBe(false);
     expect(headerCompact(2000)).toBe(false);
   });
   it('未計測（0・NaN・負）は縮めない',()=>{

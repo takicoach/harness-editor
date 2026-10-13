@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { computeNativeLearningDiff, countAiEditsAfterImport, NATIVE_BASELINE_LABEL } from './nativeLearningDiff';
+import { addedMainRanges, addedMainSources, addedSourcesNote, computeNativeLearningDiff, countAiEditsAfterImport, NATIVE_BASELINE_LABEL } from './nativeLearningDiff';
 import { createImportedProject, markAddedInEditor, standardEdit, standardFinish, type ImportedProjectFixture } from './__fixtures__/importedProject';
 import { HttpError } from '../http';
+import { rational } from '../../core/sequence/time';
+import type { SequenceAsset, SequenceClip, SequenceDocument } from '../../core/sequence/model';
 
 /** 案件フォルダ内の全ファイルの相対パスと中身（base64）。読むだけの処理が何も書かないことの確認に使う。 */
 function projectFiles(dir: string): Array<[string, string]> {
@@ -141,6 +143,171 @@ describe('computeNativeLearningDiff', () => {
     expect(statSync(join(fixture.dir, '.harness', 'project.v2.json')).isFile()).toBe(true);
     rmSync(join(fixture.dir, '.harness', 'exports', fixture.jobId, 'input.json'));
     await expect(computeNativeLearningDiff(fixture.dir, fixture.jobId)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('移行した案件のメインに後から足した素材は比べず、注記を出す（完了扱いにしない）', async () => {
+    fixture = await createImportedProject({ finish: (document) => {
+      const asset = { ...document.assets.find((a) => a.id === document.legacy!.primaryAssetId)!, id: 'added-take', fingerprint: 'added-take', name: 'take2.mp4' };
+      document.assets.push(asset);
+      const end = Math.max(...document.clips.filter((c) => c.trackId === 'v-main').map((c) => c.startFrame + c.durationFrames));
+      document.clips.push({ id: 'added-video', name: 'take2.mp4', trackId: 'v-main', startFrame: end, durationFrames: 30, clock: { offset: rational(0), rate: rational(1), duration: rational(30) },
+        content: { kind: 'video', assetId: 'added-take', streamIndex: 0, sourceIn: rational(0), rate: rational(1), endBehavior: 'hold' } });
+      document.sequenceEndFrame = Math.max(document.sequenceEndFrame, end + 30);
+      // 足した素材の上に人が置いた字幕（候補の中身は変えない。既定のチェックを外すのは画面の役目）。
+      const telop = structuredClone(document.clips.find((c) => c.content.kind === 'telop')!);
+      telop.id = 'user-telop-take2';
+      delete telop.anchor; // 元の素材の使用箇所への参照は外す（タイムラインに置いた字幕）
+      delete telop.continuationGroupId;
+      telop.startFrame = end;
+      telop.durationFrames = 30;
+      if (telop.content.kind === 'telop') { delete telop.content.legacyId; telop.content.data.text = '足した素材の字幕'; }
+      document.clips.push(telop);
+    } });
+    // 存在検査: main を持たない移行案件（v-main の既定）で、足したクリップが本当にメインの映像トラックに載っている。
+    expect(fixture.document.main).toBeUndefined();
+    expect(fixture.document.clips.find((c) => c.id === 'added-video')?.trackId).toBe('v-main');
+    const result = await computeNativeLearningDiff(fixture.dir, fixture.jobId);
+    expect(result.eligible).toBe(true);
+    expect(result.response.partialNote).toBe(addedSourcesNote(1));
+    expect(addedSourcesNote(1)).toBe('後から足した素材（1本）のカットは比べていません。その部分の字幕・効果音の候補は、最初はチェックを外しています');
+    const end = fixture.document.clips.find((c) => c.id === 'added-video')!.startFrame;
+    expect(result.response.partialRanges).toEqual([{ startFrame: end, endFrame: end + 30 }]);
+    // 候補の中身は変えない（harvest_v2 との照合を保つ）: 足した素材の上の字幕も added として出る。
+    expect(result.response.telops?.filter((t) => t.after === '足した素材の字幕').map((t) => [t.kind, t.startFrame, t.endFrame])).toEqual([['added', end, end + 30]]);
+  });
+  it('足していない移行案件には注記を出さない', async () => {
+    fixture = await createImportedProject({ edit: standardEdit, finish: standardFinish });
+    const { response } = await computeNativeLearningDiff(fixture.dir, fixture.jobId);
+    expect(response.partialNote).toBeUndefined();
+    expect(response.partialRanges).toBeUndefined();
+    expect(addedMainSources(fixture.document)).toBe(0);
+    expect(addedMainRanges(fixture.document)).toEqual([]);
+  });
+});
+
+/** 試料の文書へ「後から足した素材」を登録する（取り込んだ元の素材の複製。origin を渡すと音声補正版）。 */
+function addAsset(document: SequenceDocument, id: string, origin?: SequenceAsset['origin']): void {
+  const primary = document.assets.find((a) => a.id === document.legacy!.primaryAssetId)!;
+  document.assets.push({ ...structuredClone(primary), id, fingerprint: id, name: `${id}.mp4`, ...(origin ? { origin } : {}) });
+}
+/** trackId の既存クリップを型にして、assetId のクリップをそのトラックの末尾に置く（数え方だけを見る純関数の試験用）。 */
+function placeClip(document: SequenceDocument, trackId: string, assetId: string, into: SequenceClip[] = document.clips): SequenceClip {
+  const template = [...document.clips, ...(document.cutArchive?.entries ?? []).flatMap((e) => e.clips)].find((c) => c.trackId === trackId
+    && (c.content.kind === 'video' || c.content.kind === 'audio'));
+  if (!template) throw new Error(`試料の ${trackId} に映像・音声のクリップがありません`);
+  const clip = structuredClone(template);
+  if (clip.content.kind !== 'video' && clip.content.kind !== 'audio') throw new Error('unreachable');
+  clip.id = `${trackId}-${assetId}-${into.length}`;
+  clip.content.assetId = assetId;
+  clip.startFrame = Math.max(0, ...into.filter((c) => c.trackId === trackId).map((c) => c.startFrame + c.durationFrames));
+  into.push(clip);
+  return clip;
+}
+
+describe('addedMainSources', () => {
+  it('カットして保管庫（cutArchive）にだけ残った追加素材も数える', async () => {
+    fixture = await createImportedProject({ edit: (project) => { project.cutRegions = [{ start: 120, end: 150 }, { start: 155, end: 215 }]; } });
+    const document = structuredClone(fixture.document);
+    const entry = document.cutArchive?.entries[0];
+    // 存在検査: 保管庫に本当にメインの映像クリップがある（試料の保管庫が空なら下の数え方は何も確かめない）。
+    expect(entry?.clips.some((c) => c.trackId === 'v-main' && c.content.kind === 'video')).toBe(true);
+    addAsset(document, 'archived-take');
+    placeClip(document, 'v-main', 'archived-take', entry!.clips);
+    expect(document.clips.some((c) => (c.content.kind === 'video' || c.content.kind === 'audio') && c.content.assetId === 'archived-take')).toBe(false);
+    expect(addedMainSources(document)).toBe(1);
+    expect(addedMainSources(fixture.document)).toBe(0);
+  });
+
+  it('補正した素材は原本で数える: 元の素材の補正版は足したものに数えず、足した素材とその補正版は1本', async () => {
+    fixture = await createImportedProject();
+    const document = structuredClone(fixture.document);
+    addAsset(document, 'main-denoise', { kind: 'audio-fix', from: 'main', fix: 'denoise' });
+    addAsset(document, 'main-denoise-normalize', { kind: 'audio-fix', from: 'main-denoise', fix: 'normalize' });
+    placeClip(document, 'a-main', 'main-denoise-normalize');
+    expect(addedMainSources(document)).toBe(0);
+    addAsset(document, 'take2');
+    addAsset(document, 'take2-denoise', { kind: 'audio-fix', from: 'take2', fix: 'denoise' });
+    placeClip(document, 'v-main', 'take2');
+    placeClip(document, 'a-main', 'take2-denoise');
+    expect(addedMainSources(document)).toBe(1);
+  });
+
+  it('main の無い移行案件は v-main / a-main をメインとして数え、メインでないトラックの素材は数えない', async () => {
+    fixture = await createImportedProject();
+    const document = structuredClone(fixture.document);
+    expect(document.main).toBeUndefined();
+    expect(document.tracks.filter((t) => t.id === 'v-main' || t.id === 'a-main').map((t) => t.kind)).toEqual(['visual', 'audio']);
+    addAsset(document, 'insert-take');
+    document.tracks.push({ id: 'v-insert', kind: 'visual', name: '映像2', enabled: true });
+    placeClip(document, 'v-main', 'insert-take', document.clips);
+    document.clips.at(-1)!.trackId = 'v-insert';
+    expect(addedMainSources(document)).toBe(0);
+    addAsset(document, 'voice-only');
+    placeClip(document, 'a-main', 'voice-only');
+    expect(addedMainSources(document)).toBe(1);
+    addAsset(document, 'voice-two');
+    placeClip(document, 'a-main', 'voice-two');
+    expect(addedMainSources(document)).toBe(2);
+    // 明示した main があればそれに従う（v-insert をメインの映像にすると、a-main は原音のメインではなくなる）。
+    document.main = { videoTrackId: 'v-insert' };
+    expect(addedMainSources(document)).toBe(1);
+  });
+
+  it('循環した補正の記録でも止まり、たどり始めた素材で数える', async () => {
+    fixture = await createImportedProject();
+    const document = structuredClone(fixture.document);
+    addAsset(document, 'loop-a', { kind: 'audio-fix', from: 'loop-b', fix: 'denoise' });
+    addAsset(document, 'loop-b', { kind: 'audio-fix', from: 'loop-a', fix: 'normalize' });
+    placeClip(document, 'a-main', 'loop-a');
+    expect(addedMainSources(document)).toBe(1);
+  });
+
+  it('メインの原音トラックに置いた BGM・効果音（speech 以外）は足した素材に数えず、区間にも入れない', async () => {
+    fixture = await createImportedProject();
+    const document = structuredClone(fixture.document);
+    addAsset(document, 'bgm-track');
+    const bgm = placeClip(document, 'a-main', 'bgm-track');
+    // 存在検査: 型にしたクリップは原音（speech）なので、役割を music に変えて BGM にする。
+    expect(bgm.content.kind === 'audio' && bgm.content.role).toBe('speech');
+    if (bgm.content.kind === 'audio') bgm.content.role = 'music';
+    expect(addedMainSources(document)).toBe(0);
+    expect(addedMainRanges(document)).toEqual([]);
+    if (bgm.content.kind === 'audio') bgm.content.role = 'speech';
+    expect(addedMainSources(document)).toBe(1);
+    expect(addedMainRanges(document)).toEqual([{ startFrame: bgm.startFrame, endFrame: bgm.startFrame + bgm.durationFrames }]);
+  });
+
+  it('区間: 本編のメイン上で足した素材のクリップの区間を、重なり・隣接を合わせて並べる（元の素材・保管庫・メイン外は入れない）', async () => {
+    fixture = await createImportedProject({ edit: (project) => { project.cutRegions = [{ start: 120, end: 150 }]; } });
+    const document = structuredClone(fixture.document);
+    const at = (clip: SequenceClip, startFrame: number, durationFrames: number) => { clip.startFrame = startFrame; clip.durationFrames = durationFrames; };
+    addAsset(document, 'take2');
+    addAsset(document, 'take3');
+    at(placeClip(document, 'v-main', 'take2'), 1000, 30);
+    at(placeClip(document, 'a-main', 'take2'), 1010, 30); // 重なり → 1000–1040
+    at(placeClip(document, 'v-main', 'take3'), 1040, 20); // 隣接 → 1000–1060
+    at(placeClip(document, 'v-main', 'take3'), 1100, 10); // 離れている → 別の区間
+    at(placeClip(document, 'a-main', 'main'), 1200, 10); // 元の素材 → 入れない
+    document.tracks.push({ id: 'v-insert', kind: 'visual', name: '映像2', enabled: true });
+    const insert = placeClip(document, 'v-main', 'take2');
+    at(insert, 1300, 10);
+    insert.trackId = 'v-insert'; // メイン外 → 入れない
+    const entry = document.cutArchive?.entries[0];
+    expect(entry?.clips.length).toBeGreaterThan(0); // 存在検査: 保管庫がある
+    placeClip(document, 'v-main', 'take3', entry!.clips); // 保管庫（今のタイムラインに無い）→ 区間に入れない
+    expect(addedMainRanges(document)).toEqual([{ startFrame: 1000, endFrame: 1060 }, { startFrame: 1100, endFrame: 1110 }]);
+    expect(addedMainSources(document)).toBe(2);
+  });
+
+  it('移行していない案件（legacy なし）は 0', async () => {
+    fixture = await createImportedProject();
+    const document = structuredClone(fixture.document);
+    addAsset(document, 'take2');
+    placeClip(document, 'v-main', 'take2');
+    expect(addedMainSources(document)).toBe(1);
+    delete document.legacy;
+    expect(addedMainSources(document)).toBe(0);
+    expect(addedMainRanges(document)).toEqual([]);
   });
 });
 

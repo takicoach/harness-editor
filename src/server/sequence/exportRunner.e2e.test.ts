@@ -4,7 +4,8 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright-core';
 import { resolveNativeChromiumBin } from '../resolveNativeChromium';
-import { openRenderSurface } from './exportRunner';
+import { EXPORT_JPEG_QUALITY, openRenderSurface } from './exportRunner';
+import { intermediateDifference, intermediateMismatch } from './intermediateCompare';
 import {execFileSync} from 'node:child_process';
 import {resolveFfmpegBin} from '../resolveFfmpeg';
 
@@ -47,6 +48,8 @@ it.skipIf(!chromiumBin.ok)('gives up on a frame the renderer never finishes and 
   await expect(surface.capture(4)).rejects.toThrow('5 コマ目の描画が 0.3 秒以内に終わりませんでした');
 });
 
+// The capture is a JPEG (exportIntermediate.test.ts); Playwright's own JPEG screenshot at the same quality goes through
+// Chromium's same encoder, so the same pixels decode identically and the comparison stays exact.
 it.skipIf(!chromiumBin.ok)('captures the current frame with the same pixels as the reference screenshot, including translucent blur and text',async()=>{
   const ffmpeg=resolveFfmpegBin();if(!ffmpeg.ok)throw new Error(ffmpeg.message);
   const surface=await openRenderSurface(browser,`http://127.0.0.1:${(server.address() as AddressInfo).port}/paints`,
@@ -56,10 +59,49 @@ it.skipIf(!chromiumBin.ok)('captures the current frame with the same pixels as t
   let previous:Buffer|undefined;
   for(const frame of [0,1,2,17,3]){
     const actual=pixels(await surface.capture(frame));
-    const expected=pixels(await page.screenshot({type:'png'}));
+    const expected=pixels(await page.screenshot({type:'jpeg',quality:EXPORT_JPEG_QUALITY}));
     expect(actual.equals(expected),`pixels differ at frame ${frame}`).toBe(true);
     if(previous)expect(actual.equals(previous),`stale frame ${frame}`).toBe(false);
     previous=actual;
   }
+  await page.close();
+});
+
+// The JPEG against the PNG reference capture of the same frame: within the tolerance the audits use for preview
+// against export (intermediateCompare.ts), while a 1-pixel shift of the same picture is far outside it.
+it.skipIf(!chromiumBin.ok)('the JPEG capture keeps the PNG capture\'s luma and block colours; a shifted picture does not',async()=>{
+  const ffmpeg=resolveFfmpegBin();if(!ffmpeg.ok)throw new Error(ffmpeg.message);
+  const origin=`http://127.0.0.1:${(server.address() as AddressInfo).port}/paints`;
+  const reference=await openRenderSurface(browser,origin,{projectId:'case',jobId:'png'},{width:640,height:360},{captureMode:'reference'});
+  const fast=await openRenderSurface(browser,origin,{projectId:'case',jobId:'jpeg'},{width:640,height:360});
+  const rgba=(png:Buffer)=>execFileSync(ffmpeg.bin,['-v','error','-i','pipe:0','-frames:v','1','-f','rawvideo','-pix_fmt','rgba','pipe:1'],{input:png,maxBuffer:4*1024*1024});
+  for(const frame of [0,3,17]){
+    const png=rgba(await reference.capture(frame)),jpeg=await fast.capture(frame);
+    const difference=intermediateDifference(ffmpeg.bin,png,640,360,jpeg);
+    expect(intermediateMismatch(difference),`frame ${frame}`).toBeUndefined();
+    // Presence: the JPEG holds this picture; its RGB is not equal (4:2:0), and a 1-pixel shift is caught.
+    const shifted=Buffer.alloc(png.length);png.copy(shifted,4,0,png.length-4);
+    expect(intermediateDifference(ffmpeg.bin,shifted.map((value,i)=>i%4===3?255:value),640,360,jpeg).lumaMax).toBeGreaterThan(30);
+  }
+  await reference.close?.();await fast.close?.();
+});
+
+// 2026-10-08: a long export's hidden browser window shrank midway (1676×1050). The fixed-size
+// iframe kept drawing correctly, but every later capture was white beyond the window, and the
+// export still completed. The window must be put back before the frame is captured.
+it.skipIf(!chromiumBin.ok)('restores a shrunken browser window before capturing, so the frame is not cut off',async()=>{
+  const ffmpeg=resolveFfmpegBin();if(!ffmpeg.ok)throw new Error(ffmpeg.message);
+  const surface=await openRenderSurface(browser,`http://127.0.0.1:${(server.address() as AddressInfo).port}/paints`,
+    {projectId:'case',jobId:'job'},{width:640,height:360});
+  const page=browser.contexts().at(-1)!.pages()[0]!;
+  const pixels=(png:Buffer)=>execFileSync(ffmpeg.bin,['-v','error','-i','pipe:0','-frames:v','1','-f','rawvideo','-pix_fmt','rgba','pipe:1'],{input:png,maxBuffer:4*1024*1024});
+  const expected=pixels(await surface.capture(2));
+  const cdp=await page.context().newCDPSession(page);
+  const {windowId}=await cdp.send('Browser.getWindowForTarget');
+  await cdp.send('Browser.setWindowBounds',{windowId,bounds:{width:500,height:300}});
+  expect(await page.evaluate(()=>[innerWidth,innerHeight])).not.toEqual([640,360]);
+  const actual=pixels(await surface.capture(2));
+  expect(actual.equals(expected),'the frame after the window shrank differs').toBe(true);
+  expect(await page.evaluate(()=>[innerWidth,innerHeight])).toEqual([640,360]);
   await page.close();
 });

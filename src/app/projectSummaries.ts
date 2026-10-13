@@ -12,6 +12,7 @@ const LIVE_STATUS_FIELDS = [
   'activityStale',
   'lastEditedAt',
   'steps',
+  'thumbnailCover',
 ] as const;
 
 /**

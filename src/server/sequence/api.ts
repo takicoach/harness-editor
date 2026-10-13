@@ -1,17 +1,18 @@
+import {editRequest,object,id,integer,SEQUENCE_API_COMMAND_TYPES} from './editRequest';
+export {editRequest,SEQUENCE_API_COMMAND_TYPES};
 import {nativeProxyPath,nativeProxyStatus,startNativeProxy} from './previewProxy';
 import type {SequenceDocument} from '../../core/sequence/model';
 import {applyExternalEdit,listExternalEdits} from './externalEdits';
 import {LegacyCutBackfills} from './legacyCutBackfill';
-import {validateResizeCutBoundaryCommand} from '../../core/sequence/cutBoundary';
-import {validateAdoptSourceGap} from '../../core/sequence/adoptSourceGap';
-import {isNativeSpeedCommandType,validateNativeSpeedCommand} from '../../core/sequence/speedCommandValidation';
-import {MAX_SEQUENCE_COMMAND_LEAVES,SEQUENCE_COMMAND_TYPES,SEQUENCE_COMMAND_TYPES_NOT_OVER_HTTP,SEQUENCE_HISTORY_COMMAND_TYPES} from '../../core/sequence/commandTypes';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { HttpError, sendJson, sendText } from '../http';
+import { libraryDirectory, LibraryError } from '../library/catalog';
+import { prepareLibraryItem } from '../library/prepare';
+import { placeLibraryItems } from '../library/place';
 import { resolveProjectDir } from '../projectRoot';
 import { readJsonBody } from '../readBody';
 import { serveAsset } from '../serveAsset';
@@ -22,23 +23,27 @@ import {matchSequenceReference} from './referenceMatch';
 import { SequenceError } from '../../core/sequence/errors';
 import type { EditRequest } from '../../core/sequence/session';
 import { rational } from '../../core/sequence/time';
-import {validateSceneFadeEdit} from '../../core/sequence/sceneFadeEdits';
 import { SequenceStore } from './store';
 import {preflightSequenceExport} from './exportPreflight';
 import {exportRequestSchema} from './exportRecords';
-import {validateRestoreCutCommand} from '../../core/sequence/cutArchive';
-import { sequenceService as service } from './service';
+import { sequenceService as service, type SequenceStatusKnown } from './service';
 import { legacyInputFingerprint, migrateSequenceProject } from './migration';
 import { readSequenceComponent } from './components';
 import {prepareNativeTextStyleAssets,textStyleAssetsToRegister} from './textStyles';
 import type { SequenceAsset } from '../../core/sequence/model';
 import { importSequenceAsset, registerAssetOrigin, registeredSequenceAssets, verifiedSequenceAssetPath } from './assets';
 import { prepareSequenceAudio } from './media';
-import {prepareSequenceWaveform,waveformRequestFromQuery} from './waveform';
+import {waveformRequestFromQuery} from './waveform';
+import {respondWaveform,waveformPreparationStatuses} from './waveformJobs';
+import {frameRequestFromQuery,prepareSequenceFrames} from './frameImages';
+import {FfmpegBusyError} from './ffmpegGate';
 import { sequenceExports as exports } from './exports';
 import {exportSettingsSchema} from './exportRecords';
 import { assertContentLengthWithin, resolveMaxUploadBytes, streamBodyToTempFile } from '../streamUpload';
 import { assertEditorDeliveryMayApply, assertEditorDeliveryMaySave } from '../editorSaveGuard';
+import {handleSilenceCutApi} from './silenceCutApi';
+import {handleImportApi} from './importApi';
+import {handleMediaCopyApi} from './mediaCopy/api';
 import type { EditorAgentService } from '../editorAgentService';
 import { editorChangeSetSchema } from '../../shared/editorCommands';
 import { sequenceEditorRevision } from '../../core/sequence/editorCommands';
@@ -49,120 +54,21 @@ import { sequenceTranscriptions } from './transcriptions';
 import { heavyJobCounts,heavyJobGate } from '../systemLoad';
 
 const legacyBackfillsByService=new WeakMap<object,LegacyCutBackfills>();
-function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, '要求の形式が不正です');
-  return value as Record<string, unknown>;
-}
-function id(value: unknown): string {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new HttpError(400, '要求のIDが不正です');
-  return value;
-}
-function integer(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new HttpError(400, '要求の番号が不正です');
-  return value as number;
+/** 素材の索引だけで答える経路（設計 §2-4）。文書全体・版の判断が要る経路はここに入れない。 */
+const READ_ONLY_ROUTES = ['/asset', '/component', '/audio', '/audio/data', '/waveform', '/waveform/status', '/frames', '/reference/status'];
+function statusKnown(value: unknown): SequenceStatusKnown | undefined {
+  if (value === undefined) return undefined;
+  const known = object(value);
+  if (!Number.isSafeInteger(known.revision) || !Number.isSafeInteger(known.savedRevision) || typeof known.savedContentHash !== 'string'
+    || typeof known.canUndo !== 'boolean' || typeof known.canRedo !== 'boolean' || (known.historyError !== null && typeof known.historyError !== 'string'))
+    throw new HttpError(400, '状態の問い合わせが不正です');
+  return known as unknown as SequenceStatusKnown;
 }
 /** Keep the saved movie recognizable while avoiding separators and control characters in a filename. */
 export function nativeExportContentDisposition(projectName:string):string {
   const safe=projectName.normalize('NFC').replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g,'_').replace(/[. ]+$/g,'').trim().slice(0,80)||'動画';
   return `attachment; filename="harness.mp4"; filename*=UTF-8''${encodeURIComponent(`ハーネス_${safe}.mp4`)}`;
 }
-/**
- * /command が受け付ける操作は SequenceCommand の union から導出する（手書きの列挙をやめる）。
- * 専用ルートだけが発行するものは SEQUENCE_COMMAND_TYPES_NOT_OVER_HTTP に理由つきで並べ、
- * 「union − 拒否リスト ＋ 履歴操作 = 受理集合」をテストで固定する（commandAllowList.test.ts）。
- */
-export const SEQUENCE_API_COMMAND_TYPES: readonly string[] = [
-  ...SEQUENCE_COMMAND_TYPES.filter(type => !(SEQUENCE_COMMAND_TYPES_NOT_OVER_HTTP as readonly string[]).includes(type)),
-  ...SEQUENCE_HISTORY_COMMAND_TYPES,
-];
-function editRequest(body: Record<string, unknown>, depth = 0, budget = {leafCount: 0}): EditRequest {
-  const command = object(body.command), type = command.type;
-  if (typeof type!=='string'||!SEQUENCE_API_COMMAND_TYPES.includes(type)) throw new HttpError(400, '未対応の編集操作です');
-  // Count editing leaves across the entire HTTP request. Batch containers,
-  // including empty batches, do not consume the existing 50-operation budget.
-  if (type !== 'batch' && ++budget.leafCount > MAX_SEQUENCE_COMMAND_LEAVES) throw new HttpError(400, 'まとめる編集操作が多すぎます');
-  if(isNativeSpeedCommandType(type))validateNativeSpeedCommand(command);
-  if(type==='set-scene-fades')validateSceneFadeEdit(command.targets,command.change);
-  // 転換の形だけをここで見る。つなぎ目との一致・重なりの妥当性は set-transition と
-  // 文書検証が持つ（UI は planTransition の結果をそのまま渡す）。
-  if(type==='set-transition'){
-    if(typeof command.joinKey!=='string'||!command.joinKey||command.joinKey.length>512)throw new HttpError(400,'つなぎ目の指定が不正です');
-    if(command.transition!==null){
-      const transition=object(command.transition);
-      // SequenceTransition（id を除く）が持ちうるキーだけを許す。未知キーはここで弾く。
-      const allowed=['trackId','outClipId','inClipId','kind','startFrame','durationFrames','edge','audioCurve','joinKey','joinFrame'];
-      if(Object.keys(transition).some(key=>!allowed.includes(key)))throw new HttpError(400,'転換の内容が不正です');
-      for(const key of ['trackId','outClipId','inClipId','kind'])if(typeof transition[key]!=='string'||!transition[key])throw new HttpError(400,'転換の内容が不正です');
-      integer(transition.startFrame);integer(transition.durationFrames);
-      if((transition.durationFrames as number)<1)throw new HttpError(400,'転換の長さが不正です');
-      if(transition.edge!==undefined&&transition.edge!=='in'&&transition.edge!=='out')throw new HttpError(400,'転換の内容が不正です');
-      if(transition.audioCurve!==undefined&&transition.audioCurve!=='linear'&&transition.audioCurve!=='none')throw new HttpError(400,'転換の内容が不正です');
-      if(transition.joinKey!==undefined&&(typeof transition.joinKey!=='string'||!transition.joinKey))throw new HttpError(400,'転換の内容が不正です');
-      if(transition.joinFrame!==undefined)integer(transition.joinFrame);
-    }
-  }
-  if (type === 'remove-asset') id(command.assetId);
-  // 文字スタイルの一括適用・表示切替。番号の実在はカタログを持つ document 側が見る。
-  if (type === 'apply-text-style-all') {
-    if (command.trackId !== undefined) id(command.trackId);
-    id(command.assetId); integer(command.styleId); if ((command.styleId as number) < 1) throw new HttpError(400, 'スタイル番号が不正です');
-    if (command.clearUnsupportedAnimations !== undefined && typeof command.clearUnsupportedAnimations !== 'boolean') throw new HttpError(400, '動きの解除指定が不正です');
-  }
-  if (type === 'set-text-style-hidden') {
-    id(command.assetId);
-    if (!Array.isArray(command.hidden) || command.hidden.length > 200) throw new HttpError(400, '表示設定が不正です');
-    for (const value of command.hidden) integer(value);
-  }
-  // 追加パックの一覧登録だけがこの経路を使う。保存済みバイトとの一致は /command の実行前に確かめる。
-  if (type === 'register-assets') {
-    if (!Array.isArray(command.assets) || !command.assets.length || command.assets.length > 20) throw new HttpError(400, '登録する素材の一覧が不正です');
-    for (const value of command.assets) {
-      const asset = object(value); id(asset.id);
-      if (asset.kind !== 'component') throw new HttpError(400, 'この操作で登録できるのは描画部品だけです');
-    }
-  }
-  // 音声補正の参照切替。形だけをここで見る（素材の実在・音声ストリームの一致は文書側が持つ）。
-  if (type === 'replace-audio-source') { id(command.trackId); id(command.fromAssetId); id(command.toAssetId); }
-  // 文字スタイルの参照切替。形だけをここで見る（資産の実在・部品かどうかは文書側が持つ）。
-  if (type === 'replace-text-style-asset') { id(command.fromAssetId); id(command.toAssetId); }
-  if (type === 'batch') {
-    if (depth >= 4 || !Array.isArray(command.commands) || command.commands.length > MAX_SEQUENCE_COMMAND_LEAVES) throw new HttpError(400, 'まとめる編集操作が多すぎます');
-    for (const child of command.commands) {
-      const parsed = editRequest({ ...body, command: child }, depth + 1, budget);
-      if (parsed.command.type === 'undo' || parsed.command.type === 'redo') throw new HttpError(400, '履歴操作はまとめて実行できません');
-    }
-  }
-  if (['split', 'delete', 'move', 'unlink'].includes(String(type))
-    && (!Array.isArray(command.clipIds) || !command.clipIds.every(v => typeof v === 'string' && v.length))) throw new HttpError(400, '対象クリップの一覧が不正です');
-  if (command.linked !== undefined && typeof command.linked !== 'boolean') throw new HttpError(400, '連動設定が不正です');
-  if (type === 'ripple-delete') { integer(command.startFrame); integer(command.endFrame); }
-  if(type==='resize-cut-boundary')validateResizeCutBoundaryCommand(command);
-  if(type==='adopt-source-gap')validateAdoptSourceGap(command);
-  if(type==='restore-cut') {id(command.entryId);validateRestoreCutCommand(command);}
-  if(type==='fill-cut-captions')id(command.templateClipId);
-  if(type==='split-caption'){id(command.clipId);integer(command.frame);if(typeof command.leftText!=='string'||typeof command.rightText!=='string')throw new HttpError(400,'字幕本文が不正です');}
-  if(type==='merge-captions'){id(command.firstClipId);id(command.secondClipId);}
-  if (type === 'split' || type === 'trim') integer(command.frame);
-  if (type === 'move' && !Number.isSafeInteger(command.deltaFrames)) throw new HttpError(400, '移動量が不正です');
-  if (type === 'trim' && command.edge !== 'start' && command.edge !== 'end') throw new HttpError(400, 'トリム端点が不正です');
-  // 詰める（リップル）の切替。省略は従来動作。受理集合は union 導出のまま（コマンド型は増えない）。
-  if (type === 'trim' && command.ripple !== undefined && typeof command.ripple !== 'boolean') throw new HttpError(400, '詰める指定が不正です');
-  if (type === 'trim' || type === 'update-clip') id(command.clipId);
-  if (type === 'add-track') { object(command.track); if (command.index !== undefined) integer(command.index); }
-  if (type === 'insert' && !Array.isArray(command.clips)) throw new HttpError(400, '挿入クリップの一覧が不正です');
-  if (type === 'set-track-enabled') { id(command.trackId); if (typeof command.enabled !== 'boolean') throw new HttpError(400, 'トラック設定が不正です'); }
-  if (type === 'move-track') { id(command.trackId); integer(command.index); }
-  if (type === 'remove-track') id(command.trackId);
-  if (type === 'update-clip') object(command.patch);
-  if(type==='set-ducking'){
-    const patch=object(command.patch);
-    if(Object.keys(patch).some(key=>!['enabled','strength'].includes(key))||('enabled' in patch&&typeof patch.enabled!=='boolean')
-      ||('strength' in patch&&!['weak','mid','strong'].includes(String(patch.strength))))throw new HttpError(400,'BGMの自動音量調整の設定が不正です');
-  }
-  if(type==='set-script' && command.script!==null)object(command.script);
-  return { sessionId: id(body.sessionId), executionId: id(body.executionId), expectedRevision: integer(body.expectedRevision), command: command as EditRequest['command'] };
-}
-
 /**
  * register-assets で受けた描画部品が、管理領域に保存済みのバイトと一致することを実行前に確かめる。
  * `/register` が取り込み済み素材に対して行う検証と同じ役割（部品は `.harness/components` にあり
@@ -193,6 +99,9 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
     const directory = resolveProjectDir(root, projectId);
     if (resolve(root) === resolve(directory) || !existsSync(directory)) throw new HttpError(404, '対象のプロジェクトがありません');
     const route = url.pathname.slice('/api/sequence'.length), method = req.method ?? 'GET';
+    if(await handleSilenceCutApi(req,res,url,directory,sessions,controller.signal))return true;
+    if(await handleImportApi(req,res,url,route,directory,projectId,sessions,controller.signal))return true;
+    if(await handleMediaCopyApi(req,res,route,directory,projectId))return true;
     if(route==='/transcribe' || route.startsWith('/transcribe/')) {
       const mutation=['/transcribe','/transcribe/apply','/transcribe/cancel'].includes(route);
       if(method!==(mutation?'POST':'GET'))throw new HttpError(405,'文字起こし操作のメソッドが不正です');
@@ -265,14 +174,25 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
       }
       return true;
     }
-    const post = ['/proxy', '/external-edit', '/migrate', '/session', '/session/status', '/session/reload', '/command', '/agent', '/save', '/discard', '/upload', '/register','/reference','/reference/reconnect','/text-styles','/script/alignment','/script/edit-input','/script/edit-review','/legacy-cuts/prepare','/legacy-cuts/adopt'].includes(route);
-    const get = ['/proxies', '/external-edits', '', '/assets', '/asset', '/component', '/audio', '/audio/data', '/waveform', '/legacy-status','/reference/status'].includes(route);
+    const post = ['/proxy', '/external-edit', '/migrate', '/session', '/session/status', '/session/reload', '/command', '/agent', '/save', '/discard', '/upload', '/register','/reference','/reference/reconnect','/text-styles','/script/alignment','/script/edit-input','/script/edit-review','/legacy-cuts/prepare','/legacy-cuts/adopt','/library/prepare','/library/place'].includes(route);
+    const get = ['/proxies', '/external-edits', '', '/assets', '/asset', '/component', '/audio', '/audio/data', '/waveform', '/waveform/status', '/frames', '/legacy-status','/reference/status'].includes(route);
     if (!post && !get) throw new HttpError(404, '新形式のAPIが見つかりません');
     if (method !== (post ? 'POST' : 'GET')) throw new HttpError(405, `この操作は ${post ? 'POST' : 'GET'} のみ対応します`);
+    if(route==='/waveform/status'){
+      // 準備の識別子ごとの状態だけを返す（文書・素材は読まない）。
+      const ids=(url.searchParams.get('preparation')??'').split(',').filter(Boolean);
+      if(!ids.length||ids.length>64||ids.some(value=>!/^[a-f0-9]{32}$/.test(value)))throw new HttpError(400,'波形の準備IDが不正です');
+      sendJson(res,200,{preparations:waveformPreparationStatuses(directory,ids)});return true;
+    }
     let waveform;
     if(route==='/waveform'){
       try{waveform=waveformRequestFromQuery(url.searchParams);}
       catch(error){throw new HttpError(400,error instanceof Error?error.message:'波形の入力が不正です');}
+    }
+    let frames;
+    if(route==='/frames'){
+      try{frames=frameRequestFromQuery(url.searchParams);}
+      catch(error){throw new HttpError(400,error instanceof Error?error.message:'コマ絵の入力が不正です');}
     }
     if (route === '/upload') {
       if (!new SequenceStore(directory).load()) throw new HttpError(409, '先に案件を新形式へ移行してください');
@@ -315,6 +235,18 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
         }
         return true;
       }
+      if(route==='/library/prepare') {
+        if(!new SequenceStore(directory).load())throw new HttpError(409,'先に案件を新形式へ移行してください');
+        if(typeof body.key!=='string'||!body.key||body.key.length>200)throw new HttpError(400,'素材置場の項目指定が不正です');
+        try{sendJson(res,200,{asset:await prepareLibraryItem(directory,libraryDirectory(),body.key,controller.signal)});}
+        catch(error){if(error instanceof LibraryError)throw new HttpError(error.status,error.message);throw error;}
+        return true;
+      }
+      if(route==='/library/place') {
+        if(!new SequenceStore(directory).load())throw new HttpError(409,'先に案件を新形式へ移行してください');
+        sendJson(res,200,await placeLibraryItems(directory,libraryDirectory(),sessions,body,controller.signal));
+        return true;
+      }
       if(route==='/script/alignment'||route==='/script/edit-input') {
         if(body.mode!=='caption' && body.mode!=='structure')throw new HttpError(400,'照合の目的が不正です');
         const collect=route==='/script/alignment'?collectSequenceScriptAlignment:collectNativeScriptEditInput;
@@ -344,7 +276,7 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
       }
       else if (route === '/migrate') sendJson(res, 200, await migrateSequenceProject(directory, id(body.executionId), controller.signal));
       else if (route === '/session') sendJson(res, 200, sessions.open(directory, true));
-      else if (route === '/session/status') sendJson(res, 200, sessions.inspect(directory, id(body.sessionId), true));
+      else if (route === '/session/status') sendJson(res, 200, sessions.status(directory, id(body.sessionId), statusKnown(body.known)));
       else if (route === '/session/reload') sendJson(res, 200, sessions.reload(directory, id(body.sessionId), integer(body.expectedRevision), integer(body.savedRevision), id(body.contentHash), body.onlyIfClean === true));
       else if (route === '/command') {
         const request = editRequest(body);
@@ -377,32 +309,46 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
       }
       return true;
     }
-    const saved = new SequenceStore(directory).load();
+    const store = new SequenceStore(directory), readOnly = READ_ONLY_ROUTES.includes(route);
+    const savedAssets = readOnly ? store.assetIndex() : null, saved = readOnly ? null : store.load();
     if (route === '') { sendJson(res, 200, saved ?? { document: null }); return true; }
-    if (!saved) throw new HttpError(404, '新形式の編集データがありません');
-    if(route==='/proxies') {
-      const doc=url.searchParams.has('session')?sessions.inspect(directory,id(url.searchParams.get('session'))).document:saved.document;
-      sendJson(res,200,{assets:doc.assets.filter(asset=>asset.streams.some(stream=>stream.kind==='video')).map(asset=>nativeProxyStatus(directory,asset))});return true;
-    }
-    if (route === '/external-edits') { sendJson(res,200,{records:listExternalEdits(directory)});return true; }
-    if (route === '/assets') { sendJson(res, 200, { assets: await registeredSequenceAssets(directory) }); return true; }
-    if (route === '/legacy-status') {
-      let status: 'unchanged' | 'changed' | 'unavailable' | 'none' = 'none';
-      if (saved.document.legacy) {
-        try { status = await legacyInputFingerprint(directory) === saved.document.legacy.sourceFingerprint ? 'unchanged' : 'changed'; }
-        catch { status = 'unavailable'; }
+    if (!saved && !savedAssets) throw new HttpError(404, '新形式の編集データがありません');
+    if (saved) {
+      if(route==='/proxies') {
+        const doc=url.searchParams.has('session')?sessions.inspect(directory,id(url.searchParams.get('session'))).document:saved.document;
+        sendJson(res,200,{assets:doc.assets.filter(asset=>asset.streams.some(stream=>stream.kind==='video')).map(asset=>nativeProxyStatus(directory,asset))});return true;
       }
-      sendJson(res, 200, { status }); return true;
+      if (route === '/external-edits') { sendJson(res,200,{records:listExternalEdits(directory)});return true; }
+      if (route === '/assets') { sendJson(res, 200, { assets: await registeredSequenceAssets(directory) }); return true; }
+      if (route === '/legacy-status') {
+        let status: 'unchanged' | 'changed' | 'unavailable' | 'none' = 'none';
+        if (saved.document.legacy) {
+          try { status = await legacyInputFingerprint(directory) === saved.document.legacy.sourceFingerprint ? 'unchanged' : 'changed'; }
+          catch { status = 'unavailable'; }
+        }
+        sendJson(res, 200, { status }); return true;
+      }
     }
     const assetId = url.searchParams.get('asset');
     // Components added during editing must be previewable before Save, just like uploaded media.
     const asset = (route==='/component'?sessions.open(directory).document.assets.find(item=>item.id===assetId):undefined)
-      ?? saved.document.assets.find(item => item.id === assetId)
+      ?? (assetId === null ? undefined : savedAssets?.get(assetId))
       ?? (await registeredSequenceAssets(directory)).find(item => item.id === assetId);
     if (!asset) throw new HttpError(404, '指定された素材がありません');
     if(route==='/reference/status'){sendJson(res,200,await sequenceReferenceStatus(directory,asset,controller.signal));return true;}
     if (route === '/component') { sendText(res, 200, await readSequenceComponent(directory, asset), 'text/javascript; charset=utf-8'); return true; }
-    if(waveform){sendJson(res,200,await prepareSequenceWaveform(directory,asset,waveform,controller.signal));return true;}
+    if(waveform){
+      // FFmpeg の待ち行列が満杯なのは一時的な混雑: 失敗（422）ではなく 503 で返す。
+      try{sendJson(res,200,await respondWaveform(directory,asset,waveform,controller.signal));}
+      catch(error){if(error instanceof FfmpegBusyError)throw new HttpError(503,error.message);throw error;}
+      return true;
+    }
+    if(frames){
+      // 波形と同じく、混雑は 503（ブラウザは待って取り直す）。
+      try{sendJson(res,200,await prepareSequenceFrames(directory,asset,frames,controller.signal));}
+      catch(error){if(error instanceof FfmpegBusyError)throw new HttpError(503,error.message);throw error;}
+      return true;
+    }
     if (route === '/asset' && url.searchParams.get('preview')==='1') {
       // The preview reports which file it read, so a timeout names the original or the proxy.
       const proxy=nativeProxyPath(directory,asset);
@@ -425,7 +371,7 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
     const status = error instanceof HttpError ? error.status : error instanceof SequenceError
       ? error.code === 'REVISION_CONFLICT' ? 409 : error.code === 'MISSING_TARGET' ? 404 : 400 : 422;
     sendJson(res, status, { error: error instanceof Error ? error.message : '編集データの処理に失敗しました',
-      ...(error instanceof SequenceError ? { code: error.code, targets: error.targets } : {}) });
+      ...(error instanceof SequenceError ? { code: error.code, targets: error.targets } : error instanceof HttpError && error.reason ? { code: error.reason } : {}) });
     return true;
   } finally { req.off('aborted', abort); res.off('close', closed); }
 }

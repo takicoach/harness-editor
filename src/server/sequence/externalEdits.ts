@@ -31,13 +31,13 @@ function write(path:string,value:unknown):void {
   const temporary=path+'.'+randomUUID()+'.tmp';
   writeFileSync(temporary,JSON.stringify(value)+'\n',{flag:'wx',mode:0o600});renameSync(temporary,path);
 }
-function stamp(saved:SavedSequence){return {savedRevision:saved.savedRevision,contentHash:saved.contentHash};}
+function stamp(saved:Pick<SavedSequence,'savedRevision'|'contentHash'>){return {savedRevision:saved.savedRevision,contentHash:saved.contentHash};}
 function same(a:z.infer<typeof identity>,b:z.infer<typeof identity>){return a.savedRevision===b.savedRevision&&a.contentHash===b.contentHash;}
 function recordPath(directory:string,operationId:string){return join(directory,hash(operationId)+'.json');}
 
 /** Observe committed disk changes, including changes made while the app was closed.
  * Own saves advance the baseline explicitly and do not become inferred AI work. */
-export function observeExternalEdits(project:string,saved:SavedSequence,own=false):void {
+export function observeExternalEdits(project:string,saved:Pick<SavedSequence,'savedRevision'|'contentHash'>,own=false):void {
   const directory=folder(project),path=join(directory,'baseline.json'),after=stamp(saved);
   const before=existsSync(path)?identity.parse(read(path)):null;
   if(before&&!same(before,after)&&!own){

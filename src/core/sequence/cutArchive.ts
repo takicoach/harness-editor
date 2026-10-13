@@ -8,6 +8,7 @@ import {rebindOperationBasis,upgradeNativeSpeedOperations} from './speedOperatio
 import {projectCutSpeed} from './cutSpeedProjection';
 import {planCutInsertion} from './cutInsertionPlan';
 import {legacyAudioPolicyForRestore,planLegacyAudioContinuation} from './legacyAudioContinuity';
+import {trialSwapKind} from './swapUsage';
 export interface CutSlice {from:number;to:number;start:number;trackId?:string}
 export interface CutFragment {original:SequenceClip;slice:CutSlice;clip:SequenceClip}
 export interface CutArchiveTools {
@@ -21,7 +22,9 @@ export function previewArchivedCut(document:SequenceDocument,entryId:string,rang
  return {durationFrames:planned.insertionFrames};
 }
 function fail(message:string):never{throw new SequenceError('INVALID_RANGE',message);}
-const clean=(document:SequenceDocument)=>{const d=structuredClone(document);delete d.cutArchive;return d;};
+// A fragment graph never carries the archive. Exclude it before cloning so repeated
+// cuts do not copy every earlier archived graph only to discard those copies.
+const clean=(document:SequenceDocument)=>{const {cutArchive:_archive,...live}=document;return structuredClone(live);};
 export function archiveReservedIds(document:SequenceDocument):string[]{
  const ids=new Set<string>((document.cutArchive?.groups??[]).map(g=>g.id));for(const e of document.cutArchive?.entries??[]){ids.add(e.id);ids.add(e.origin.cutId);for(const binding of e.trackBoundaries??[]){ids.add(binding.trackId);if(binding.destinationTrackId)ids.add(binding.destinationTrackId);for(const ref of binding.boundary.references)ids.add(ref.clipId);}for(const ref of e.boundary.references)ids.add(ref.clipId);for(const t of e.tracks)ids.add(t.id);for(const c of e.clips)visitIdentities(c,(value)=>{ids.add(value);return value;});}return [...ids];
 }
@@ -146,7 +149,7 @@ export function archiveRippleCut(before:SequenceDocument,next:SequenceDocument,s
  }
  return next;
 }
-export function readArchivedCutGraph(document:SequenceDocument,entry:CutArchiveEntry):SequenceDocument{return {...clean(document),clips:structuredClone(entry.clips),tracks:structuredClone(entry.tracks),transitions:[],sequenceEndFrame:entry.durationFrames,speed:structuredClone(entry.speed),insertOwnSpeed:structuredClone(entry.insertOwnSpeed)};}
+export function readArchivedCutGraph(document:SequenceDocument,entry:CutArchiveEntry):SequenceDocument{return {...clean(document),main:undefined,clips:structuredClone(entry.clips),tracks:structuredClone(entry.tracks),transitions:[],sequenceEndFrame:entry.durationFrames,speed:structuredClone(entry.speed),insertOwnSpeed:structuredClone(entry.insertOwnSpeed)};}
 const refKeys=new Set(['id','clipId','providerId','evaluationOwnerId','clipOccurrenceId','linkGroupId','continuationGroupId','captionId','partId','reservedRenderId','renderId','ownerClipId']);
 function visitIdentities(v:unknown,map:(id:string)=>string,key=''):unknown{
  if(['content','visual','name','legacyCaptionContinuity'].includes(key))return v;
@@ -161,7 +164,9 @@ function remapGraph(graph:SequenceDocument,fresh:(prefix:string)=>string,current
  const legacyWitnesses=graph.clips.map(c=>structuredClone(c.legacyMainRole?.witnesses));
  const legacyAudio=graph.clips.map(c=>structuredClone(legacyAudioPolicyForRestore(current,c)));
  const legacyCaption=graph.clips.map(c=>structuredClone(c.legacyCaptionContinuity));
- const sourceLineage=graph.clips.map(c=>preserveSourceLineage?c.continuationGroupId:undefined);
+ // Image and BGM pieces return to their original usage (`continuationGroupId ?? id`, the key swapUsage.ts reads),
+ // so a later trial swap also reaches the restored band. That key is an archived identity, hence reserved by fresh().
+ const sourceLineage=graph.clips.map(c=>trialSwapKind(c)?c.continuationGroupId??c.id:preserveSourceLineage?c.continuationGroupId:undefined);
  graph.clips.forEach(c=>visitIdentities(c,value=>{if(!ids.has(value))ids.set(value,fresh('restored'));return value;}));
  for(const c of graph.clips)for(const origin of new Set([c.id,c.continuationGroupId].filter((id):id is string=>!!id))){const restored=ids.get(c.id)!;restoredOrigins.set(origin,[...(restoredOrigins.get(origin)??[]),restored]);}
  graph.clips=graph.clips.map(c=>visitIdentities(c,value=>ids.get(value)??value) as SequenceClip);

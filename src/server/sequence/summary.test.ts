@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SequenceStore } from './store';
@@ -47,6 +47,9 @@ it('does not resurrect legacy state from a broken v2 document and watches only n
   expect(projectIdFromWatchedPath(root,join(directory,'.harness/project.v2.json'))).toBe('case');
   expect(projectIdFromWatchedPath(root,join(directory,'.harness/last-export.json'))).toBe('case');
   expect(projectIdFromWatchedPath(root,join(directory,'.harness/assets/video.mp4'))).toBeNull();
+  expect(projectIdFromWatchedPath(root,join(directory,'サムネ/case サムネ.png'))).toBe('case');
+  expect(projectIdFromWatchedPath(root,join(directory,'サムネ/case サムネ 案B.jpg'))).toBe('case');
+  expect(projectIdFromWatchedPath(root,join(directory,'サムネ/memo.txt'))).toBeNull();
 });
 it('emits live status after a native save, including changes during watcher startup',async()=>{
   const {root,document,store}=fixture(),events:ProjectStatusEvent[]=[];
@@ -54,5 +57,39 @@ it('emits live status after a native save, including changes during watcher star
   try {
     document.revision++;document.name='ライブで編集';store.save({document,expectedSavedRevision:0,executionId:'live'});
     await vi.waitFor(()=>expect(events.some(event=>event.id==='case' && event.steps?.cut && event.lastEditedAt)).toBe(true),{timeout:3000,interval:30});
+  } finally {stop();}
+});
+it('サムネの書き出しが無い案件は thumbnailCover を持たない（カードは従来どおり）',()=>{
+  const {root}=fixture();
+  const item=scanProjects(root)[0]!;
+  expect(item.id).toBe('case');
+  expect('thumbnailCover' in item).toBe(false);
+});
+it('メインの書き出し サムネ/<案件名> サムネ.(png|jpg) があれば thumbnailCover が付く。別名・リンク・中身の無いファイルは使わない',()=>{
+  const {root,directory}=fixture(),folder=join(directory,'サムネ');mkdirSync(folder);
+  writeFileSync(join(folder,'case サムネ 案B.png'),'other');
+  expect(scanProjects(root)[0]!.thumbnailCover).toBeUndefined();
+  const outside=join(root,'outside.png');writeFileSync(outside,'outside');symlinkSync(outside,join(folder,'case サムネ.png'));
+  expect(scanProjects(root)[0]!.thumbnailCover).toBeUndefined();
+  rmSync(join(folder,'case サムネ.png'));writeFileSync(join(folder,'case サムネ.png'),'');
+  expect(scanProjects(root)[0]!.thumbnailCover).toBeUndefined();
+  writeFileSync(join(folder,'case サムネ.png'),'png');
+  expect(scanProjects(root)[0]!.thumbnailCover).toEqual({file:'サムネ/case サムネ.png',mtimeMs:expect.any(Number)});
+  // 両方ある時は新しい方。
+  writeFileSync(join(folder,'case サムネ.jpg'),'jpg');const later=new Date(Date.now()+60_000);utimesSync(join(folder,'case サムネ.jpg'),later,later);
+  expect(scanProjects(root)[0]!.thumbnailCover).toEqual({file:'サムネ/case サムネ.jpg',mtimeMs:later.getTime()});
+});
+it('サムネのフォルダーがリンク（案件の外）なら使わない',()=>{
+  const {root,directory}=fixture(),elsewhere=mkdtempSync(join(tmpdir(),'native-summary-outside-'));roots.push(elsewhere);
+  writeFileSync(join(elsewhere,'case サムネ.png'),'outside');symlinkSync(elsewhere,join(directory,'サムネ'));
+  expect(scanProjects(root)[0]!.thumbnailCover).toBeUndefined();
+});
+it('サムネを書き出すと、一覧へ thumbnailCover の差分を流す（一覧を開き直さなくてよい）',async()=>{
+  const {root,directory}=fixture(),events:ProjectStatusEvent[]=[];
+  const stop=watchAllProjectsStatus(root,event=>events.push(event),{debounceMs:20});
+  try {
+    await new Promise(resolve=>setTimeout(resolve,300));
+    mkdirSync(join(directory,'サムネ'));writeFileSync(join(directory,'サムネ/case サムネ.png'),'png');
+    await vi.waitFor(()=>expect(events.some(event=>event.id==='case'&&event.thumbnailCover?.file==='サムネ/case サムネ.png')).toBe(true),{timeout:4000,interval:30});
   } finally {stop();}
 });

@@ -12,7 +12,7 @@
 .native-mode-finish .native-right-dock{grid-row:1/-1}.native-mode-finish .native-main{grid-template-columns:var(--native-left,248px) 10px minmax(260px,1fr) 10px var(--native-right,340px)}
 .native-inspector fieldset{padding:12px 16px}.native-inspector section{padding:17px 0 8px;margin-top:10px}.native-inspector h3{font-size:12px;font-weight:700;margin-bottom:14px}.native-property{gap:8px;min-height:32px;line-height:1.5}.native-property input,.native-property select,.native-text-field textarea,.native-transcript select{border:1px solid var(--border);border-radius:7px;background:var(--bg-2);padding:7px 9px;min-width:0}.native-property input{font-variant-numeric:tabular-nums}
 .native-number-field{margin:13px 0 18px}.native-number-field .native-property{margin:0 0 7px}.native-property-slider{display:block;width:100%;height:16px;accent-color:var(--accent);cursor:ew-resize;padding:0!important;border:0!important;background:transparent!important}
-.native-right-dock[data-finish-tool=color] .native-inspector section[data-setting]:not([data-setting=color]),.native-right-dock[data-finish-tool=audio] .native-inspector section[data-setting]:not([data-setting=audio]),.native-right-dock[data-finish-tool=captions] .native-inspector section[data-setting]:not([data-setting=captions]):not([data-setting=animation-list]){display:none}
+.native-right-dock[data-finish-tool=color] .native-inspector section[data-setting]:not([data-setting=color]),.native-right-dock[data-finish-tool=audio] .native-inspector section[data-setting]:not([data-setting=audio]):not([data-setting=trial-swap]),.native-right-dock[data-finish-tool=captions] .native-inspector section[data-setting]:not([data-setting=captions]):not([data-setting=animation-list]){display:none}
 /* 群（F14）の中の節。`data-setting` を持たない節（NativeVisualSettings の各節・位置キーフレーム）も
    対象ツール以外では隠す。群単位の規則だけだと、対象節と同じ群に居る無印の節が漏れる（Codex 指摘 2）。 */
 .native-right-dock[data-finish-tool=color] .native-inspector-section[data-group]>div>section:not([data-setting=color]),.native-right-dock[data-finish-tool=audio] .native-inspector-section[data-group]>div>section:not([data-setting=audio]),.native-right-dock[data-finish-tool=captions] .native-inspector-section[data-group]>div>section:not([data-setting=captions]):not([data-setting=animation-list]){display:none}
@@ -25,6 +25,8 @@
 .native-right-dock[data-finish-tool=layout] .native-inspector section[data-setting=color],.native-right-dock[data-finish-tool=layout] .native-inspector section[data-setting=audio]{display:none}
 .native-right-dock[data-finish-tool=fades] .native-inspector>fieldset:not(.native-scene-fade-settings):not(.native-transition-settings){display:none}
 .native-right-dock[data-finish-tool=fades] .native-inspector .native-ducking-settings,.native-right-dock[data-finish-tool=fades] .native-inspector .native-audio-fix{display:none}
+/* 試し差し替えの節（fieldset の外）: 絞り込みなしのほか、画像は「動き・配置」、BGM は「音声」でだけ出す（音声の規則は trial-swap を除外して BGM を残す）。 */
+.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=layout]) .native-inspector section[data-trial-kind=image],.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=audio]) .native-inspector section[data-trial-kind=music]{display:none}
 .native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=fades]) .native-scene-fade-settings,.native-right-dock:not([data-finish-tool=all]):not([data-finish-tool=fades]) .native-transition-settings{display:none}
 .native-transcript{padding:14px;line-height:1.75;min-width:0;overflow:auto}.native-transcript select{width:100%;margin-top:7px;font-size:var(--native-font-sub)}.native-transcription{padding:12px 0}.native-subtle{font-size:var(--native-font-sub);line-height:1.75;overflow-wrap:anywhere}.native-words button{line-height:1.8}.native-words{padding:10px 0}
 .native-mode-review .native-main{grid-template-columns:var(--native-left,300px) 10px minmax(260px,1fr) 10px var(--native-right,296px)}
@@ -54,3 +56,11 @@
 /* アニメーション一覧の補助文言（自由書式の 1 行・旧版案件の注記。TP11）。
    `--native-text-subtle` は定義が無い（Global Constraints）ので `--fg-3` を使う。 */
 .native-animation-note-line{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--fg-3)}
+
+/* AI タブの土台: サムネの画面の右端の AI の列。閉じている間はアイコンだけの細い列。 */
+.native-thumbnail-host { flex: 1; min-height: 0; display: flex; }
+.native-thumbnail-host > .native-thumbnail { flex: 1; min-width: 0; overflow-x: auto; }
+.native-thumbnail-ai { flex: none; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--bg-1); }
+.native-thumbnail-ai[data-open="false"] { width: 44px; align-items: center; padding-top: 8px; }
+.native-thumbnail-ai[data-open="true"] { width: min(380px, 34vw); }
+.native-thumbnail-ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--fg-0); }

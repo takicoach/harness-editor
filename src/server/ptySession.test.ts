@@ -152,13 +152,68 @@ describe('PtySessionManager（偽 claude で実 spawn）', () => {
     await new Promise((res) => setTimeout(res, 300));
   });
 
-  it.each(['claude', 'codex'] as const)('%s の待機文を1回の貼付けと、その外側のEnterで送信する', async (tool) => {
-    dir = mkdtempSync(join(tmpdir(), 'sme-pty-waiting-'));
+  it('最初の依頼は起動の引数の最後に 1 回だけ渡す（起動中への ensure では渡さない）', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-first-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'argv.mjs');
+    writeFileSync(fake, `process.stdout.write('ARGV:' + JSON.stringify(process.argv.slice(2)) + '\\n'); setInterval(() => {}, 1000);`);
+    const mgr = createPtySessionManager();
+    const opts = { editorDir: dir, projectRoot: join(dir, 'projects-root'), tool: 'claude' as const, env: { ...process.env, SME_CLAUDE_BIN: fake } };
+    try {
+      expect(mgr.startedAt()).toBeNull();
+      expect((await mgr.ensure({ ...opts, firstPrompt: '講義（動画）を見ています' })).ok).toBe(true);
+      await vi.waitFor(() => expect(mgr.scrollback()).toContain('ARGV:["講義（動画）を見ています"]'), { timeout: 5000 });
+      expect(mgr.startedAt()).toEqual(expect.any(Number));
+      expect((await mgr.ensure({ ...opts, firstPrompt: '2 回目' })).ok).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(mgr.scrollback()).not.toContain('2 回目');
+      expect(mgr.scrollback().match(/ARGV:/g)).toHaveLength(1);
+    } finally {
+      const running = mgr.state() === 'running';
+      mgr.killAll();
+      if (running) await vi.waitFor(() => expect(mgr.state()).toBe('exited'), { timeout: 5000 });
+    }
+  });
+
+  it('ログインのための起動では、Codex は codex login を起動する（最初の依頼も MCP の引数も渡さない）', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-login-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'argv.mjs');
+    writeFileSync(fake, `process.stdout.write('ARGV:' + JSON.stringify(process.argv.slice(2)) + '\\n'); setInterval(() => {}, 1000);`);
+    const mgr = createPtySessionManager();
+    try {
+      expect((await mgr.ensure({ editorDir: dir, projectRoot: join(dir, 'projects-root'), tool: 'codex', purpose: 'login', firstPrompt: null, env: { ...process.env, SME_CODEX_BIN: fake } })).ok).toBe(true);
+      await vi.waitFor(() => expect(mgr.scrollback()).toContain('ARGV:["login"]'), { timeout: 5000 });
+    } finally {
+      mgr.killAll();
+      await vi.waitFor(() => expect(mgr.state()).toBe('exited'), { timeout: 5000 });
+    }
+  });
+
+  it('Codex がログインの切れ（401）で終わったら、終了の理由を auth にする。Claude は同じ文字でも理由を付けない', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-auth-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'dead-auth.mjs');
+    writeFileSync(fake, `process.stdout.write('Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery unauthorized (401) (code -32603)\\n'); setTimeout(() => process.exit(1), 50);`);
+    const run = async (tool: 'codex' | 'claude') => {
+      const mgr = createPtySessionManager();
+      const reasons: Array<string | null> = [];
+      mgr.onExit((_code, reason) => reasons.push(reason));
+      const key = tool === 'codex' ? 'SME_CODEX_BIN' : 'SME_CLAUDE_BIN';
+      expect((await mgr.ensure({ editorDir: dir, projectRoot: join(dir, 'projects-root'), tool, env: { ...process.env, [key]: fake } })).ok).toBe(true);
+      await vi.waitFor(() => expect(mgr.state()).toBe('exited'), { timeout: 5000 });
+      return { reasons, last: mgr.lastExitReason() };
+    };
+    expect(await run('codex')).toEqual({ reasons: ['auth'], last: 'auth' });
+    expect(await run('claude')).toEqual({ reasons: [null], last: null });
+  });
+
+  it('入力欄に貼るだけで、Enter は送らない。起動していなければ断る', async () => {
+    const idle = createPtySessionManager();
+    expect(idle.paste('x')).toEqual({ ok: false, error: 'AI が起動していません' });
+    dir = mkdtempSync(join(tmpdir(), 'sme-pty-paste-'));
     mkdirSync(join(dir, 'projects-root'));
     const fake = join(dir, 'paste-reader.mjs');
-    // Raw PTY receiver: preserve UTF-8 and chunk boundaries, and decode a complete
-    // paste event before accepting a separate submit key. The actual CLI acceptance
-    // is recorded in audit 303/ai-terminal-live-03 (a plain burst stalled Codex).
     writeFileSync(fake, `
       process.stdin.setRawMode(true);
       process.stdin.setEncoding('utf8');
@@ -166,22 +221,18 @@ describe('PtySessionManager（偽 claude で実 spawn）', () => {
       process.stdout.write('READY\\n');
       process.stdin.on('data', data => {
         buffer += data;
-        const start = '\\x1b[200~', end = '\\x1b[201~';
-        const finish = buffer.indexOf(end);
-        if (buffer.startsWith(start) && finish >= 0 && buffer.slice(finish + end.length) === '\\r') {
-          process.stdout.write('SUBMITTED:' + JSON.stringify(buffer.slice(start.length, finish)) + '\\n');
-          buffer = '';
+        const start = '\\x1b[200~', end = '\\x1b[201~', finish = buffer.indexOf(end);
+        if (buffer.startsWith(start) && finish >= 0) {
+          setTimeout(() => { process.stdout.write('PASTED:' + JSON.stringify(buffer.slice(start.length, finish)) + ' REST:' + JSON.stringify(buffer.slice(finish + end.length)) + '\\n'); buffer = ''; }, 200);
         }
       });
     `);
     const mgr = createPtySessionManager();
     try {
-      expect((await mgr.ensure({ editorDir: dir, projectRoot: join(dir, 'projects-root'), tool,
-        env: { ...process.env, SME_CLAUDE_BIN: fake, SME_CODEX_BIN: fake } })).ok).toBe(true);
+      expect((await mgr.ensure({ editorDir: dir, projectRoot: join(dir, 'projects-root'), tool: 'claude', env: { ...process.env, SME_CLAUDE_BIN: fake } })).ok).toBe(true);
       await vi.waitFor(() => expect(mgr.scrollback()).toContain('READY'), { timeout: 5000 });
-      expect(mgr.startWaiting()).toEqual({ ok: true });
-      await vi.waitFor(() => expect(mgr.scrollback()).toContain('SUBMITTED:' + JSON.stringify(AI_TOOLS[tool].waitingPrompt)), { timeout: 5000 });
-      expect(mgr.scrollback().match(/SUBMITTED:/g)).toHaveLength(1);
+      expect(mgr.paste('スライド: 構成案を作って（依頼 #3）')).toEqual({ ok: true });
+      await vi.waitFor(() => expect(mgr.scrollback()).toContain('PASTED:"スライド: 構成案を作って（依頼 #3）" REST:""'), { timeout: 5000 });
     } finally {
       const running = mgr.state() === 'running';
       mgr.killAll();
@@ -806,7 +857,6 @@ describe('X-1: 死んだ pty への resize/write でサーバが落ちない', (
             observed = true;
             // 本題: 死を検知した瞬間に 'running' を返し続けてはいけない。
             expect(mgr.state(), 'fd 死亡を検知したのに state() が running のまま').not.toBe('running');
-            expect(mgr.startWaiting().ok).toBe(false);
             expect(exits.length, 'exit 通知が出ていない（無言の入力不能）').toBe(1);
           }
           // eslint-disable-next-line no-await-in-loop

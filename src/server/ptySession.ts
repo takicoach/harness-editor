@@ -22,6 +22,7 @@ import { dirname, join, parse, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveToolForPty, checkToolVersion } from './aiToolBin';
 import { buildPtyPath } from './ptyPath';
+import { stripTerminalControls } from './terminalText';
 import { AI_TOOLS, DEFAULT_AI_TOOL, type AiToolId } from './aiTools';
 import { createOscColorResponder } from './oscColorReply';
 import { terminalColorsFor } from '../shared/terminalColors';
@@ -123,7 +124,17 @@ export interface EnsureOpts {
   theme?: 'light' | 'dark';
   /** 起動する AI ツール（既定 claude）。 */
   tool?: AiToolId;
+  /**
+   * 起動の引数の最後に渡す最初の依頼（AI タブの土台）。spawn する時だけ使うので、起動 1 回につき 1 回だけ。
+   * 起動中の pty への ensure（別ウィンドウ・再読み込み）では渡らない。null・未指定なら渡さない（ログインのための起動）。
+   */
+  firstPrompt?: string | null;
+  /** login はログインのための起動。ツールに loginArgs があればそれで起動する（Codex は `codex login`）。 */
+  purpose?: 'work' | 'login';
 }
+
+/** 終了の理由。auth はログインが切れていた（ツールの authFailure に当たった）。 */
+export type PtyExitReason = 'auth' | null;
 
 export type EnsureResult =
   | { ok: true }
@@ -144,20 +155,21 @@ export function createPtySessionManager() {
   let pty: IPty | null = null;
   let ring = '';
   let exitCode: number | null = null;
+  let exitReason: PtyExitReason = null;
   let removedEnvKeys: string[] = [];
   /** stale ハンドラガード用の世代カウンタ（下記 ensure 内コメント参照）。 */
   let generation = 0;
   /** kill 時に即座に止めたい現行セッションの onData 購読（onExit は確定まで生かす。下記 ensure 内コメント参照）。 */
   let liveDataSub: IDisposable | null = null;
   const dataFns = new Set<(c: string) => void>();
-  const exitFns = new Set<(code: number) => void>();
+  const exitFns = new Set<(code: number, reason: PtyExitReason) => void>();
   /** 現在動いている（または直近まで動いていた）ツール。単一セッションの正本。 */
   let tool: AiToolId | null = null;
   /** spawn ごとに変わるセッション識別子。 */
   let sid: string | null = null;
   /** prepare が出した注意書き（隔離できなかった等）。UI がそのまま表示する。 */
   let prepareNotes: string[] = [];
-  /** 起動時テーマ（OSC 応答・startWaiting 等が参照する）。 */
+  /** 起動時テーマ（OSC 応答等が参照する）。 */
   let theme: 'light' | 'dark' = 'dark';
   /** 切替を直列化する mutex（連打・並行切替で spawn が競合しないように）。 */
   let switchChain: Promise<unknown> = Promise.resolve();
@@ -171,6 +183,8 @@ export function createPtySessionManager() {
    * 新しい世代を spawn するたびに false へ戻す（下記 `pty = ptySpawn(...)` 直後）。
    */
   let ptyDead = false;
+  /** 今の起動の開始時刻。この時刻より後に AI タブの MCP 接続が来たら「つながった」とみなす（/api/ai/presence）。 */
+  let startedAtMs: number | null = null;
   /**
    * 「この世代の終了を既に確定・通知した」ラッチ。onExit（本物の終了イベント）と
    * markPtyDead（fd が死んでいると分かった瞬間）のどちらが先に来ても、
@@ -185,12 +199,15 @@ export function createPtySessionManager() {
     if (finalizedGen === generation) return;
     finalizedGen = generation;
     exitCode = code;
+    // 色などの制御文字を除いた終わりの出力で、ログインの切れを見分ける（tool を落とす前に）。
+    const tail = ring.slice(-4000).replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+    exitReason = tool !== null && AI_TOOLS[tool].authFailure?.test(tail) ? 'auth' : null;
     pty = null;
     tool = null;
     sid = null;
     liveDataSub?.dispose();
     liveDataSub = null;
-    for (const fn of exitFns) fn(code);
+    for (const fn of exitFns) fn(code, exitReason);
   }
   /**
    * 死んだ pty の fd への resize/write（node-pty の native ioctl/write 呼び出し）は
@@ -364,10 +381,13 @@ export function createPtySessionManager() {
       // node-pty へ渡る環境が食い違う（実際の子プロセスが見るのは大文字小文字を
       // OS が同一視する片方のみとは限らない）ため、両方を揃える。
       if (process.platform === 'win32') (spawnEnv as Record<string, string>).Path = spawnEnv.PATH;
+      const tail = opts.firstPrompt ? [opts.firstPrompt] : [];
       const args =
-        loc.source === 'test-override'
-          ? loc.args
-          : [...loc.args, ...adapter.launchArgs(opts.port ?? 2109, theme)];
+        opts.purpose === 'login' && adapter.loginArgs !== null
+          ? [...loc.args, ...adapter.loginArgs]
+          : loc.source === 'test-override'
+            ? [...loc.args, ...tail]
+            : [...loc.args, ...adapter.launchArgs(opts.port ?? 2109, theme), ...tail];
       ptyDead = false;
       try {
         pty = ptySpawn(loc.file, args, {
@@ -381,8 +401,10 @@ export function createPtySessionManager() {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
       tool = wanted;
+      startedAtMs = Date.now();
       sid = randomUUID();
       exitCode = null;
+      exitReason = null;
       // stale ハンドラガード: 世代カウンタ方式。spawn 成功直後に自分の世代番号を
       // 確定させ、以後 generation が進んでいたら（＝別の ensure が新世代を spawn
       // した）自分は stale として扱う。
@@ -447,13 +469,14 @@ export function createPtySessionManager() {
         markPtyDead('resize', err);
       }
     },
-    startWaiting(): { ok: boolean; error?: string } {
+    startedAt(): number | null {
+      return pty === null ? null : startedAtMs;
+    },
+    /** 入力欄に貼るだけ（ESC[200~ … ESC[201~）。Enter は送らない。送るのは利用者（設計書 5）。 */
+    paste(text: string): { ok: true } | { ok: false; error: string } {
       if (pty === null || tool === null || ptyDead) return { ok: false, error: 'AI が起動していません' };
       try {
-        // Mark the prompt as a paste, then submit outside it. A plain text + CR
-        // burst is treated by Codex's paste detection as text including Enter,
-        // leaving the waiting prompt unsent (actual Codex/Claude PTY verified).
-        pty.write('\x1b[200~' + AI_TOOLS[tool].waitingPrompt + '\x1b[201~\r');
+        pty.write('\x1b[200~' + stripTerminalControls(text) + '\x1b[201~');
       } catch (err) {
         markPtyDead('write', err);
         return { ok: false, error: 'AI が起動していません' };
@@ -464,7 +487,7 @@ export function createPtySessionManager() {
       dataFns.add(fn);
       return () => dataFns.delete(fn);
     },
-    onExit(fn: (code: number) => void): () => void {
+    onExit(fn: (code: number, reason: PtyExitReason) => void): () => void {
       exitFns.add(fn);
       return () => exitFns.delete(fn);
     },
@@ -477,6 +500,9 @@ export function createPtySessionManager() {
     },
     lastExitCode(): number | null {
       return exitCode;
+    },
+    lastExitReason(): PtyExitReason {
+      return exitReason;
     },
     removedEnvKeys(): string[] {
       return [...removedEnvKeys];

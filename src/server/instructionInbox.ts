@@ -6,7 +6,8 @@ import type {
   InstructionStatus,
 } from '../shared/types';
 import { HttpError } from './http';
-import { acquireInboxLock, parseInboxFile, releaseInboxLock, serializeInbox } from './inboxPersistence';
+import { stripTerminalControls } from './terminalText';
+import { acquireInboxLock, parseInboxFile, releaseInboxLock, serializeInbox, type TakenVia } from './inboxPersistence';
 
 /** enqueue の入力（projectDir はサーバ側で解決済み）。 */
 export interface EnqueueInput {
@@ -40,6 +41,21 @@ export interface AgentStatus {
 /** 受け箱の公開 API。 */
 export interface InstructionInbox {
   enqueue(input: EnqueueInput): InstructionRecord;
+  /**
+   * 画面のボタンの依頼を「送信待ち」で記録する（AI タブの入力欄に貼る用・get_next_instruction では配らない）。
+   * 同じ requestId は作り直さず created=false で返す（貼り直さないため）。
+   */
+  enqueuePasted(input: EnqueueInput): { record: InstructionRecord; created: boolean };
+  /** 端末で送信（Enter）された。送信待ちの貼り付けの依頼を作業中にする。 */
+  markPastedSubmitted(): InstructionRecord[];
+  /** 送信待ち（貼ったまま）のボタンの依頼の案件。Enter がその依頼の送信かを見分けるのに使う。 */
+  pendingPastedProjectIds(): string[];
+  /** 送信待ちのボタンの依頼（番号・案件・本文の文字数）。貼った依頼を消してから打ったかを見分けるのに使う。 */
+  pendingPasted(): Array<{ id: string; projectId: string; textLength: number }>;
+  /** AI が終了した。貼り付けの依頼を失敗にする（送信待ちは「送られませんでした」・作業中は「結果不明」）。 */
+  failPasted(): InstructionRecord[];
+  /** 別の案件の画面で手で打った依頼が送られた。送信待ちの貼り付けの依頼を「送られなかった」扱いで失敗にする。 */
+  supersedePasted(): InstructionRecord[];
   /**
    * pending を processing にして返す。無ければ null。
    * filter.projectId 指定時はそのプロジェクトの pending のみ対象（専属モード）。
@@ -100,6 +116,18 @@ export interface InstructionInbox {
 const RESTART_UNKNOWN_REPLY =
   'エディタ再起動により結果を確認できませんでした。動画の状態を確認し、必要な場合のみもう一度指示してください';
 
+/** 貼り付けたが送信（Enter）される前に AI が終了した依頼へ付ける返答。 */
+export const PASTE_UNSENT_REPLY = 'AI が終了したため、この依頼は送られませんでした。必要ならもう一度押してください';
+/** 作業中に AI が終了した貼り付けの依頼へ付ける返答（結果不明）。 */
+/** 貼ったまま、別の案件の画面で手で打った依頼が送られた時に、送信待ちの依頼へ付ける返答。 */
+export const PASTE_SUPERSEDED_REPLY = '別の案件の画面で依頼が送られたため、この依頼は送られなかった扱いにしました。必要ならもう一度押してください';
+export const PASTE_UNKNOWN_REPLY = '結果不明: 作業中に AI が終了しました。画面で結果を確かめてから、必要なら頼み直してください';
+/** report_instruction_status の id。依頼文の「（依頼 #12）」から返された #12・12 も inst-12 として扱う。 */
+export function normalizeInstructionId(id: string): string {
+  const number = /^#?(\d+)$/.exec(id.trim())?.[1];
+  return number === undefined ? id.trim() : `inst-${number}`;
+}
+
 /** 対象プロジェクトが存在しない pending レコードへ付ける返答（起動時復元・削除直後で共通）。 */
 export const PROJECT_NOT_FOUND_REPLY = '対象プロジェクトが見つかりません';
 
@@ -130,7 +158,7 @@ export function createInstructionInbox(opts?: {
   // 挿入順を保つ Map（メモリ保持・再起動で消える）。
   const records = new Map<string, InstructionRecord>();
   // 内部 claim 情報（公開レコードには載せない）。どちらの経路で取得されたか。
-  const claims = new Map<string, { takenVia: 'dedicated' | 'global' }>();
+  const claims = new Map<string, { takenVia: TakenVia }>();
   // 専属在席: projectId → 最後の専属 poll / 専属レコード報告の時刻。
   const dedicatedSeenAt = new Map<string, number>();
   const listeners = new Set<(record: InstructionRecord) => void>();
@@ -196,50 +224,91 @@ export function createInstructionInbox(opts?: {
     for (const w of [...wakers]) if (w.projectId === undefined) w.fn();
   }
 
+  /** enqueue と enqueuePasted の共通部分。takenVia を付けた依頼は、wake する前に claim を置く（配られないように）。 */
+  function add(input: EnqueueInput, takenVia?: TakenVia): { record: InstructionRecord; created: boolean } {
+    const timestamp = now();
+    if (input.requestId !== undefined) {
+      const existing = [...records.values()].find(record => record.requestId === input.requestId);
+      if (existing) {
+        if (existing.projectId !== input.projectId || existing.text !== input.text
+          || existing.requestCreatedAt !== input.requestCreatedAt
+          || JSON.stringify(existing.context) !== JSON.stringify(input.context)) {
+          throw new HttpError(409, '同じ受付番号の依頼内容が異なります');
+        }
+        return { record: existing, created: false };
+      }
+      if (!Number.isSafeInteger(input.requestCreatedAt)
+        || timestamp - input.requestCreatedAt! > 24 * 60 * 60 * 1000
+        || input.requestCreatedAt! - timestamp > 5 * 60 * 1000) {
+        throw new HttpError(409, 'この依頼の受付確認期限を過ぎています。履歴を確認してください');
+      }
+    }
+    const id = `inst-${++seq}`;
+    const record: InstructionRecord = {
+      id,
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId, requestCreatedAt: input.requestCreatedAt }),
+      projectId: input.projectId,
+      projectDir: input.projectDir,
+      text: input.text,
+      context: input.context,
+      status: 'pending',
+      reply: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    records.set(id, record);
+    if (takenVia !== undefined) claims.set(id, { takenVia });
+    try {
+      persistOrThrow();
+    } catch (err) {
+      // 保存に失敗した指示は受付自体を取り消す。メモリに残すと 500 を返したのに
+      // ポーリング中のエージェントが取得・実行してしまう（seq のギャップは無害）。
+      records.delete(id);
+      claims.delete(id);
+      throw err;
+    }
+    emit(record);
+    wake(record.projectId);
+    return { record, created: true };
+  }
+  /** 貼り付けの依頼を状態ごとに失敗・作業中へ移す共通部分。 */
+  function movePasted(next: (record: InstructionRecord) => Partial<InstructionRecord> | null): InstructionRecord[] {
+    const moved: InstructionRecord[] = [];
+    for (const record of records.values()) {
+      if (claims.get(record.id)?.takenVia !== 'paste') continue;
+      const change = next(record);
+      if (!change) continue;
+      Object.assign(record, change, { updatedAt: now() });
+      if (record.status === 'done' || record.status === 'failed') claims.delete(record.id);
+      moved.push(record);
+    }
+    if (moved.length) { persistBestEffort(); for (const record of moved) emit(record); }
+    return moved;
+  }
+
   const inbox: InstructionInbox = {
     enqueue(input) {
-      const timestamp = now();
-      if (input.requestId !== undefined) {
-        const existing = [...records.values()].find(record => record.requestId === input.requestId);
-        if (existing) {
-          if (existing.projectId !== input.projectId || existing.text !== input.text
-            || existing.requestCreatedAt !== input.requestCreatedAt
-            || JSON.stringify(existing.context) !== JSON.stringify(input.context)) {
-            throw new HttpError(409, '同じ受付番号の依頼内容が異なります');
-          }
-          return existing;
-        }
-        if (!Number.isSafeInteger(input.requestCreatedAt)
-          || timestamp - input.requestCreatedAt! > 24 * 60 * 60 * 1000
-          || input.requestCreatedAt! - timestamp > 5 * 60 * 1000) {
-          throw new HttpError(409, 'この依頼の受付確認期限を過ぎています。履歴を確認してください');
-        }
-      }
-      const id = `inst-${++seq}`;
-      const record: InstructionRecord = {
-        id,
-        ...(input.requestId === undefined ? {} : { requestId: input.requestId, requestCreatedAt: input.requestCreatedAt }),
-        projectId: input.projectId,
-        projectDir: input.projectDir,
-        text: input.text,
-        context: input.context,
-        status: 'pending',
-        reply: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      records.set(id, record);
-      try {
-        persistOrThrow();
-      } catch (err) {
-        // 保存に失敗した指示は受付自体を取り消す。メモリに残すと 500 を返したのに
-        // ポーリング中のエージェントが取得・実行してしまう（seq のギャップは無害）。
-        records.delete(id);
-        throw err;
-      }
-      emit(record);
-      wake(record.projectId);
-      return record;
+      return add(input).record;
+    },
+    enqueuePasted(input) {
+      return add(input, 'paste');
+    },
+    pendingPastedProjectIds() {
+      return inbox.pendingPasted().map(r => r.projectId);
+    },
+    pendingPasted() {
+      return [...records.values()].filter(r => r.status === 'pending' && claims.get(r.id)?.takenVia === 'paste')
+        .map(r => ({ id: r.id, projectId: r.projectId, textLength: [...r.text].length }));
+    },
+    markPastedSubmitted() {
+      return movePasted(record => record.status === 'pending' ? { status: 'processing' } : null);
+    },
+    failPasted() {
+      return movePasted(record => record.status === 'pending' ? { status: 'failed', reply: PASTE_UNSENT_REPLY }
+        : record.status === 'processing' ? { status: 'failed', reply: PASTE_UNKNOWN_REPLY } : null);
+    },
+    supersedePasted() {
+      return movePasted(record => record.status === 'pending' ? { status: 'failed', reply: PASTE_SUPERSEDED_REPLY } : null);
     },
 
     takeNext(filter) {
@@ -247,6 +316,7 @@ export function createInstructionInbox(opts?: {
       if (filter?.projectId === undefined && globalInFlight() >= maxGlobalParallel) return null;
       for (const record of records.values()) {
         if (record.status !== 'pending') continue;
+        if (claims.get(record.id)?.takenVia === 'paste') continue; // ボタンの依頼は AI タブの入力欄へ貼る。待機役には配らない
         if (busy.has(record.projectId)) continue; // 直列配送
         if (filter?.projectId !== undefined) {
           if (record.projectId !== filter.projectId) continue;
@@ -333,8 +403,10 @@ export function createInstructionInbox(opts?: {
     updateStatus(id, status, reply = null) {
       const record = records.get(id);
       if (record === undefined) return null;
-      if (record.status !== 'processing' || (status !== 'done' && status !== 'failed')) return null;
       const claim = claims.get(id);
+      // 貼り付けの依頼は、Enter の検出を待たずに AI が報告してくることがある（送信待ちのまま done/failed を受け付ける）。
+      const pastedPending = record.status === 'pending' && claim?.takenVia === 'paste';
+      if ((record.status !== 'processing' && !pastedPending) || (status !== 'done' && status !== 'failed')) return null;
       record.status = status;
       record.reply = reply;
       record.updatedAt = now();
@@ -419,7 +491,7 @@ export function createInstructionInbox(opts?: {
         const parsed = text === '' ? null : parseInboxFile(text, now());
         if (parsed !== null) {
           let maxSeqFromIds = 0;
-          for (const { record } of parsed.records) {
+          for (const { record, takenVia } of parsed.records) {
             const match = /^inst-(\d+)$/.exec(record.id);
             const matchedNumber = match?.[1];
             if (matchedNumber !== undefined) {
@@ -435,6 +507,9 @@ export function createInstructionInbox(opts?: {
                 reply: RESTART_UNKNOWN_REPLY,
                 updatedAt: now(),
               });
+            } else if (record.status === 'pending' && takenVia === 'paste') {
+              // 貼り付けの依頼は AI タブの入力欄にあった。エディタの再起動で AI も終わっているので送られていない。
+              records.set(record.id, { ...record, projectDir: dir ?? record.projectDir, status: 'failed', reply: PASTE_UNSENT_REPLY, updatedAt: now() });
             } else if (record.status === 'pending') {
               if (dir === null) {
                 records.set(record.id, {
@@ -504,7 +579,7 @@ export function validateInstructionInput(body: unknown): InstructionInput {
   if (typeof body.projectId !== 'string' || body.projectId === '') {
     throw new HttpError(400, '指示リクエストの projectId が必要です');
   }
-  if (typeof body.text !== 'string' || body.text.trim() === '') {
+  if (typeof body.text !== 'string' || stripTerminalControls(body.text).trim() === '') {
     throw new HttpError(400, '指示リクエストの text が必要です');
   }
   if (!isObject(body.context)) throw new HttpError(400, '指示リクエストの context が不正です');
@@ -525,7 +600,7 @@ export function validateInstructionInput(body: unknown): InstructionInput {
   return {
     ...(body.requestId === undefined ? {} : { requestId: body.requestId as string, requestCreatedAt: body.requestCreatedAt as number }),
     projectId: body.projectId,
-    text: body.text,
+    text: stripTerminalControls(body.text),
     context: { frame: ctx.frame, timeSec: ctx.timeSec, selection },
   };
 }

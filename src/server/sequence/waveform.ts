@@ -2,9 +2,7 @@ import {constants} from 'node:fs';
 import {open,lstat,rename,unlink,type FileHandle} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {rational,type Rational} from '../../core/sequence/time';
-import {prepareSequenceAudio,type PreparedAudioFile} from './media';
-import type {SequenceAsset} from '../../core/sequence/model';
-import {verifiedSequenceAssetPath} from './assets';
+import type {PreparedAudioFile} from './media';
 import {SharedPreparations} from './sharedPreparation';
 
 export interface WaveformRequest {
@@ -71,7 +69,7 @@ async function identity(pcm:PreparedAudioFile){
 }
 // PCM names already include the managed fingerprint, stream, rational rate and
 // source stat identity. This sidecar also validates PCM stat/format on every use.
-async function indexFile(pcm:PreparedAudioFile,signal?:AbortSignal):Promise<string>{
+export async function prepareWaveformIndex(pcm:PreparedAudioFile,signal?:AbortSignal):Promise<string>{
   const signature=await identity(pcm),destination=pcm.file+'.waveform-v1';
   return preparations.get(destination,async signal=>{
     signal.throwIfAborted();let cached:FileHandle|undefined;
@@ -122,22 +120,8 @@ export async function readSequenceWaveform(pcm:PreparedAudioFile,input:WaveformR
   const release=await acquire(signal);
   try{return await readWaveform(pcm,request,signal);}finally{release();}
 }
-/** The same 4-active/16-waiting budget includes verification and FFmpeg work,
- * not just the inexpensive final JSON. SharedPreparations coalesces equal PCM
- * and index builds; one disconnected consumer cannot cancel another consumer. */
-export async function prepareSequenceWaveform(directory:string,asset:SequenceAsset,input:WaveformRequest,signal?:AbortSignal):Promise<WaveformResponse>{
-  const request=validateWaveformRequest(input),stream=asset.streams.find(stream=>stream.index===request.streamIndex&&stream.kind==='audio');
-  if(asset.id!==request.assetId||!stream)throw new Error('波形の音声ストリームがありません');
-  if(BigInt(stream.duration.num)*BigInt(request.rate.den)>BigInt(MAX_SECONDS)*BigInt(stream.duration.den)*BigInt(request.rate.num))throw new Error('波形の音声は速度適用後24時間以内にしてください');
-  const release=await acquire(signal);
-  try{
-    await verifiedSequenceAssetPath(directory,asset,signal);
-    const pcm=await prepareSequenceAudio(directory,asset,request.streamIndex,request.rate,signal);
-    return await readWaveform(pcm,request,signal);
-  }finally{release();}
-}
 async function readWaveform(pcm:PreparedAudioFile,request:WaveformRequest,signal?:AbortSignal):Promise<WaveformResponse>{
-  const file=await indexFile(pcm,signal),source=await open(pcm.file,constants.O_RDONLY|constants.O_NOFOLLOW);
+  const file=await prepareWaveformIndex(pcm,signal),source=await open(pcm.file,constants.O_RDONLY|constants.O_NOFOLLOW);
   let index:FileHandle|undefined;
   try{
     index=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW);

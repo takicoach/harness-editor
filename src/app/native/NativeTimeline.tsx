@@ -1,3 +1,4 @@
+import type {SilenceRange} from '../../shared/silenceCut';
 import {trackHeights,DEFAULT_TRACK_HEIGHT,MIN_TRACK_HEIGHT,MAX_INDIVIDUAL_TRACK_HEIGHT,individualTrackHeight,CAPTION_TRACK_HEIGHT} from './trackHeight';
 import {useTrackHeights} from './useTrackHeights';
 import {usePanelResize} from './usePanelResize';
@@ -5,7 +6,7 @@ import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, u
 import { clipEnd, type SequenceClip, type SequenceDocument } from '../../core/sequence/model';
 import { timeNumber } from '../../core/sequence/time';
 import type { NativeCommand } from './api';
-import {ScenePlan} from '../../core/sequence/scenePlan';
+import {scenePlanFor} from '../../core/sequence/scenePlan';
 import {hasSceneFade,sceneFadeJoins,sceneFadeTargetKey,type SceneFadeTarget} from '../../core/sequence/sceneFadeEdits';
 import {NativeWaveform} from './NativeWaveform';
 import {NativeArchivedMedia} from './NativeArchivedMedia';
@@ -23,7 +24,8 @@ import { Icon } from '../Icon';
 import { trackAccent, trackKindAccent, TRACK_ACCENTS } from './trackAccent';
 import { useTrackColors } from './useTrackColors';
 import {NativeDragTooltip} from './NativeDragTooltip';
-import {buildSnapIndex,snapFrame as snapToTarget,targetDisplayBias,type SnapTarget} from './snapIndex';
+import {snapFrame as snapToTarget,targetDisplayBias,type SnapTarget} from './snapIndex';
+import {scheduleSnapTargets,snapTargetsFor} from './snapTargets';
 import {scrubFrame} from './scrubTarget';
 import {rulerLabelFromSeconds,rulerStep} from './rulerStep';
 import {clipSeekTarget} from './clipSeek';
@@ -31,7 +33,11 @@ import {laneMode,medianClipWidth,NARROW_CLIP_BELOW} from './densityLane';
 import {NativeDensityLane} from './NativeDensityLane';
 import {rippleTrimPlan,type RippleTrimPlan} from '../../core/sequence/rippleTrim';
 import './native-timeline-interaction.css';
+import {mainTracks} from '../../core/sequence/mainTrack';
+import {importPhaseLabel,type ImportFrame} from './importFrames';
+import './native-import.css';
 import {isEscape} from './keyboard';
+import {livePendingTrim,pendingTrimFrom,type PendingTrim} from './pendingTrim';
 
 /**
  * rippleTrimPlan が「詰める」を最後までやらなかった理由 → 画面に出す文言。`reject` も `clamp` も持つので
@@ -66,6 +72,11 @@ export const RIPPLE_CLAMP_GHOST: Record<
  * それより左だった分は文書に反映されないので、無言で捨てずに伝える（最終広域レビュー M-4）。
  */
 export const RIPPLE_JOIN_START_NOTICE='左隣より先へは戻せません。2 本を 1 本に戻し、左隣の先頭で止めました。';
+/** トリムの確定に失敗した時。確定待ちを解いて元の長さで描き直す（設計 §2-6）。 */
+export const TRIM_FAILED_NOTICE='調整を確定できませんでした。元の長さに戻しました。';
+const TRIM_OUTCOME_NOTICES:readonly string[]=[...Object.values(RIPPLE_NOTICE),RIPPLE_JOIN_START_NOTICE];
+/** 確定待ちのクリップを隣より前に出す。延長（結合・押し出し）は後ろに並ぶ右隣の下に隠れるため。隣の名札（1）・端のつまみ（2）より上、再生ヘッド（4）より下。 */
+const SETTLING_Z=3;
 
 export type NativeTool = 'select' | 'razor' | 'range';
 export const TRACK_LABEL_WIDTH = 132;
@@ -79,7 +90,7 @@ export interface NativeRange { startFrame: number; endFrame: number; /** なぞ�
 export const TIMELINE_HANDLE_KEYS = ['flush', 'restoreCut', 'fitZoom'] as const;
 export interface NativeTimelineHandle {flush():Promise<boolean>;restoreCut():Promise<boolean>;fitZoom():void}
 interface Props {
-  projectId:string;waveform:WaveformPref;trackHeight?:number;
+  projectId:string;waveform:WaveformPref;trackHeight?:number;silenceCandidates?:SilenceRange[];
   document: SequenceDocument; frame: number; selected: string[]; range: NativeRange | null; tool: NativeTool; zoom: number; snap: boolean;
   /** 「詰める」トグル。既定 true（製品の既定と一致。RT6: 呼び出し元が prop を省略しても無言で OFF にならないよう昇格）。OFF では `ripple` キー自体を送らない。 */
   ripple?: boolean;
@@ -87,6 +98,7 @@ interface Props {
   /** Read-only cut-inclusive review: seek on the displayed axis, including archived bands. */
   onDisplaySeek?(frame:number):void;
   onCommand(command: NativeCommand): Promise<boolean>; onDrop(assetId: string, frame: number, trackId: string): void;
+  onLibraryDrop?(key: string, frame: number, trackId: string): void;
   onSceneFade?(target:SceneFadeTarget):void;
   onOpenCut?(entryId:string):void;
   activeCutId?:string|null;
@@ -105,9 +117,19 @@ interface Props {
   onDragStateChange?(dragging:boolean):void;
   onMinZoom?(value:number):void;
   playing?:boolean;busy?:boolean;mode?:string;
+  /** 試し差し替え中の使用箇所。破線の枠と読み上げ名の「（試し中）」で示す。 */
+  trialClipIds?:readonly string[];
+  /** 試し差し替え中。クリップの移動・伸縮・分割とトラックの編集だけを止め（試みたら onEditLocked）、選択・再生位置の移動・スクラブは通す（設計 §3-8）。 */
+  editLocked?:boolean;onEditLocked?():void;
+  /** 読み込み中の仮の枠（文書の外）。メインの映像の段に重ねる。 */
+  importFrames?:readonly ImportFrame[];onCancelImport?(batchId:string):void;
+  /** 最初のプレビューの絵がまだ出ていない。その間はコマ絵を取りに行かず（設計 §2-1「取得の開始」）、吸い付き先の空き時間の作成も待つ（設計 §2-5）。 */
+  beforeFirstPicture?:boolean;
 }
 interface Gesture { type: 'range' | 'move' | 'start' | 'end' | 'scrub'; x: number; y:number; pointerX:number;pointerY:number;scrollLeft:number;pointerId:number;capture:HTMLElement;grabDisplayFrame:number;
   frame: number; revision: number; documentId:string;projectId:string;zoom:number;mode:string|undefined;
+  /** 外部の再読込は同じ文書 id・版のまま別のセッションの中身を届けることがある。掴んだ時のセッションでだけ続ける。 */
+  sessionId:string|undefined;
   clip?: SequenceClip; ids?: string[]; delta: number; targetTrack?: string; moved?: boolean;altKey:boolean;
   /** 吸着が効いた先。効かなければ undefined（T9 が書き込む）。 */
   snapFrame?: number; snapLabel?: string;
@@ -123,9 +145,11 @@ interface Gesture { type: 'range' | 'move' | 'start' | 'end' | 'scrub'; x: numbe
   /** ドラッグごとに再評価した計画。確定時の値で submit する（ドラッグ中の R では変えない）。 */
   ripplePlan?: RippleTrimPlan;
   /** `ripplePlan` を問い合わせたときの端位置と文書 revision。両方同じ場合だけ評価し直さない（RT6: 文書が差し替わった時に古い計画を出さない）。 */
-  ripplePlanFrame?: number; ripplePlanRevision?: number }
+  ripplePlanFrame?: number; ripplePlanRevision?: number;
+  /** 開始時に編集が止まっていたか。動かしたら確定せずに取り消して知らせる。 */
+  locked?: boolean }
 function kindName(clip: SequenceClip): string { return clip.content.kind === 'audio' ? clip.content.role : clip.content.kind; }
-export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function NativeTimeline({ projectId,waveform,trackHeight=DEFAULT_TRACK_HEIGHT,document: doc, frame, selected, range, tool, zoom, snap, ripple: rippleOn = true, onSelect, onRange, onSeek, onDisplaySeek, onCommand, onDrop,onSceneFade,onOpenCut,activeCutId,archivedPlayhead,cutSourceActive=false,onZoomChange,onDragStateChange,onMinZoom,playing=false,busy=false,mode,sessionId,onSelectCut,onCutCommand,prepareCut,readDocument,onCutWorking,onRestoreSelection },ref) {
+export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function NativeTimeline({ silenceCandidates=[],projectId,waveform,trackHeight=DEFAULT_TRACK_HEIGHT,document: doc, frame, selected, range, tool, zoom, snap, ripple: rippleOn = true, onSelect, onRange, onSeek, onDisplaySeek, onCommand, onDrop,onLibraryDrop,onSceneFade,onOpenCut,activeCutId,archivedPlayhead,cutSourceActive=false,onZoomChange,onDragStateChange,onMinZoom,playing=false,busy=false,mode,trialClipIds=[],editLocked=false,importFrames=[],onCancelImport,beforeFirstPicture=false,onEditLocked,sessionId,onSelectCut,onCutCommand,prepareCut,readDocument,onCutWorking,onRestoreSelection },ref) {
   const heights=trackHeights(trackHeight,waveform);
   const {scales,setScale}=useTrackHeights(projectId,doc.id);
   const {colors:trackColors,setColor:setTrackColor}=useTrackColors(projectId,doc.id);
@@ -177,7 +201,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   // dense は映像クリップの幅の中央値で決まる（トラック単位ではない）。隠す対象は各トラックの印なので、
   // 太いクリップのトラックでも印が消えることがある — 画面全体の密度で切り替える意図（M-3）。
   const dense = useMemo(()=>medianClipWidth(doc.clips.filter(c=>c.content.kind==='video'),pixels)<NARROW_CLIP_BELOW,[doc.clips,pixels]);
-  const contentFrames = Math.max(finishMap?.displayEnd??doc.sequenceEndFrame, ...doc.clips.map(c=>displayFrame(clipEnd(c),'before')));
+  const contentFrames = Math.max(finishMap?.displayEnd??doc.sequenceEndFrame, ...doc.clips.map(c=>displayFrame(clipEnd(c),'before')), ...importFrames.map(f=>displayFrame(f.startFrame+f.durationFrames,'before')));
   const width = Math.max(800, (contentFrames + fps * 5) * pixels);
   const scroller = useRef<HTMLDivElement>(null), gesture = useRef<Gesture | null>(null), [ghost, setGhost] = useState<Gesture | null>(null);
   useLayoutEffect(()=>{
@@ -191,7 +215,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     // Reveal on entering the tab, not on pointer selection during a drag.
   },[mode,projectId,doc.id]);
   const [view,setView]=useState({left:0,top:0,width:0,height:0});
-  const audioPlan=useMemo(()=>doc.clips.some(clip=>clip.content.kind==='audio')?new ScenePlan(doc):null,[doc]);
+  const audioPlan=useMemo(()=>doc.clips.some(clip=>clip.content.kind==='audio')?scenePlanFor(doc):null,[doc]);
   useEffect(()=>{
     const element=scroller.current;if(!element)return;
     let animation=0;
@@ -203,6 +227,8 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   const [draftRange, setDraftRange] = useState<NativeRange | null>(null), shownRange = draftRange ?? range;
   const [moveNotice,setMoveNotice]=useState('');
   const [dragging,setDragging]=useState(false),[pending,setPending]=useState(false);
+  // 確定待ちは作った時の文書・版・セッションにだけ効く。新しい文書が届いた描画では自動的に外れる（採用と解除が同じ更新）。
+  const [pendingTrimState,setPendingTrim]=useState<PendingTrim|null>(null),pendingTrim=livePendingTrim(pendingTrimState,doc,sessionId);
   const dragNotify=useRef(onDragStateChange);dragNotify.current=onDragStateChange;
   // 上位が止めるのはプレビューの当たり判定。仕上げのカット行のドラッグも同じ扱いにする。
   useEffect(()=>{dragNotify.current?.(dragging||cutDragging);},[dragging,cutDragging]);
@@ -215,6 +241,14 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   // Replace the token on every context transition, including A -> B -> A.
   useLayoutEffect(()=>{currentOwner.current={projectId,documentId:doc.id};},[projectId,doc.id,mode]);
   const tracks = [...doc.tracks.filter(t => t.kind === 'visual').reverse(), ...doc.tracks.filter(t => t.kind === 'audio')];
+  const importTrackId=mainTracks(doc).videoTrackId;
+  // メインの映像の段が無い時だけ出す仮の段。下の行の縦位置（trackTops）にこの段の高さを含める。
+  const importLane=importFrames.length>0&&!tracks.some(t=>t.id===importTrackId);
+  const importFrameNodes=importFrames.map(item=><div key={`${item.batchId}:${item.itemId}`} className="native-import-frame" data-import-frame={item.itemId} data-phase={item.phase} data-estimated={item.estimated?'true':undefined}
+    style={{left:TRACK_LABEL_WIDTH+displayFrame(item.startFrame)*pixels,width:Math.max(8,item.durationFrames*pixels)}} title={item.error??`${item.name}（${importPhaseLabel(item.phase)}${item.phase==='awaiting-decision'?'。素材の欄で選んでください':''}）`}>
+    <span className="native-import-name">{item.name}</span><span className="native-import-phase">{item.error?`失敗: ${item.error}`:importPhaseLabel(item.phase)}</span>
+    {item.first&&onCancelImport&&<button type="button" className="native-import-cancel" aria-label={item.phase==='failed'?`失敗した${item.batchSize}本を取り消す`:`読み込み中の${item.batchSize}本を取り消す`} onPointerDown={event=>event.stopPropagation()} onClick={()=>onCancelImport(item.batchId)}>取り消す</button>}
+  </div>);
   const cutTrackId=finishMap?tracks.find(track=>doc.clips.some(clip=>clip.trackId===track.id&&clip.content.kind==='video'))?.id:undefined;
   const cuts=useMemo(()=>{
     const groups=new Map<number,{ids:string[];ambiguous:boolean}>();
@@ -235,7 +269,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   const laneModes=useMemo(()=>new Map(doc.tracks.map(t=>[t.id,laneMode(doc.clips.filter(c=>c.trackId===t.id),pixels)])),[doc.tracks,doc.clips,pixels]);
   const captionTrack=(track:SequenceDocument['tracks'][number])=>track.kind==='visual'&&['--track-telop','--track-jimaku','--track-title'].includes(kindAccents.get(track.id)??trackKindAccent(track,doc.clips));
   const baseHeight=(track:SequenceDocument['tracks'][number])=>track.id===cutTrackId?heights.cut:track.kind==='audio'?heights.audio:captionTrack(track)?Math.min(heights.visual,CAPTION_TRACK_HEIGHT):heights.visual;
-  let trackTop=36+(showCuts?34:0)+(finishMap&&!cutTrackId?heights.cut:0)+(finishMap?.unresolved.length?34:0);
+  let trackTop=36+(showCuts?34:0)+(finishMap&&!cutTrackId?heights.cut:0)+(finishMap?.unresolved.length?34:0)+(importLane?heights.visual:0);
   for(const track of tracks){
     trackTops.set(track.id,trackTop);
     const height=individualTrackHeight(baseHeight(track),scales[track.id]);
@@ -250,9 +284,9 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     const bounds = scroller.current!.getBoundingClientRect();
     return Math.max(0,Math.round(completionFrame((clientX - bounds.left + scroller.current!.scrollLeft - TRACK_LABEL_WIDTH) / pixels)));
   };
-  const owns=(action:Gesture)=>!(action.type==='scrub'?seekBlocked:blocked)&&!committing.current&&action.revision===doc.revision&&action.documentId===doc.id&&action.projectId===projectId&&action.zoom===zoom&&action.mode===mode;
+  const owns=(action:Gesture)=>!(action.type==='scrub'?seekBlocked:blocked)&&!committing.current&&action.revision===doc.revision&&action.documentId===doc.id&&action.projectId===projectId&&action.sessionId===sessionId&&action.zoom===zoom&&action.mode===mode;
   const assetDrop=useNativeAssetDrop({scroller,ownerKey:JSON.stringify([projectId,sessionId,doc.id,doc.revision,zoom,mode,tool]),disabled:blocked||dragging||mode==='review',position,
-    valid:(assetId,trackId)=>!committing.current&&doc.assets.some(asset=>asset.id===assetId&&asset.kind!=='lut'&&asset.kind!=='component')&&doc.tracks.some(track=>track.id===trackId),drop:onDrop});
+    valid:(assetId,trackId)=>!committing.current&&doc.assets.some(asset=>asset.id===assetId&&asset.kind!=='lut'&&asset.kind!=='component')&&doc.tracks.some(track=>track.id===trackId),drop:onDrop,dropLibrary:onLibraryDrop});
   const cancel=()=>{
     assetDrop.cancel();
     const action=gesture.current;gesture.current=null;
@@ -262,6 +296,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   };
   const submit=async(command:NativeCommand):Promise<boolean>=>{
     if(blocked||committing.current)return false;
+    if(editLocked){onEditLocked?.();return false;}
     const owner=currentOwner.current;
     committing.current=true;setPending(true);
     try{const ok=await onCommand(command);return ok&&mounted.current&&owner===currentOwner.current;}
@@ -273,7 +308,9 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     event.currentTarget.setPointerCapture(event.pointerId);
     gesture.current={type,x:event.clientX,y:event.clientY,pointerX:event.clientX,pointerY:event.clientY,scrollLeft:scroller.current!.scrollLeft,
       pointerId:event.pointerId,capture:event.currentTarget,grabDisplayFrame:(event.clientX-scroller.current!.getBoundingClientRect().left+scroller.current!.scrollLeft-TRACK_LABEL_WIDTH)/pixels,
-      frame:at,revision:doc.revision,documentId:doc.id,projectId,zoom,mode,clip,ids,delta:0,altKey:event.altKey,ripple:rippleOn};
+      frame:at,revision:doc.revision,documentId:doc.id,projectId,sessionId,zoom,mode,clip,ids,delta:0,altKey:event.altKey,ripple:rippleOn,locked:editLocked};
+    // 空き時間に間に合っていなければここで作る。以後の updateDrag は同じ文書オブジェクトの同じ索引を引く。
+    if(snap&&(type==='move'||type==='start'||type==='end'))snapTargetsFor(doc);
     setDragging(true);
   };
   /** 1・2 番目の門（ボタン判定と操作可能性）。操作できないときは選択解除もシークもしない。 */
@@ -300,6 +337,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   const startClip = (event: PointerEvent<HTMLElement>, clip: SequenceClip, edge?: 'start' | 'end') => {
     event.stopPropagation(); if (event.button !== 0||blocked||committing.current||gesture.current) return;
     setMoveNotice('');
+    if (editLocked && (edge || tool === 'razor')) { onEditLocked?.(); return; }
     if (tool === 'range' && !edge) { startRange(event); return; }
     if (tool === 'razor' && !edge) {
       const at = position(event.clientX);
@@ -324,6 +362,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     const action = gesture.current; if (!action) return;
     if(!owns(action)){cancel();return;}
     if(!action.moved)return;
+    if (action.locked && (action.type === 'move' || action.type === 'start' || action.type === 'end')) { cancel(); onEditLocked?.(); return; }
     if (action.type === 'scrub') { seekScrub(action.pointerX); return; }
     if (action.type === 'range') {
       const at = Math.min(doc.sequenceEndFrame, position(action.pointerX));
@@ -340,11 +379,14 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     action.snapFrame=undefined;action.snapLabel=undefined;
     if (snap&&!action.altKey) {
       // index は document 由来（語境界・語間・他クリップ端・0）。再生ヘッドと自分自身の除外はここで足す・引く。
+      // 文書オブジェクトごとに1つなので、操作中は掴んだ時と同じ索引が返り、途中で候補は増えない（設計 §2-5）。
+      // 版が変われば操作ごと取り消される。同じ版のまま別のオブジェクトが届くのはセッションが替わった時だけで、
+      // その時は掴んだ時の索引ではなく今の文書に吸い付く（今までと同じ。古い計算を残さない・設計 §3）。
       // 自分自身の除外は id（clipId）で判定する — 値一致（startFrame/clipEnd）だと、同じフレームに
       // 隣接する別クリップの端まで誤って除外してしまう。
       const excluded=new Set(action.ids??[]);
       const targets:SnapTarget[]=[{frame,kind:'playhead',label:'再生ヘッド'},
-        ...snapTargets.filter(target=>target.kind!=='clip'||!target.clipId||!excluded.has(target.clipId))];
+        ...snapTargetsFor(doc).filter(target=>target.kind!=='clip'||!target.clipId||!excluded.has(target.clipId))];
       const ends = action.type === 'move' ? [{frame:action.clip!.startFrame,side:'after' as const},{frame:clipEnd(action.clip!),side:'before' as const}]
         : [{frame:action.frame,side:action.type==='end'?'before' as const:'after' as const}];
       // クリップ端は自分の side（'start'/'end'）に応じた向きで displayFrame を評価する（カット境界
@@ -429,8 +471,17 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
         const landing = doc.clips.find(c => c.id === joined.leftId)?.startFrame;
         if (landing !== undefined && action.frame + action.delta < landing) setMoveNotice(RIPPLE_JOIN_START_NOTICE);
       }
+      // 離した直後に元の幅へ戻さない: 確定文書が届くまで確定後の位置を描く。影を消す更新と同じイベントの中で立てるので、間に元の幅が出ない。
+      const settling = pendingTrimFrom({ sessionId, document: doc, clip: action.clip!, edge: action.type, frame: action.frame + action.delta, ripple: !!action.ripple && !rejected, plan: action.ripplePlan }), owner = currentOwner.current;
+      setPendingTrim(settling);
       void submit({ type: 'trim', clipId: action.clip!.id, edge: action.type,
-        frame: action.frame + action.delta, ...(action.ripple && !rejected ? { ripple: true } : {}) });
+        frame: action.frame + action.delta, ...(action.ripple && !rejected ? { ripple: true } : {}) }).then(ok => {
+        if (!mounted.current) return;
+        // 失敗・変更なし・リップルの結合・外部の再読込のどれでも、ここで確定待ちを解く。
+        setPendingTrim(current => current === settling ? null : current);
+        // 「端だけを動かしました」等は確定した前提の説明なので失敗の知らせで置き換える。送信が投げた理由（別の文言）は残す。
+        if (!ok && owner === currentOwner.current) setMoveNotice(notice => notice && !TRIM_OUTCOME_NOTICES.includes(notice) ? notice : TRIM_FAILED_NOTICE);
+      });
     }
   };
   const handlers=useRef({move,end,cancel});useLayoutEffect(()=>{handlers.current={move,end,cancel};});
@@ -445,7 +496,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     window.addEventListener('blur',abort);window.addEventListener('keydown',escape,true);
     return()=>{mounted.current=false;abort();window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerUp);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('blur',abort);window.removeEventListener('keydown',escape,true);};
   },[]);
-  useLayoutEffect(()=>{cancel();},[projectId,doc.id,doc.revision,zoom,mode,tool,busy,readOnly]);
+  useLayoutEffect(()=>{cancel();},[projectId,sessionId,doc.id,doc.revision,zoom,mode,tool,busy,readOnly]);
   const viewport=useNativeTimelineViewport({scroller,zoom,frame:playhead??displayFrame(frame),projectId,documentId:doc.id,mode,totalFrames:contentFrames,
     playing:playing&&playhead!==null,busy:seekBlocked,onZoomChange,
     pointer:()=>{
@@ -463,6 +514,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
     if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;
     event.preventDefault();event.stopPropagation();
     if(blocked||committing.current||gesture.current||event.nativeEvent.isComposing||event.metaKey||event.ctrlKey||event.altKey)return;
+    if(editLocked){onEditLocked?.();return;}
     // ドラッグは startClip で毎回クリアするが、キー経路には無かった。前回の理由が残り続ける（M-2）。
     setMoveNotice('');
     const at=(edge==='start'?clip.startFrame:clipEnd(clip))+(event.key==='ArrowLeft'?-1:1);
@@ -476,7 +528,8 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
   };
   // 目盛りは表示座標（left = TRACK_LABEL_WIDTH + tick*pixels）に置く。displayFrame の写像は掛けない
   // ので、ルーラーが示すのは表示時間（仕上げモードではカット後の尺）。
-  const ripplePlan = ghost?.moved ? ghost.ripplePlan ?? null : null;
+  // 確定待ちの間も同じ帯を出す（離した瞬間に「1 本に戻す」等の説明が消え、詰める短縮の隙間が説明なしで見えないように）。
+  const ripplePlan = ghost?.moved ? ghost.ripplePlan ?? null : pendingTrim?.plan ?? null;
   const rippleRight = ripplePlan?.kind === 'join' ? doc.clips.find(c => c.id === ripplePlan.rightId) : undefined;
   // 結合しても足りない分は右へ押し出す（設計 §3・§6 の `join.push`）。単独の押し出しと同じ影で予告する
   // —「1 本に戻す」だけだと全トラックがずれることが伝わらない（レビュー Important 1）。
@@ -496,11 +549,11 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
       .filter(i => i % step.minorDivisions !== 0)
     : [];
   const fadeJoins=useMemo(()=>sceneFadeJoins(doc),[doc]);
-  // document 由来（0・クリップ端・語境界・語間）だけを持つ。再生ヘッド更新（毎フレーム）では作り直さない。
-  // playhead は null で渡す — document 由来の index に「再生位置」を焼き込むと、frame 0 付近で
-  // KIND_PRIORITY（playhead > zero）により常に「再生位置」が勝って「先頭」が出せなくなる。
-  // 実際の再生ヘッドはドラッグ中の吸着ブロックで別途合成する。
-  const snapTargets=useMemo(()=>snap?buildSnapIndex(doc,null,[]):[],[doc,snap]);
+  // 吸い付き先は描画の中では作らない（設計 §2-5）。空き時間の予約も、操作の最中と最初のプレビューの絵の前は
+  // 入れない（入っていれば取り消す）。requestIdleCallback の無い環境の代わりの setTimeout は空き時間を待たないため。
+  // 間に合わなくても吸い付く操作は begin で作るので、吸着は欠けない。
+  const operating=dragging||cutDragging||!!assetDrop.preview;
+  useEffect(()=>snap&&!operating&&!beforeFirstPicture?scheduleSnapTargets(doc):undefined,[doc,snap,operating,beforeFirstPicture]);
   const finishCutRow=finishMap&&<NativeFinishCutTrack ref={cutTrack} projectId={projectId} sessionId={sessionId} document={doc} map={finishMap} zoom={zoom} mode={mode} scroller={scroller} busy={seekBlocked} activeCutId={activeCutId??null}
     onSelectCut={id=>onSelectCut?.(id)} onCommand={onCutCommand??((operation)=>onCommand(operation))} prepare={prepareCut} readDocument={readDocument} onWorking={onCutWorking} onRestoreSelection={onRestoreSelection}
     onDragStateChange={state=>{cutDrag.current=state;setCutDragging(state.dragging);}}/>;
@@ -525,6 +578,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
       {!!finishMap?.unresolved.length&&<div className="native-cut-lane native-unresolved-cuts"><div className="native-track-label">位置の確認</div>{finishMap.unresolved.map(cut=><button key={cut.cut.id} disabled={blocked} title={cut.reason} onClick={()=>onOpenCut?.(cut.entryIds[0]!)}>保存カットを確認</button>)}</div>}
       {showCuts&&<div className="native-cut-lane"><div className="native-track-label">カットした部分</div>{cuts.map(([at,group])=><button key={at} data-native-cut-id={group.ids[0]} aria-pressed={!!activeCutId&&group.ids.includes(activeCutId)} className={group.ambiguous?'is-ambiguous':''} style={{left:TRACK_LABEL_WIDTH+displayFrame(at,'before')*pixels}} disabled={blocked}
         aria-label={`${(at/fps).toFixed(2)}秒付近のカット${group.ids.length}件を確認`} title={group.ambiguous?'復元位置の確認が必要です':'カットした部分を確認・復元'} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>event.stopPropagation()} onClick={()=>onOpenCut?.(group.ids[0]!)}>↶ {group.ids.length>1?group.ids.length:''}{group.ambiguous?' ?':''}</button>)}</div>}
+      {importLane&&<div className="native-track native-track-visual native-import-lane" data-import-lane style={{'--native-visual-track-height':`${heights.visual}px`} as CSSProperties}><div className="native-track-label"><span className="native-track-name">メイン（読み込み中）</span></div>{importFrameNodes}</div>}
       {tracks.map(track => <div className={`native-track native-track-${track.kind}${track.id===cutTrackId?' native-track-with-cuts':''}`} data-native-track={track.id} key={track.id}
         style={{'--track-accent':`var(${accents.get(track.id)??trackAccent(track,doc.clips,tracks,trackColors,kindAccents)})`,'--native-visual-track-height':`${rowHeights.get(track.id)}px`,'--native-audio-track-height':`${rowHeights.get(track.id)}px`,'--native-cut-track-height':`${rowHeights.get(track.id)}px`} as CSSProperties}
         onPointerDown={event => { if (event.target !== event.currentTarget) return;
@@ -532,19 +586,21 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
           else { if (!canGesture(event)) return; onSelect([]); startScrub(event); } }}
         onDragOver={event=>assetDrop.over(event,track.id)} onDragLeave={assetDrop.leave}
         onDrop={event=>assetDrop.drop(event,track.id)}>
+        {silenceCandidates.flatMap((r,i)=>displayPieces(r.startFrame,r.endFrame).filter(p=>TRACK_LABEL_WIDTH+p.displayStart*pixels<view.left+view.width&&TRACK_LABEL_WIDTH+p.displayEnd*pixels>view.left).map((p,j)=><div key={`silence-${i}-${j}`} className="native-silence-candidate" aria-hidden="true" title="無音カット候補（未適用）" style={{left:TRACK_LABEL_WIDTH+p.displayStart*pixels,width:Math.max(1,(p.displayEnd-p.displayStart)*pixels)}}>{(p.displayEnd-p.displayStart)*pixels>48?'候補':null}</div>))}
         {assetDrop.preview?.trackId===track.id&&<div className="native-asset-drop-marker" data-drop-frame={assetDrop.preview.frame} style={{left:TRACK_LABEL_WIDTH+displayFrame(assetDrop.preview.frame)*pixels}}><span>{assetDrop.preview.frame} fr</span></div>}
+        {track.id===importTrackId&&importFrameNodes}
         <div className="native-track-label">
           <div className="native-track-actions">
             <button className="native-track-toggle" data-kind={track.kind === 'audio' ? 'mute' : 'eye'} aria-label={`${track.name}を${track.enabled ? '無効' : '有効'}にする`}
               title={track.kind === 'audio' ? (track.enabled ? 'ミュート' : 'ミュート解除') : (track.enabled ? '非表示にする' : '表示する')}
-              aria-pressed={track.kind === 'audio' ? !track.enabled : track.enabled} disabled={blocked}
+              aria-pressed={track.kind === 'audio' ? !track.enabled : track.enabled} disabled={blocked||editLocked}
               onClick={() => void submit({ type: 'set-track-enabled', trackId: track.id, enabled: !track.enabled })}>{track.kind === 'audio' ? 'M' : <Icon name={track.enabled ? 'eye' : 'eye-off'} size={14} />}</button>
           </div>
           <span className="native-track-name" title={track.name}>{track.name}</span>
           <div className="native-track-tools">
             {([-1, 1] as const).map(direction => {
               const sameKind = tracks.filter(t => t.kind === track.kind), neighbor = sameKind[sameKind.findIndex(t => t.id === track.id) + direction];
-              return <button key={direction} className="native-track-tool" disabled={blocked||!neighbor} aria-label={`${track.name}を${direction === -1 ? '上' : '下'}へ移動`} title={direction === -1 ? '上へ移動' : '下へ移動'} onClick={() => {
+              return <button key={direction} className="native-track-tool" disabled={blocked||editLocked||!neighbor} aria-label={`${track.name}を${direction === -1 ? '上' : '下'}へ移動`} title={direction === -1 ? '上へ移動' : '下へ移動'} onClick={() => {
                 if (neighbor) void submit({ type: 'move-track', trackId: track.id, index: doc.tracks.findIndex(t => t.id === neighbor.id) });
               }}><Icon name={direction === -1 ? 'arrow-up' : 'arrow-down'} size={13} /></button>;
             })}
@@ -568,7 +624,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
                 style={{'--c':`var(${accent.token})`} as CSSProperties} onClick={()=>{setTrackColor(track.id,accent.token);setColorMenu(null);}}/>)}
               <button type="button" role="menuitem" className="btn-ghost" onClick={()=>{setTrackColor(track.id,null);setColorMenu(null);}}>自動に戻す</button>
             </div>}
-            <button className="native-track-delete btn-danger native-track-tool" aria-label={`${track.name}を削除`} title={doc.clips.some(c=>c.trackId===track.id)?'クリップを移動または削除して空にしてください':'空のトラックを削除（元に戻せます）'} disabled={blocked||doc.clips.some(c=>c.trackId===track.id)} onClick={()=>void submit({type:'remove-track',trackId:track.id})}><Icon name="x" size={13} /></button>
+            <button className="native-track-delete btn-danger native-track-tool" aria-label={`${track.name}を削除`} title={doc.clips.some(c=>c.trackId===track.id)?'クリップを移動または削除して空にしてください':'空のトラックを削除（元に戻せます）'} disabled={blocked||editLocked||doc.clips.some(c=>c.trackId===track.id)} onClick={()=>void submit({type:'remove-track',trackId:track.id})}><Icon name="x" size={13} /></button>
           </div>
           <div className="native-track-resizer" role="separator" tabIndex={0} aria-orientation="horizontal"
             aria-label={`${track.name}のトラック高さ`} aria-valuemin={MIN_TRACK_HEIGHT} aria-valuemax={MAX_INDIVIDUAL_TRACK_HEIGHT}
@@ -588,7 +644,7 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
               else setScale(track.id,individualTrackHeight(rowHeights.get(track.id)!+(event.key==='ArrowDown'?1:-1)*(event.shiftKey?20:4))/baseHeight(track));
             }}/>
         </div>
-        {finishMap&&visibleTracks.has(track.id)&&<NativeArchivedMedia document={doc} projectId={projectId} map={finishMap} trackId={track.id} pixels={pixels} scrollLeft={view.left} viewportWidth={view.width} height={rowHeights.get(track.id)!} gain={waveformGain(waveform)}/>}
+        {finishMap&&visibleTracks.has(track.id)&&<NativeArchivedMedia document={doc} projectId={projectId} map={finishMap} trackId={track.id} pixels={pixels} scrollLeft={view.left} viewportWidth={view.width} height={rowHeights.get(track.id)!} gain={waveformGain(waveform)} held={beforeFirstPicture}/>}
         {track.id===cutTrackId&&finishCutRow}
         {(()=>{
           const trackClips=doc.clips.filter(c=>c.trackId===track.id);
@@ -597,25 +653,27 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
           if(captionOnly&&!finishMap&&!ghost&&!selected.some(id=>trackClips.some(c=>c.id===id))&&laneModes.get(track.id)==='density')
             return <NativeDensityLane clips={trackClips} pixels={pixels} offset={TRACK_LABEL_WIDTH} height={rowHeights.get(track.id)!}/>;
           return trackClips.map(clip => {
-          const dragging = ghost?.ids?.includes(clip.id), delta = dragging ? ghost!.delta : 0;
-          const start = clip.startFrame + (dragging && ghost!.type !== 'end' ? delta : 0);
-          const duration = clip.durationFrames + (dragging && ghost!.type === 'end' ? delta : dragging && ghost!.type === 'start' ? -delta : 0);
+          const dragging = ghost?.ids?.includes(clip.id), delta = dragging ? ghost!.delta : 0, settling = pendingTrim?.clipId === clip.id ? pendingTrim : null;
+          // 確定待ちは元の文書の上に確定後の位置を描く（差分は足さない）。
+          const start = settling ? settling.startFrame : clip.startFrame + (dragging && ghost!.type !== 'end' ? delta : 0);
+          const duration = settling ? settling.durationFrames : clip.durationFrames + (dragging && ghost!.type === 'end' ? delta : dragging && ghost!.type === 'start' ? -delta : 0);
+          const sourceShift = settling ? settling.sourceOffsetFrames : dragging && ghost!.type === 'start' ? delta : 0;
           if(finishMap){
             const pieces=displayPieces(start,start+duration),first=pieces[0],last=pieces.at(-1);
             if(!first||!last)return null;
             const left=first.displayStart,span=last.displayEnd-left;
             const originalPieces=displayPieces(clip.startFrame,clipEnd(clip)),originalFirst=originalPieces[0]??first,originalLast=originalPieces.at(-1)??last;
             const startWidth=clipHandleWidth(Math.max(3,(originalFirst.displayEnd-originalFirst.displayStart)*pixels),7),endWidth=clipHandleWidth(Math.max(3,(originalLast.displayEnd-originalLast.displayStart)*pixels),7);
-            return <div key={clip.id} className="native-clip-pieces" role="button" tabIndex={0} aria-label={`${clip.name} ${clip.startFrame}〜${clipEnd(clip)}フレーム`} aria-pressed={selected.includes(clip.id)} data-native-clip-id={clip.id}
-              style={{left:TRACK_LABEL_WIDTH+left*pixels,width:Math.max(3,span*pixels),opacity:dragging?0.7:undefined}} onPointerDown={event=>startClip(event,clip)} onKeyDown={event=>{if(event.key==='Enter')onSelect([clip.id]);}}>
+            return <div key={clip.id} className={`native-clip-pieces${trialClipIds.includes(clip.id)?' native-clip-trial':''}`} role="button" tabIndex={0} data-native-settling={settling?'true':undefined} aria-label={`${clip.name} ${clip.startFrame}〜${clipEnd(clip)}フレーム${trialClipIds.includes(clip.id)?'（試し中）':''}`} aria-pressed={selected.includes(clip.id)} data-native-clip-id={clip.id}
+              style={{left:TRACK_LABEL_WIDTH+left*pixels,width:Math.max(3,span*pixels),opacity:dragging?0.7:undefined,zIndex:settling?SETTLING_Z:undefined}} onPointerDown={event=>startClip(event,clip)} onKeyDown={event=>{if(event.key==='Enter')onSelect([clip.id]);}}>
               {pieces.map((piece,index)=>{
                 const length=piece.endFrame-piece.startFrame,wave=clip.content.kind==='audio'&&visibleTracks.has(track.id)?waveformViewport(piece.displayStart,length,pixels,view.left,view.width):null;
                 return <div key={index} className={`native-clip native-clip-${kindName(clip)} ${selected.includes(clip.id)?'is-selected':''} ${!track.enabled?'is-muted':''}`} data-native-display-start={piece.displayStart} data-native-completion-start={piece.startFrame}
                   {...(Math.max(3,length*pixels)<NARROW_CLIP_BELOW?{'data-narrow':'true'}:{})}
                   style={{left:(piece.displayStart-left)*pixels,width:Math.max(3,length*pixels)}}>
-                  {clip.content.kind==='video'&&visibleTracks.has(track.id)&&<NativeFilmstrip document={doc} projectId={projectId} clip={clip} sourceOffsetFrames={piece.startFrame-start+(dragging&&ghost!.type==='start'?delta:0)} displayStartFrame={piece.displayStart} displayDuration={length} pixelsPerFrame={pixels} scrollLeft={view.left} viewportWidth={view.width}/>}
+                  {clip.content.kind==='video'&&visibleTracks.has(track.id)&&<NativeFilmstrip document={doc} projectId={projectId} clip={clip} sourceOffsetFrames={piece.startFrame-start+sourceShift} displayStartFrame={piece.displayStart} displayDuration={length} pixelsPerFrame={pixels} scrollLeft={view.left} viewportWidth={view.width} frozen={!!dragging} held={beforeFirstPicture}/>}
                   <span className="native-clip-name">{clip.linkGroupId&&<span className="native-clip-link"><Icon name="link" size={12}/></span>}{clip.name}</span>
-                  {wave&&audioPlan&&<NativeWaveform projectId={projectId} clip={clip} plan={audioPlan} viewport={wave} height={Math.max(8,Math.min(rowHeights.get(track.id)!-18,Math.round(heights.waveform*rowHeights.get(track.id)!/heights.audio)))} displayGain={waveformGain(waveform)} sourceOffsetFrames={piece.startFrame-start+(dragging&&ghost!.type==='start'?delta:0)} displayStartFrame={piece.startFrame} displayDuration={length}/>}
+                  {wave&&audioPlan&&<NativeWaveform projectId={projectId} clip={clip} plan={audioPlan} viewport={wave} height={Math.max(8,Math.min(rowHeights.get(track.id)!-18,Math.round(heights.waveform*rowHeights.get(track.id)!/heights.audio)))} displayGain={waveformGain(waveform)} sourceOffsetFrames={piece.startFrame-start+sourceShift} displayStartFrame={piece.startFrame} displayDuration={length}/>}
                 </div>;
               })}
               <button type="button" className="native-trim native-trim-start" style={{width:startWidth??undefined,display:startWidth===null?'none':undefined}} disabled={blocked} aria-label={`${clip.name}の開始位置を調整`} onPointerDown={event=>startClip(event,clip,'start')} onKeyDown={event=>trimKey(event,clip,'start')}/>
@@ -625,16 +683,16 @@ export const NativeTimeline=forwardRef<NativeTimelineHandle,Props>(function Nati
           // A captured edge remains mounted while its live width shrinks; evaluate the next hit area after commit.
           const handleWidth=clipHandleWidth(Math.max(3,clip.durationFrames*pixels),7);
           const visibleWave=clip.content.kind==='audio'&&visibleTracks.has(track.id)?waveformViewport(start,duration,pixels,view.left,view.width):null;
-          return <div key={clip.id} role="button" tabIndex={0} aria-label={`${clip.name} ${clip.startFrame}〜${clipEnd(clip)}フレーム`} aria-pressed={selected.includes(clip.id)}
-            data-native-clip-id={clip.id} className={`native-clip native-clip-${kindName(clip)} ${selected.includes(clip.id) ? 'is-selected' : ''} ${!track.enabled ? 'is-muted' : ''}`}
+          return <div key={clip.id} role="button" tabIndex={0} data-native-settling={settling?'true':undefined} aria-label={`${clip.name} ${clip.startFrame}〜${clipEnd(clip)}フレーム${trialClipIds.includes(clip.id)?'（試し中）':''}`} aria-pressed={selected.includes(clip.id)}
+            data-native-clip-id={clip.id} className={`native-clip native-clip-${kindName(clip)} ${selected.includes(clip.id) ? 'is-selected' : ''} ${!track.enabled ? 'is-muted' : ''}${trialClipIds.includes(clip.id) ? ' native-clip-trial' : ''}`}
             {...(Math.max(3,duration*pixels)<NARROW_CLIP_BELOW?{'data-narrow':'true'}:{})}
-            style={{ left: TRACK_LABEL_WIDTH + start * pixels, width: Math.max(3, duration * pixels), ...(dragging ? { opacity: .7 } : {}) } as CSSProperties}
+            style={{ left: TRACK_LABEL_WIDTH + start * pixels, width: Math.max(3, duration * pixels), ...(dragging ? { opacity: .7 } : {}), ...(settling ? { zIndex: SETTLING_Z } : {}) } as CSSProperties}
             onPointerDown={event => startClip(event, clip)} onKeyDown={event => { if (event.key === 'Enter') onSelect([clip.id]); }}>
-            {clip.content.kind==='video'&&visibleTracks.has(track.id)&&<NativeFilmstrip document={doc} projectId={projectId} clip={clip} sourceOffsetFrames={dragging&&ghost!.type==='start'?delta:0} displayStartFrame={start} displayDuration={duration} pixelsPerFrame={pixels} scrollLeft={view.left} viewportWidth={view.width}/>}
+            {clip.content.kind==='video'&&visibleTracks.has(track.id)&&<NativeFilmstrip document={doc} projectId={projectId} clip={clip} sourceOffsetFrames={sourceShift} displayStartFrame={start} displayDuration={duration} pixelsPerFrame={pixels} scrollLeft={view.left} viewportWidth={view.width} frozen={!!dragging} held={beforeFirstPicture}/>}
             <button type="button" className="native-trim native-trim-start" style={{width:handleWidth??undefined,display:handleWidth===null?'none':undefined}} disabled={blocked}
               aria-label={`${clip.name}の開始位置を調整`} onPointerDown={event => startClip(event, clip, 'start')} onKeyDown={event=>trimKey(event,clip,'start')} />
             <span className="native-clip-name">{clip.linkGroupId&&<span className="native-clip-link"><Icon name="link" size={12}/></span>}{clip.name}</span>
-            {visibleWave&&audioPlan&&<NativeWaveform projectId={projectId} clip={clip} plan={audioPlan} viewport={visibleWave} height={Math.max(8,Math.min(rowHeights.get(track.id)!-18,Math.round(heights.waveform*rowHeights.get(track.id)!/heights.audio)))} displayGain={waveformGain(waveform)} sourceOffsetFrames={dragging&&ghost!.type==='start'?delta:0} displayStartFrame={start} displayDuration={duration}/>}
+            {visibleWave&&audioPlan&&<NativeWaveform projectId={projectId} clip={clip} plan={audioPlan} viewport={visibleWave} height={Math.max(8,Math.min(rowHeights.get(track.id)!-18,Math.round(heights.waveform*rowHeights.get(track.id)!/heights.audio)))} displayGain={waveformGain(waveform)} sourceOffsetFrames={sourceShift} displayStartFrame={start} displayDuration={duration}/>}
             <button type="button" className="native-trim native-trim-end" style={{width:handleWidth??undefined,display:handleWidth===null?'none':undefined}} disabled={blocked}
               aria-label={`${clip.name}の終了位置を調整`} onPointerDown={event => startClip(event, clip, 'end')} onKeyDown={event=>trimKey(event,clip,'end')} />
           </div>;

@@ -61,15 +61,22 @@ function isContained(path: string, root: string): boolean {
 }
 
 /**
- * 走査・取り込みの対象として許可されたパスかを検証し、realpath を返す。
+ * OS 側の実パス解決（realpath(3)）。ディスク上の形（Unicode の正規化・大文字小文字）で返す。
+ * Node の JS 版 realpathSync は渡された文字列の形を残すため、macOS（APFS は正規化・大小を区別しない）では
+ * 同じファイルでも後で fs/promises の realpath（OS 側）と比べると一致しない。受付と準備の再確認を同じ形で揃えるため、こちらを既定にする。
+ */
+export const resolveRealPath = (p: string): string => realpathSync.native(p);
+
+/**
+ * 走査・取り込みの対象として許可されたパスかを検証し、realpath（ディスク上の形）を返す。
  *
  * 起点そのものと、その配下だけを許可する。判定は realpath 解決後に行うため、
- * `..` でも「起点内から外を指す symlink」でも脱出できない。
+ * `..` でも「起点内から外を指す symlink」でも脱出できない。起点も同じ解決で揃えて比べる。
  */
 export function assertBrowsablePath(
   path: string,
   roots: BrowseRoot[] = browseRoots(),
-  realpath: (p: string) => string = realpathSync,
+  realpath: (p: string) => string = resolveRealPath,
 ): string {
   if (!isAbsolute(path)) {
     throw new HttpError(400, `絶対パスを指定してください: ${path}`);
@@ -106,7 +113,7 @@ export interface BrowseListing {
 }
 
 /** 一つ上のフォルダ。起点そのものなら null（起点の外へは上がれない）。 */
-export function parentOf(dir: string, roots: BrowseRoot[], realpath: (p: string) => string = realpathSync): string | null {
+export function parentOf(dir: string, roots: BrowseRoot[], realpath: (p: string) => string = resolveRealPath): string | null {
   for (const root of roots) {
     try {
       if (realpath(root.path) === dir) return null;
@@ -135,7 +142,7 @@ export function listDirectory(
 ): BrowseListing {
   const readdir = deps.readdir ?? ((p: string) => readdirSync(p));
   const stat = deps.stat ?? ((p: string) => statSync(p));
-  const realpath = deps.realpath ?? realpathSync;
+  const realpath = deps.realpath ?? resolveRealPath;
 
   let entries: string[];
   try {

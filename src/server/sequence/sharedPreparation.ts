@@ -1,20 +1,27 @@
-interface Pending<T> { work: Promise<T>; controller: AbortController; consumers: number; settled: boolean }
+import {ffmpegLane,raiseLane,type FfmpegLane,type FfmpegPriority} from './ffmpegGate';
+interface Pending<T> { work: Promise<T>; controller: AbortController; consumers: number; settled: boolean; lane: FfmpegLane }
 
-/** Requests share preparation work, but each request owns only its own cancellation. */
+/** Requests share preparation work, but each request owns only its own cancellation.
+ * The lane carries the most urgent joined caller's FFmpeg priority (設計 §2-1). */
 export class SharedPreparations<T> {
   private pending = new Map<string, Pending<T>>();
-  get(key: string, start: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  get(key: string, start: (signal: AbortSignal, lane: FfmpegLane) => Promise<T>, signal?: AbortSignal, priority: FfmpegPriority = 'audio'): Promise<T> {
     signal?.throwIfAborted();
     let preparation = this.pending.get(key);
     if (!preparation || preparation.controller.signal.aborted) {
-      const controller = new AbortController();
-      preparation = { work: Promise.resolve().then(() => { controller.signal.throwIfAborted(); return start(controller.signal); }), controller, consumers: 0, settled: false };
+      const controller = new AbortController(), lane = ffmpegLane(priority);
+      preparation = { work: Promise.resolve().then(() => { controller.signal.throwIfAborted(); return start(controller.signal, lane); }), controller, consumers: 0, settled: false, lane };
       const entry = preparation;
       const cleanup = () => { entry.settled = true; if (this.pending.get(key) === entry) this.pending.delete(key); };
       void entry.work.then(cleanup, cleanup);
       this.pending.set(key, entry);
-    }
+    } else raiseLane(preparation.lane, priority);
     return this.join(preparation, signal);
+  }
+  /** 進行中の準備があれば順位だけを上げる（合流はしない）。急ぐ呼び手が、他の準備が待っている下ごしらえを急がせるため。 */
+  raise(key: string, priority: FfmpegPriority): void {
+    const preparation = this.pending.get(key);
+    if (preparation && !preparation.controller.signal.aborted) raiseLane(preparation.lane, priority);
   }
   private join(preparation: Pending<T>, signal?: AbortSignal): Promise<T> {
     preparation.consumers++;

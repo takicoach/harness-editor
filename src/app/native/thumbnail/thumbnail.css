@@ -1,0 +1,138 @@
+/* サムネ画面（設計 2026-10-03）。色・余白・角丸・影はトークンだけ。
+   ボタンの面・枠・余白は styles.css の「ボタン共通系統」と native.css の基底が持つ（ここでは配置だけ）。 */
+.native-workspace[data-thumbnail="true"] > .native-main { display: none; }
+.native-thumbnail { flex: 1; min-height: 0; display: grid; grid-template-columns: auto auto minmax(320px, 1fr) auto; grid-template-rows: minmax(0, 1fr) auto; background: var(--bg-0); color: var(--fg-0); }
+.native-thumbnail-loading { grid-template-columns: 1fr; place-items: center; }
+.native-thumbnail-note { margin: 0; color: var(--fg-2); font-size: var(--native-font-sub); line-height: 1.5; }
+.native-thumbnail-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.native-thumbnail-recovery { max-width: 520px; display: grid; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-1); box-shadow: var(--panel-shadow); }
+.native-thumbnail-recovery h2 { margin: 0; font-size: 15px; }
+.native-thumbnail-recovery p { margin: 0; color: var(--fg-1); line-height: 1.6; }
+
+.native-thumbnail { position: relative; }
+.native-thumbnail-rail { grid-row: 1 / -1; display: flex; flex-direction: column; gap: 4px; padding: 8px 6px; border-right: 1px solid var(--border); background: var(--bg-1); }
+.native-thumbnail-rail-item { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 54px; width: 56px; font-size: var(--native-font-sub); }
+.native-thumbnail-drawer { grid-row: 1 / -1; width: 272px; display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: auto; border-right: 1px solid var(--border); background: var(--bg-1); }
+.native-thumbnail-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.native-thumbnail-drawer-list { display: grid; gap: 8px; }
+.native-thumbnail-wide { width: 100%; }
+.native-thumbnail-drop { display: grid; gap: 10px; justify-items: start; padding: 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); background: var(--bg-0); }
+.native-thumbnail-drop[data-dragging="true"] { border-color: var(--accent); background: var(--accent-tint); }
+.native-thumbnail-layers { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.native-thumbnail-layer { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-md); }
+.native-thumbnail-layer[data-selected="true"] { background: var(--accent-tint); }
+.native-thumbnail-layer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.native-thumbnail-lock { min-width: 72px; justify-content: center; }
+.native-thumbnail-stage { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--stage-bg); }
+.native-thumbnail-knobs { grid-row: 1 / -1; width: 288px; display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow: auto; border-left: 1px solid var(--border); background: var(--bg-1); }
+.native-thumbnail[data-knobs="closed"] .native-thumbnail-knobs { width: 48px; padding: 8px 6px; }
+.native-thumbnail-knobs-head { display: flex; align-items: center; gap: 8px; }
+.native-thumbnail-knobs-head strong { flex: 1; }
+.native-thumbnail-chip { margin: 0; padding: 6px 10px; border-radius: var(--radius-md); background: var(--bg-2); color: var(--fg-1); font-size: var(--native-font-sub); }
+.native-thumbnail-notice { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 20; max-width: min(720px, 90%); }
+.native-thumbnail-rail { grid-column: 1; }
+.native-thumbnail-drawer { grid-column: 2; }
+.native-thumbnail-stage { grid-column: 3; grid-row: 1; }
+.native-thumbnail-knobs { grid-column: 4; }
+.native-thumbnail-knob-group { display: grid; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); }
+.native-thumbnail-knob-group h3 { margin: 0 0 4px; color: var(--fg-3); font-size: var(--native-font-sub); font-weight: 700; letter-spacing: .04em; }
+.native-thumbnail-knob { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.native-thumbnail-knob:last-child { border-bottom: 0; }
+.native-thumbnail-knob-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; }
+.native-thumbnail-knob-label output { font-family: var(--font-mono); color: var(--fg-2); font-variant-numeric: tabular-nums; cursor: default; user-select: none; }
+.native-thumbnail-knob-range { width: 100%; margin: 0; accent-color: var(--accent); }
+.native-thumbnail-knob-hint { margin: 0; color: var(--fg-3); font-size: var(--native-font-sub); line-height: 1.45; }
+.native-thumbnail-color { width: 36px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-2); }
+
+.native-thumbnail-bottom { grid-column: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--bg-1); }
+/* 中央の列が狭い時（AI の列を開いた 1280px 幅で案が 3 つ）は、はみ出して右の列に重ならないよう横に送る。余白の 4px は選んだ案の枠線が切れないため。 */
+.native-thumbnail-pages { display: flex; min-width: 0; max-width: 100%; overflow-x: auto; gap: 8px; margin: -4px; padding: 4px; list-style: none; }
+.native-thumbnail-page { display: grid; gap: 4px; width: 132px; }
+.native-thumbnail-page-pick { width: 100%; min-height: 0; overflow: hidden; display: grid; place-items: center; }
+.native-thumbnail-page[data-current="true"] .native-thumbnail-page-pick { outline: 2px solid var(--accent); outline-offset: 1px; }
+.native-thumbnail-page-pick img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.native-thumbnail-page-empty { width: 100%; height: 100%; background: var(--bg-3); }
+.native-thumbnail-page-foot { display: flex; align-items: center; gap: 4px; }
+.native-thumbnail-page-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--native-font-sub); }
+.native-thumbnail-page-input { flex: 1; min-width: 0; padding: 2px 6px; border: 1px solid var(--border-focus); border-radius: var(--radius-sm); background: var(--bg-0); color: var(--fg-0); }
+.native-thumbnail-page-actions { display: flex; flex-direction: column; gap: 6px; }
+/* スマホでの見え方と表示倍率は右端に縦に積む（案が 3 つでも帯を 1 行に収め、キャンバスを狭めない）。 */
+.native-thumbnail-view-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-left: auto; }
+/* メインの案の印と「メインにする」。どちらも同じ高さの行に置き、案ごとに縦位置を揃える。 */
+.native-thumbnail-page-role { display: flex; align-items: center; min-height: 24px; }
+.native-thumbnail-page-main { padding: 2px 8px; border-radius: var(--radius-sm); background: var(--accent-strong); color: var(--accent-on); font-size: var(--native-font-sub); font-weight: 700; }
+.native-thumbnail-page-set-main { min-height: 24px; padding: 2px 8px; font-size: var(--native-font-sub); }
+.native-thumbnail-zoom { display: flex; align-items: center; gap: 6px; }
+
+.native-thumbnail-viewport { position: relative; flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 24px; }
+.native-thumbnail-surface { position: relative; flex: none; box-shadow: var(--shadow-pop); }
+.native-thumbnail-paper { position: absolute; left: 0; top: 0; transform-origin: top left; }
+.native-thumbnail-outline { position: absolute; transform-origin: center; border: 2px solid var(--accent); pointer-events: none; }
+.native-thumbnail-missing { position: absolute; transform-origin: center; display: grid; place-items: center; border: 2px dashed var(--danger); background: var(--danger-soft); color: var(--fg-0); font-weight: 700; pointer-events: none; }
+.native-thumbnail-error { position: absolute; left: 12px; bottom: 12px; margin: 0; padding: 6px 10px; border-radius: var(--radius-md); background: var(--danger-soft); color: var(--fg-0); }
+
+.native-thumbnail-overlay { position: absolute; inset: 0; touch-action: none; cursor: default; }
+.native-thumbnail-handle { position: absolute; width: 12px; height: 12px; transform: translate(-50%, -50%); border: 2px solid var(--accent); border-radius: 50%; background: var(--bg-0); cursor: nwse-resize; }
+.native-thumbnail-handle-side { width: 8px; height: 22px; border-radius: 4px; cursor: ew-resize; }
+.native-thumbnail-handle-rotate { width: 16px; height: 16px; cursor: grab; background: var(--accent-soft); }
+
+.native-thumbnail-guide { position: absolute; background: var(--accent-5); pointer-events: none; }
+
+.native-thumbnail-lock-badge { position: absolute; transform: translate(0, calc(-100% - 4px)); padding: 2px 8px; border-radius: var(--radius-sm); background: var(--bg-3); color: var(--fg-1); font-size: var(--native-font-sub); white-space: nowrap; pointer-events: none; }
+
+/* 動画側の `.native-workspace textarea`（枠・背景・余白）と `.native-workspace :focus-visible`（輪郭）より強くする。 */
+.native-thumbnail .native-thumbnail-text-editor, .native-thumbnail .native-thumbnail-text-editor:focus-visible { position: absolute; transform-origin: center; margin: 0; padding: 0; overflow: hidden; resize: none; border: 2px dashed var(--accent); border-radius: var(--radius-sm); background: transparent; caret-color: var(--accent); outline: none; white-space: pre-wrap; }
+
+.native-thumbnail-contextbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 44px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-1); }
+.native-thumbnail-select { max-width: 220px; }
+.native-thumbnail-size { min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
+.native-thumbnail-menu { position: relative; }
+.native-thumbnail-menu-list { position: absolute; left: 0; top: calc(100% + 4px); z-index: 30; display: grid; min-width: 150px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-1); box-shadow: var(--shadow-pop); }
+.native-thumbnail-minimenu { position: absolute; z-index: 3; display: flex; gap: 2px; padding: 4px; transform: translate(-50%, calc(-100% - 44px)); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-1); box-shadow: var(--shadow-pop); white-space: nowrap; }
+.native-thumbnail-minimenu[data-side="below"] { transform: translate(-50%, 10px); }
+
+.native-thumbnail-subhead { margin: 4px 0 0; font-size: var(--native-font-sub); color: var(--fg-2); }
+.native-thumbnail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.native-thumbnail-asset { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 4px; }
+.native-thumbnail-asset img { grid-column: 1 / -1; width: 100%; max-height: 120px; object-fit: contain; border-radius: var(--radius-md); background: var(--bg-3); }
+.native-thumbnail-asset-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-thumbnail-frame-picker { display: grid; gap: 8px; }
+.native-thumbnail-frame-video { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; border-radius: var(--radius-md); background: var(--bg-3); }
+
+.native-thumbnail-templates { display: grid; gap: 8px; }
+.native-thumbnail-template { display: grid; gap: 4px; justify-items: stretch; }
+.native-thumbnail-template-sample { position: relative; display: block; width: 240px; height: 90px; overflow: hidden; border-radius: var(--radius-md); background: var(--stage-bg); }
+.native-thumbnail-template-paper { position: absolute; left: 0; top: 0; display: block; transform: scale(.375); transform-origin: top left; pointer-events: none; }
+.native-thumbnail-template-name { font-size: var(--native-font-sub); text-align: left; }
+/* スマホでの見え方の小窓（見本 knobs-decided.html の .phone と同じ幅 186px）。位置は TSX（右下から 12px）、キャンバスはこの分を空けて置く。 */
+.native-thumbnail-phone { position: absolute; z-index: 5; display: grid; gap: 5px; width: 186px; padding: 7px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-1); box-shadow: var(--shadow-pop); }
+.native-thumbnail-phone-head { display: flex; align-items: center; gap: 2px; min-width: 0; font-size: var(--native-font-sub); }
+.native-thumbnail-phone-head strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-1); font-weight: 600; }
+.native-thumbnail-phone-head button { min-height: 0; height: 22px; padding: 0 5px; font-size: var(--native-font-sub); }
+.native-thumbnail-phone-head .native-thumbnail-phone-close { width: 22px; padding: 0; display: inline-grid; place-items: center; }
+.native-thumbnail-phone-image { display: block; justify-self: center; object-fit: contain; border-radius: var(--radius-sm); background: var(--bg-3); }
+.native-thumbnail-phone-head .native-thumbnail-gauge[data-gauge="large"] { color: var(--accent); }
+.native-thumbnail-phone-head .native-thumbnail-gauge[data-gauge="small"] { color: var(--warn-fg); }
+.native-thumbnail-phone-toggle { margin-left: auto; white-space: nowrap; }
+
+.native-thumbnail-export { position: relative; display: flex; align-items: center; gap: 8px; }
+.native-thumbnail-export-link { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: var(--native-font-sub); }
+.native-thumbnail-export-offer { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: 360px; display: grid; gap: 8px; }
+/* .native-notice（横並びのバー）より優先し、文を 1 行目に全幅で、ボタンを 2 行目に並べる。 */
+.native-notice.native-thumbnail-export-offer { display: grid; grid-template-columns: auto auto; justify-content: start; align-items: center; }
+.native-thumbnail-export-offer > span { grid-column: 1 / -1; }
+.native-thumbnail-export-error { color: var(--danger); font-size: var(--native-font-sub); }
+
+/* サムネの AI の欄（右の列・つまみの上）。 */
+.native-thumbnail-ai-ask { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.native-thumbnail-ai-ask-toggle { width: 100%; border: 1px solid var(--border-strong); }
+.native-thumbnail-ai-ask-form { display: flex; flex-direction: column; gap: 8px; }
+.native-thumbnail-ai-ask-form fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.native-thumbnail-ai-ask-form legend { padding: 0; margin-bottom: 2px; color: var(--fg-2); font-size: var(--native-font-sub); }
+.native-thumbnail-ai-state { margin: 0; font-size: var(--native-font-sub); }
+.native-thumbnail-ai-state[data-state="failed"], .native-thumbnail-note[data-state="failed"] { color: var(--danger); }
+.native-thumbnail-ai-state[data-state="done"] { color: var(--accent); }
+/* 畳んだ列の入口。動いている・失敗した依頼は右上の点で知らせる。 */
+.native-thumbnail-ai-shortcut { position: relative; }
+.native-thumbnail-ai-shortcut[data-state]::after { content: ''; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.native-thumbnail-ai-shortcut[data-state="failed"]::after { background: var(--danger); }

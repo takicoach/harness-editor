@@ -7,7 +7,7 @@ import { NativeSwitch } from './NativeSwitch';
 import { headerCompact } from './headerLayout';
 import {NativeSaveProgress} from './NativeSaveProgress';
 
-export type NativeMode = 'review' | 'edit' | 'finish';
+export type NativeMode = 'review' | 'edit' | 'finish' | 'thumbnail';
 export type NativeSaveState = 'saved' | 'dirty' | 'busy' | 'none';
 export interface NativeHeaderProps {
   title: string; saveState: NativeSaveState;
@@ -21,12 +21,14 @@ export interface NativeHeaderProps {
   autoSave: boolean; onAutoSave(value: boolean): void;
   onSave(): void; saveDisabled: boolean; saveProgress?:number|null;
   exportControl: ReactNode;
+  /** 「サムネ」を押せない理由（動画の編集データが未読込など）。渡したときはボタンを無効にしてツールチップに出す。 */
+  thumbnailUnavailable?: string | null;
 }
-const MODES = [{ value: 'review', label: '確認' }, { value: 'edit', label: '編集' }, { value: 'finish', label: '仕上げ' }] as const;
+const MODES = [{ value: 'review', label: '確認' }, { value: 'edit', label: '編集' }, { value: 'finish', label: '仕上げ' }, { value: 'thumbnail', label: 'サムネ' }] as const;
 const SAVE_LABEL: Record<NativeSaveState, string> = { saved: '保存済み', dirty: '未保存の変更', busy: '', none: '' };
 
 /** トップバー（UI 添削 F10 A 案）: 左＝場所、中央＝モード、右＝行動。主ボタン（書き出し）は右端に 1 つだけ。 */
-export function NativeHeader({ title, saveState, mode, onMode, canUndo, canRedo, busy, onUndo, onRedo, onHome, onActivity, onSettings, settingsOpen, onNotifications, notificationsOpen, unreadNotifications=0, onHelp, autoSave, onAutoSave, onSave, saveDisabled, saveProgress=null, exportControl }: NativeHeaderProps) {
+export function NativeHeader({ title, saveState, mode, onMode, canUndo, canRedo, busy, onUndo, onRedo, onHome, onActivity, onSettings, settingsOpen, onNotifications, notificationsOpen, unreadNotifications=0, onHelp, autoSave, onAutoSave, onSave, saveDisabled, saveProgress=null, exportControl, thumbnailUnavailable=null }: NativeHeaderProps) {
   const element = useRef<HTMLElement>(null);
   const [compact, setCompact] = useState(false);
   useEffect(() => {
@@ -43,7 +45,7 @@ export function NativeHeader({ title, saveState, mode, onMode, canUndo, canRedo,
       <strong className="native-project-title">{title}</strong>
       <span className={`native-save-state native-save-${saveState}`}>{saveState === 'busy' ? saveProgress===null?<TaskProgress label="処理中…" compact />:null : saveState === 'none' ? null : <><i className="native-save-dot" aria-hidden="true" />{SAVE_LABEL[saveState]}</>}</span>
     </div>
-    <nav className="native-header-center" aria-label="ワークスペース" data-tutorial="modes"><NativeSegmented role="group" label="モード" items={MODES} value={mode} onChange={onMode} /></nav>
+    <nav className="native-header-center" aria-label="ワークスペース" data-tutorial="modes"><NativeSegmented role="group" label="モード" items={thumbnailUnavailable ? MODES.map(item => item.value === 'thumbnail' ? { ...item, disabled: true, title: thumbnailUnavailable } : item) : MODES} value={mode} onChange={onMode} /></nav>
     <div className="native-header-actions">
       <div className="native-btn-group">
         <button className="btn-ghost native-header-icon" data-native-script-flush title="元に戻す（⌘/Ctrl Z）" aria-label="元に戻す" disabled={!canUndo || busy} onClick={onUndo}><Icon name="undo" /></button>

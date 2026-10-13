@@ -76,6 +76,7 @@ export class EditorSessionRegistry {
       dirty: snapshot.status === 'ready' && snapshot.dirty,
       saving: snapshot.status === 'ready' && snapshot.saving,
       humanBusy: snapshot.status === 'ready' && snapshot.humanBusy,
-      elementCount: snapshot.status === 'ready' ? snapshot.elements.length : 0, expiresAt: session.expiresAt };
+      elementCount: snapshot.status === 'ready' ? snapshot.elements.length : 0, expiresAt: session.expiresAt,
+      ...(snapshot.status === 'ready' && snapshot.mode ? { mode: snapshot.mode } : {}) };
   }
 }

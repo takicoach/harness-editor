@@ -21,6 +21,7 @@ const DIFF: LearningDiffResponse = {
   baselineLabel: '新エディターへ取り込んだ時点の内容',
 };
 const handlers = () => ({ onApprove: vi.fn(), onDismiss: vi.fn() });
+const PARTIAL_NOTE = (n: number) => `後から足した素材（${n}本）のカットは比べていません。その部分の字幕・効果音の候補は、最初はチェックを外しています`;
 
 describe('DiffReviewPanel（新画面）', () => {
   it('候補が0件でも学習確認を表示し、記録せず閉じられる', () => {
@@ -31,6 +32,9 @@ describe('DiffReviewPanel（新画面）', () => {
     fireEvent.click(view.getByRole('button', { name: '閉じる' }));
     expect(actions.onDismiss).toHaveBeenCalledTimes(1);
     expect(actions.onApprove).not.toHaveBeenCalled();
+    // 注記の無い案件（旧形式・足していない移行案件）は従来の文のまま。
+    expect(view.getByText(/今回、記録する項目はありません/)).toBeTruthy();
+    expect(view.queryByText(/後から足した素材/)).toBeNull();
   });
   it('比較元が無い場合は、候補0件との違いを理由とともに示す', () => {
     const view = render(<DiffReviewPanel diff={{ cut: null, words: null, telops: null, ses: null, undistilledCount: 0, unavailableReason: '新エディターで作った案件には比較元がありません' }} submitting={false} {...handlers()} />);
@@ -88,6 +92,51 @@ describe('DiffReviewPanel（新画面）', () => {
     fireEvent.click(view.getByRole('button', { name: '選択分を学習する' }));
     expect(calls.onApprove).toHaveBeenCalledWith([], [], DIFF.telops, DIFF.ses);
   });
+  it('後から足した素材がある時は注記を出し、候補0件でも完了と書かない', () => {
+    const view = render(<DiffReviewPanel diff={{ cut: null, words: null, telops: [], ses: [], undistilledCount: 0, partialNote: PARTIAL_NOTE(2) }} submitting={false} {...handlers()} />);
+    expect(view.getByRole('note').textContent).toBe(PARTIAL_NOTE(2));
+    expect(view.getByText('取り込んだ元の素材の部分には、学習候補はありません')).toBeTruthy();
+    expect(view.queryByText(/今回、記録する項目はありません/)).toBeNull();
+    expect(view.getByText(/学習は完了していません/)).toBeTruthy();
+  });
+  it('候補がある時も注記を出し、件数の見出しと承認のボタンはそのまま', () => {
+    const view = render(<DiffReviewPanel diff={{ ...DIFF, undistilledCount: 0, partialNote: PARTIAL_NOTE(1) }} submitting={false} {...handlers()} />);
+    expect(view.getByRole('note').textContent).toBe(PARTIAL_NOTE(1));
+    expect(view.getByRole('dialog').textContent).toContain('あなたの編集から 3 件の学習候補が見つかりました');
+    expect(view.getByRole('button', { name: '選択分を学習する' })).toBeTruthy();
+  });
+  it('後から足した素材の部分にすっぽり入る字幕・効果音は最初はチェックを外して添え書きを出す。元の素材・またぐ字幕・比較元の時刻の候補・カットはチェック済み', () => {
+    const calls = handlers();
+    const telops: LearningDiffResponse['telops'] = [
+      { kind: 'added', startFrame: 270, endFrame: 300, startSec: 9, endSec: 10, before: '', after: '足した素材の字幕' },
+      { kind: 'changed', startFrame: 0, endFrame: 60, startSec: 0, endSec: 2, before: 'ゆる素振り', after: 'ゆるい素振り' },
+      { kind: 'added', startFrame: 260, endFrame: 290, startSec: 260 / 30, endSec: 290 / 30, before: '', after: 'またぐ字幕' },
+      { kind: 'changed', startFrame: 280, endFrame: 310, startSec: 280 / 30, endSec: 310 / 30, before: '後ろへはみ出す', after: '後ろへはみ出す字幕' },
+      // removed は比較元（取り込み時点）の時刻。数値が区間に入っても足した素材の部分ではない。
+      { kind: 'removed', startFrame: 275, endFrame: 290, startSec: 275 / 30, endSec: 290 / 30, before: '比較元の字幕', after: '' },
+    ];
+    const ses: LearningDiffResponse['ses'] = [
+      { kind: 'added', startFrame: 280, startSec: 280 / 30, file: 'whoosh.mp3', nearbyText: '' },
+      { kind: 'added', startFrame: 300, startSec: 10, file: 'pop.mp3', nearbyText: '' },
+      { kind: 'removed', startFrame: 285, startSec: 285 / 30, file: 'beep.mp3', nearbyText: '' },
+    ];
+    const view = render(<DiffReviewPanel diff={{ cut: DIFF.cut, words: null, telops, ses, undistilledCount: 0, partialNote: PARTIAL_NOTE(1),
+      partialRanges: [{ startFrame: 270, endFrame: 300 }] }} submitting={false} {...calls} />);
+    expect(view.getAllByRole('checkbox').map((box) => (box as HTMLInputElement).checked)).toEqual([true, false, true, true, true, true, false, true, true]);
+    const tagged = view.getAllByText('後から足した素材の部分').map((tag) => tag.closest('li')?.textContent ?? '');
+    expect(tagged).toHaveLength(2);
+    expect(tagged[0]).toContain('足した素材の字幕');
+    expect(tagged[1]).toContain('whoosh.mp3');
+    fireEvent.click(view.getByRole('button', { name: '選択分を学習する' }));
+    expect(calls.onApprove).toHaveBeenCalledWith(DIFF.cut, [], telops!.slice(1), ses!.slice(1));
+  });
+  it('区間が無い（注記の無い）案件は、同じ時刻の候補も従来どおり全部チェック済みで添え書きも出さない', () => {
+    const view = render(<DiffReviewPanel diff={{ cut: null, words: null, undistilledCount: 0,
+      telops: [{ kind: 'added', startFrame: 270, endFrame: 300, startSec: 9, endSec: 10, before: '', after: '字幕' }],
+      ses: [{ kind: 'added', startFrame: 280, startSec: 280 / 30, file: 'whoosh.mp3', nearbyText: '' }] }} submitting={false} {...handlers()} />);
+    expect(view.getAllByRole('checkbox').map((box) => (box as HTMLInputElement).checked)).toEqual([true, true]);
+    expect(view.queryByText('後から足した素材の部分')).toBeNull();
+  });
 });
 
 const RESULT: LearningApproveResponse = { cutRulesPromoted: 0, cutConflicts: 0, wordsPromoted: 0, wordConflicts: 0, telopRulesPromoted: 0,
@@ -112,5 +161,13 @@ describe('DiffReviewDone（新画面）', () => {
       recordedCount={1} onClose={vi.fn()} />);
     expect(view.getByRole('dialog').textContent).toContain('修正 1 件を記録しました（ルール昇格 1 件）。');
     expect(view.getByRole('alert').textContent).toBe(LEDGER_WARNING_TEXT);
+  });
+
+  it('後から足した素材がある案件は、完了画面にも注記を1行出す（無い案件には出さない）', () => {
+    const view = render(<DiffReviewDone result={RESULT} recordedCount={1} partialNote={PARTIAL_NOTE(1)} onClose={vi.fn()} />);
+    expect(view.getByRole('note').textContent).toBe(PARTIAL_NOTE(1));
+    cleanup();
+    const plain = render(<DiffReviewDone result={RESULT} recordedCount={1} onClose={vi.fn()} />);
+    expect(plain.queryByRole('note')).toBeNull();
   });
 });

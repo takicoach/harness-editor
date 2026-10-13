@@ -61,6 +61,7 @@
 .native-save-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
 .native-save-dirty .native-save-dot { background:var(--warn-fg); }
 .native-export { position:relative; display:flex; gap:4px; }
+.native-export-reason { align-self:center; color:var(--fg-2); font-size:var(--native-font-sub); white-space:nowrap; }
 .native-export-panel { position:absolute; top:38px; right:0; width:340px; padding:16px; z-index:30; background:var(--bg-1); border:1px solid var(--border); border-radius:4px; box-shadow:0 6px 24px #0002; animation:native-dialog-in var(--dur-panel) var(--ease-spring); }
 .native-export-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .native-export-settings { min-width:0; border:0; padding:0; margin:16px 0 0; }
@@ -205,6 +206,7 @@
 .native-asset-list,.native-caption-list { overflow:auto; flex:1; padding:0 8px; }
 /* 素材行（UI 添削 F12）: 種別バッジ・名前・尺。行のホバー／フォーカスで兄弟の「再生位置に置く」が現れる。 */
 .native-asset-row { position:relative; margin:3px 7px; }
+.native-asset-head { position:relative; width:100%; }
 .native-asset { display:grid; grid-template-columns:auto 1fr; gap:10px; align-items:center; width:100%; padding:6px 8px; text-align:left; border-radius:calc(var(--radius-md) + 2px); }
 .native-asset-row.is-selected .native-asset { border-color:var(--accent); background:var(--accent-tint); }
 .native-asset-type { width:40px; height:28px; border-radius:var(--radius-sm); display:grid; place-items:center; font-family:var(--font-mono); font-size:var(--native-font-sub); font-weight:700; background:var(--bg-2); color:var(--fg-2); }
@@ -330,6 +332,7 @@ button.native-waveform-status { pointer-events:auto; padding:0 3px; border:0; ba
 .native-density-count { position:sticky; right:8px; margin-left:auto; padding:0 5px; border-radius:3px; background:var(--bg-1); color:var(--fg-3); font-size:var(--native-font-sub); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .native-clip { position:absolute; top:5px; height:calc(var(--native-visual-track-height,46px) - 11px); border:1px solid color-mix(in srgb,var(--track-accent,var(--accent)) 45%,var(--border)); border-radius:3px; background:color-mix(in srgb,var(--track-accent,var(--accent)) var(--track-clip-mix),var(--bg-1)); overflow:hidden; cursor:grab; touch-action:none; transition:box-shadow var(--dur-hover) var(--ease-settle),outline-color var(--dur-hover) var(--ease-settle); }
 .native-clip.is-selected { outline:2px solid var(--accent); outline-offset:-2px; }
+.native-clip.native-clip-trial, .native-clip-pieces.native-clip-trial>.native-clip { outline:2px dashed var(--warn-fg); outline-offset:-2px; }
 .native-clip.is-muted { opacity:.4; }
 .native-clip-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 9px; line-height:calc(var(--native-visual-track-height,46px) - 13px); font-size:var(--native-font-sub); }
 .native-clip-link { display:inline-flex; vertical-align:-2px; margin-right:3px; color:var(--fg-2); }
@@ -434,3 +437,26 @@ html[data-reduce-motion] .native-workspace button:active:not(:disabled) { transf
 .native-track-with-cuts .native-finish-cut-track .tl-cut { background-color:transparent; }
 .native-archived-audio { background:color-mix(in srgb,var(--danger) 7%,transparent); outline:1px dashed color-mix(in srgb,var(--danger) 35%,transparent); }
 .native-archived-media * { pointer-events:none!important; }
+/* 素材置場パネル（素材パネルの「素材置場」側）。色・角丸・余白は既存の素材行と同じ変数を使う。 */
+.native-material-source { padding:6px 8px 0; flex-shrink:0; }
+.native-lib { display:flex; flex-direction:column; min-width:0; }
+.native-lib-filter { padding:6px 8px 0; flex-wrap:wrap; }
+.native-lib-tools { display:flex; gap:6px; padding:8px; }
+.native-lib-tools input { flex:1; min-width:0; }
+.native-lib-problem { padding:8px 12px; color:var(--fg-2); font-size:var(--native-font-sub); line-height:1.7; }
+.native-lib-problem p { margin:0 0 4px; overflow-wrap:anywhere; }
+.native-lib-path { font-family:var(--font-mono); color:var(--fg-3); }
+.native-lib-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:0 8px 8px; }
+.native-lib-card { position:relative; min-width:0; border:1px solid var(--border); border-radius:calc(var(--radius-md) + 2px); background:var(--bg-1); overflow:hidden; }
+.native-lib-card[data-missing=true] { opacity:.55; }
+.native-lib-card:hover:not([data-missing=true]) { border-color:var(--accent); }
+.native-lib-place { display:flex; flex-direction:column; align-items:stretch; gap:4px; width:100%; min-width:0; padding:0 0 6px; border:0; border-radius:0; background:transparent; text-align:left; }
+.native-lib-thumb { pointer-events:none; display:block; width:100%; aspect-ratio:16/9; object-fit:cover; background:var(--bg-2); }
+.native-lib-kind { margin:6px 6px 0; width:fit-content; padding:2px 6px; border-radius:var(--radius-sm); background:var(--bg-2); color:var(--fg-2); font-family:var(--font-mono); font-size:var(--native-font-sub); font-weight:700; }
+.native-lib-name { display:grid; min-width:0; padding:0 8px; }
+.native-lib-name strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.native-lib-name em { font-style:normal; font-family:var(--font-mono); color:var(--fg-3); margin-right:4px; }
+.native-lib-name small { font-family:var(--font-mono); font-size:var(--native-font-sub); color:var(--fg-3); }
+.native-lib-name .native-lib-gone { color:var(--warn-fg); font-family:inherit; }
+.native-lib-audition { position:absolute; right:6px; top:6px; }
+.native-audio-fix-target{display:flex;align-items:center;gap:8px;font-size:var(--native-font-sub)}

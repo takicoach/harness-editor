@@ -163,13 +163,38 @@ export interface ClipVisual {
   exit?: ElementAnim;
   colorGrade?: ColorGrade;
   lut?: { assetId: string; intensity: number };
+  look?: VisualLook;
 }
 
 type ElementData<T> = Omit<T, 'id' | 'originalStart' | 'originalEnd' | 'timelinePlacement'>;
+/** サムネで足した任意の描画項目。無ければ今と同じ見た目（色は #rrggbb か #rrggbbaa）。 */
+export interface TextOutline { width: number; color: string }
+export interface VisualShadow { x: number; y: number; blur: number; color: string }
+export interface TextBand { color: string; padX: number; padY: number; radius: number }
+/** 文字枠。width はキャンバス幅に対する割合（0.05〜1）。 */
+/** anchor: 'top' は層の位置が文字枠の上端（スライドの上揃え）。無い時の既定の描画は変えない。 */
+export interface TextBox { width: number; anchor: 'bottom' | 'center' | 'top' }
+/** 強調語（`**語**`）の色。あるときだけ `**` を解釈する。 */
+export interface TextEmphasis { color: string }
+/** 画像（とぼかしだけは映像）に掛ける任意の見た目。映像の色調整は従来どおり colorGrade を使う。 */
+export interface VisualLook { grade?: ColorGrade; blur?: number; edge?: { width: number; color: string }; shadow?: VisualShadow; flipX?: boolean }
+export interface ShapeGradientStop { offset: number; color: string }
+export type ShapeFill = { kind: 'solid'; color: string } | { kind: 'linear'; angle: number; stops: ShapeGradientStop[] };
 export interface TextAppearance {
   fontFamily: string; fontSize: number; fontWeight: number; color: string;
   strokeColor: string; strokeWidth: number; background: string;
   align: 'left' | 'center' | 'right'; lineHeight: number; letterSpacing: number;
+  /** 縁取り（[0]=内側・[1]=外側、最大 2 本）。あるときは strokeWidth/strokeColor を使わない。 */
+  outlines?: TextOutline[];
+  shadow?: VisualShadow;
+  /** 傾き（度。正で右へ倒れる）。 */
+  skewDeg?: number;
+  /** 帯。あるときは background と既定の余白（8px 16px）を使わない。 */
+  band?: TextBand;
+  /** 文字枠。無いときは従来どおり下端寄せ・幅 85%。 */
+  box?: TextBox;
+  /** 強調語。無いときは従来の描画。 */
+  emphasis?: TextEmphasis;
 }
 export const DEFAULT_TEXT_APPEARANCE: TextAppearance = {
   fontFamily: '"Noto Sans JP", "Hiragino Sans", sans-serif', fontSize: 64, fontWeight: 600,
@@ -189,7 +214,9 @@ export type ClipContent =
       /** Per-clip binding; unspecified uses the migrated document's component. */
       componentAssetId?: string }
   | { kind: 'title'; data: ElementData<EditorTitle>; style: TitleStyle; legacyId?: number }
-  | { kind: 'shape'; data: ElementData<EditorShape> };
+  | { kind: 'shape'; data: ElementData<EditorShape>;
+      /** 塗り・線の太さ（px）・角丸（px）は任意。data は書き出し先の部品型なので足さない。 */
+      fill?: ShapeFill; strokeWidth?: number; cornerRadius?: number };
 
 export interface SequenceClip {
   id: string;
@@ -309,6 +336,8 @@ export interface SequenceDocument {
   legacy?: { sourceFingerprint: string; primaryAssetId: string; originalEndFrame: number;
     /** Remains after every imported band is consumed; adoption Undo removes it with the bands. */
     cutHistoryImport?:{version:1;sourceFingerprint:string} };
+  /** 明示したメインのトラック（設計 第A段 §1）。無い案件は v-main / a-main を使う。役割・並び順からは推測しない。 */
+  main?: { videoTrackId: string; audioTrackId?: string };
   /** スタイル一覧の「使わない」。キーは component asset の id、値は非表示のスタイル番号。表示だけの設定で描画には効かない。 */
   textStylePrefs?: { hidden: Record<string, number[]> };
 }

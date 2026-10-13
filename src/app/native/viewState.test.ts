@@ -51,3 +51,12 @@ it('調整タブの群の開閉（inspectorOpen）を往復し、不正な値は
   sessionStorage.setItem('harness-native-view:p-insp2',JSON.stringify({inspectorOpen:{'telop:look':'yes',ok:true}}));
   expect(readNativeView('p-insp2').inspectorOpen).toEqual({ok:true});
 });
+
+it('サムネの画面は覚えない。前の版が残した thumbnail:true があっても、動画のモード（前回の確認/編集/仕上げ）で始める',()=>{
+  sessionStorage.setItem('harness-native-view:p-thumb',JSON.stringify({mode:'finish',thumbnail:true}));
+  const view=readNativeView('p-thumb');
+  expect(view.mode).toBe('finish');
+  expect('thumbnail' in view).toBe(false);
+  writeNativeView('p-thumb',{...view,thumbnail:true} as typeof view);
+  expect(JSON.parse(sessionStorage.getItem('harness-native-view:p-thumb')!)).not.toHaveProperty('thumbnail');
+});

@@ -102,7 +102,7 @@ export function planLegacyCaptionContinuation(before:SequenceDocument,joined:Seq
    // Native cuts preserve the old source window. Propagate this explicit old
    // insertion's clock map into those saved pieces as well, before they return.
    for(const entry of next.cutArchive?.entries??[]){if(entry.legacyRecovery)continue;
-    const graph:SequenceDocument={...next,clips:entry.clips,tracks:entry.tracks,sequenceEndFrame:entry.durationFrames,speed:entry.speed,insertOwnSpeed:entry.insertOwnSpeed,cutArchive:undefined};
+    const graph:SequenceDocument={...next,main:undefined,clips:entry.clips,tracks:entry.tracks,sequenceEndFrame:entry.durationFrames,speed:entry.speed,insertOwnSpeed:entry.insertOwnSpeed,cutArchive:undefined};
     const archivedChanged=new Set<string>();
     for(const c of entry.clips){
      const a=c.anchor;if(c.content.kind!=='telop'||a?.kind!=='source')continue;

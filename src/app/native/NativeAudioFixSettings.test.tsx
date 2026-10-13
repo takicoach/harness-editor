@@ -185,3 +185,85 @@ it('取り込みに失敗したら参照を切り替えない', async () => {
   expect(p.onEdit).not.toHaveBeenCalled();
   expect(String(p.onNotice.mock.calls[0]![0])).toContain('元の音声のままです');
 });
+
+/** 選択欄の値は「トラック＋原本」の組。表示名で選ぶ。 */
+const sourceSelect=(view:ReturnType<typeof render>)=>view.getByLabelText('補正する原音') as HTMLSelectElement;
+const chooseSource=(view:ReturnType<typeof render>,name:string)=>{const select=sourceSelect(view),option=[...select.options].find(item=>item.textContent===name);
+  if(!option)throw new Error(`no option ${name}`);fireEvent.change(select,{target:{value:option.value}});};
+
+it('applies the fix to the chosen main speech source (same track + asset unit)',async()=>{
+  const base=speechDocument(),speech=base.clips[0]!;
+  const document={...base,tracks:[{id:'a-main',kind:'audio' as const,name:'原音1',enabled:true}],assets:[...base.assets,{...base.assets[0]!,id:'second',name:'second.mp4',fingerprint:'9'.repeat(64)}],
+    clips:[{...speech,trackId:'a-main'},{...structuredClone(speech),id:'speech-2',trackId:'a-main',startFrame:300,content:{...(speech.content as Extract<typeof speech.content,{kind:'audio'}>),assetId:'second'}}]};
+  vi.stubGlobal('fetch',vi.fn().mockImplementation(async(url:string,init?:RequestInit)=>String(url).startsWith('/api/audio-fix/status')?{ok:true,json:async()=>({running:null})}
+    :{ok:true,json:async()=>({asset:{id:'second-denoise'},kind:'denoise',from:JSON.parse(String(init?.body)).assetId})}));
+  const p=props({document,readDocument:()=>document}),view=render(<NativeAudioFixSettings {...p}/>);
+  chooseSource(view,'second.mp4');
+  fireEvent.click(view.getByRole('button',{name:'ノイズ除去を実行'}));
+  await waitFor(()=>expect(p.onEdit).toHaveBeenCalled());
+  expect(p.onEdit.mock.calls[0]![0](document)).toEqual({type:'replace-audio-source',trackId:'a-main',fromAssetId:'second',toAssetId:'second-denoise'});
+});
+
+const twoSources=()=>{const base=speechDocument(),speech=base.clips[0]!;
+  return {...base,tracks:[{id:'a-main',kind:'audio' as const,name:'原音1',enabled:true}],assets:[...base.assets,{...base.assets[0]!,id:'second',name:'second.mp4',fingerprint:'9'.repeat(64)}],
+    clips:[{...speech,trackId:'a-main'},{...structuredClone(speech),id:'speech-2',trackId:'a-main',startFrame:300,content:{...(speech.content as Extract<typeof speech.content,{kind:'audio'}>),assetId:'second'}}]};};
+it('shows no source choice for a single speech source (unchanged)',()=>{
+  const view=render(<NativeAudioFixSettings {...props()}/>);
+  expect(view.queryByLabelText('補正する原音')).toBeNull();
+  expect(view.getByText(/主音声「main.mp4」に掛けます/)).toBeTruthy();
+});
+it('sends the chosen source to the server, names it, and locks the choice while running',async()=>{
+  const document=twoSources();let resolve:(value:unknown)=>void=()=>undefined;const bodies:unknown[]=[];
+  vi.stubGlobal('fetch',vi.fn().mockImplementation((url:string,init?:RequestInit)=>String(url).startsWith('/api/audio-fix/status')?Promise.resolve({ok:true,json:async()=>({running:null})})
+    :(bodies.push(JSON.parse(String(init?.body))),new Promise(done=>{resolve=done;}))));
+  const view=render(<NativeAudioFixSettings {...props({document,readDocument:()=>document})}/>);
+  chooseSource(view,'second.mp4');
+  expect(view.getByText(/主音声「second.mp4」に掛けます/)).toBeTruthy();
+  fireEvent.click(view.getByRole('button',{name:'音量正規化を実行'}));
+  await waitFor(()=>expect(bodies).toEqual([{assetId:'second',kind:'normalize'}]));
+  expect((view.getByLabelText('補正する原音') as HTMLSelectElement).disabled).toBe(true);
+  resolve({ok:false,json:async()=>({error:'失敗'})});
+  await waitFor(()=>expect((view.getByLabelText('補正する原音') as HTMLSelectElement).disabled).toBe(false));
+});
+it('falls back to the first source when the chosen one leaves the document, and stays there',async()=>{
+  const document=twoSources(),without={...document,clips:document.clips.filter(c=>c.id!=='speech-2'),revision:8};
+  const view=render(<NativeAudioFixSettings {...props({document,readDocument:()=>document})}/>);
+  chooseSource(view,'second.mp4');
+  view.rerender(<NativeAudioFixSettings {...props({document:without,readDocument:()=>without})}/>);
+  expect(view.queryByLabelText('補正する原音')).toBeNull();
+  expect(view.getByText(/主音声「main.mp4」に掛けます/)).toBeTruthy();
+  view.rerender(<NativeAudioFixSettings {...props({document,readDocument:()=>document})}/>);
+  await waitFor(()=>expect(sourceSelect(view).selectedOptions[0]?.textContent).toBe('main.mp4'));
+  expect(view.getByText(/主音声「main.mp4」に掛けます/)).toBeTruthy();
+});
+it('keeps the applied unit after a fix: the fixed source is still offered by its original and reverts on its own track+asset',()=>{
+  const document=twoSources(),fixed={...document,assets:[...document.assets,{...document.assets[1]!,id:'second-denoise',name:'second（ノイズ除去）.mp4',fingerprint:'8'.repeat(64),origin:{kind:'audio-fix' as const,from:'second',fix:'denoise' as const}}],
+    clips:document.clips.map(c=>c.id==='speech-2'&&c.content.kind==='audio'?{...c,content:{...c.content,assetId:'second-denoise'}}:c)};
+  const p=props({document:fixed,readDocument:()=>fixed}),view=render(<NativeAudioFixSettings {...p}/>);
+  chooseSource(view,'second.mp4');
+  expect(view.getByRole('status').textContent).toContain('ノイズ除去を適用しています');
+  fireEvent.click(view.getByRole('button',{name:'原本へ戻す'}));
+  expect(p.onEdit.mock.calls[0]![0](fixed)).toEqual({type:'replace-audio-source',trackId:'a-main',fromAssetId:'second-denoise',toAssetId:'second'});
+});
+it('lets the user choose again when the chosen source has a broken fix history',()=>{
+  const document=twoSources(),broken={...document,assets:[...document.assets,{...document.assets[1]!,id:'second-normalize',name:'second（正規化）.mp4',fingerprint:'7'.repeat(64),origin:{kind:'audio-fix' as const,from:'gone',fix:'normalize' as const}}],
+    clips:document.clips.map(c=>c.id==='speech-2'&&c.content.kind==='audio'?{...c,content:{...c.content,assetId:'second-normalize'}}:c)};
+  const view=render(<NativeAudioFixSettings {...props({document:broken,readDocument:()=>broken})}/>);
+  chooseSource(view,'second（正規化）.mp4');
+  expect(view.getByText('原音のトラックがありません。')).toBeTruthy();
+  chooseSource(view,'main.mp4');
+  expect(view.getByText(/主音声「main.mp4」に掛けます/)).toBeTruthy();
+});
+it('can fix the main copy when the first speech is an off-main clip of the same original',async()=>{
+  const multi=twoSources(),speech=multi.clips[0]!;
+  const document={...multi,tracks:[{id:'b-roll',kind:'audio' as const,name:'Bロール',enabled:true},...multi.tracks],clips:[{...structuredClone(speech),id:'broll',trackId:'b-roll'},...multi.clips]};
+  vi.stubGlobal('fetch',vi.fn().mockImplementation(async(url:string)=>String(url).startsWith('/api/audio-fix/status')?{ok:true,json:async()=>({running:null})}
+    :{ok:true,json:async()=>({asset:{id:'source-denoise'},kind:'denoise',from:'source'})}));
+  const p=props({document,readDocument:()=>document}),view=render(<NativeAudioFixSettings {...p}/>);
+  const select=view.getByLabelText('補正する原音') as HTMLSelectElement;
+  expect([...select.options].map(option=>option.textContent)).toEqual(['main.mp4（Bロール）','main.mp4（原音1）','second.mp4']);
+  fireEvent.change(select,{target:{value:select.options[1]!.value}});
+  fireEvent.click(view.getByRole('button',{name:'ノイズ除去を実行'}));
+  await waitFor(()=>expect(p.onEdit).toHaveBeenCalled());
+  expect(p.onEdit.mock.calls[0]![0](document)).toEqual({type:'replace-audio-source',trackId:'a-main',fromAssetId:'source',toAssetId:'source-denoise'});
+});

@@ -23,13 +23,17 @@ import { SequenceError } from './errors';
 import { sequenceAssetReferences } from './assetReferences';
 import { clipEnd, effectFrameAt, isMediaContent, sourceTimeAt, type SequenceAsset, type SequenceClip, type SequenceDocument, type SequenceTrack, type SequenceTransition, type SourceTranscript } from './model';
 import { sequenceContentBytes, validateSequenceDocument } from './validate';
-import { addTime, compareTime, multiplyTime, rational } from './time';
+import { addTime, compareTime, isRational, multiplyTime, rational, type Rational } from './time';
+import {isUninitializedSequence} from './mainAppend';
+import { MAX_USAGE_SWAP_TARGETS } from './commandTypes';
+import { assertWholeUsage, type UsageSwapPatch } from './swapUsage';
 import { scriptDocumentSchema, type ScriptDocument } from '../scriptAlignment';
 import { transcriptIdentity } from './transcript';
 import {editSceneFades,sceneFadeEndpoint,type SceneFadeTarget,type SceneFadeChange} from './sceneFadeEdits';
 import {transitionJoins, transitionJoinKey} from './transitions';
 import {registerNativeSpeedMetadata,type RegisterNativeSpeedCommand} from './speedMetadata';
 import {archiveRippleCut,archiveReservedIds,rebindCutArchiveFragments,restoreArchivedCut,previewArchivedCut,fragmentGraph,type RestoreCutCommand} from './cutArchive';
+import {validateSilenceRanges,type SilenceRange} from '../../shared/silenceCut';
 import {rebindClipReferences,rippleTrimPlan,type RippleTrimPlan,type TrimCommand} from './rippleTrim';
 
 export type SequenceCommand =
@@ -45,6 +49,7 @@ export type SequenceCommand =
   | RegisterNativeSpeedCommand
   | {type:'set-scene-fades';targets:SceneFadeTarget[];change:SceneFadeChange}
   | { type: 'batch'; commands: SequenceCommand[] }
+  | { type: 'apply-silence-cut'; ranges: SilenceRange[] }
   | { type: 'set-script'; script: ScriptDocument | null }
   | { type: 'set-ducking'; patch: Partial<SequenceDocument['ducking']> }
   | { type: 'set-transcript'; transcript:SourceTranscript; before:SourceTranscript|null; assetFingerprint:string }
@@ -57,11 +62,17 @@ export type SequenceCommand =
   | { type: 'unlink'; clipIds: string[] }
   | { type: 'add-track'; track: SequenceTrack; index?: number }
   | { type: 'remove-track'; trackId: string }
+  | { type: 'set-main-tracks'; main: NonNullable<SequenceDocument['main']> }
+  | { type: 'set-sequence-format'; fps: Rational; width: number; height: number }
   | { type: 'insert'; clips: SequenceClip[] }
   | { type: 'register-assets'; assets: SequenceAsset[] }
   | { type: 'set-track-enabled'; trackId: string; enabled: boolean }
   | { type: 'move-track'; trackId: string; index: number }
   | { type: 'update-clip'; clipId: string; patch: Pick<Partial<SequenceClip>, 'name' | 'visual' | 'content'> }
+  // カットで退避したクリップ（cutArchive.entries[].clips）の名前と中身だけを書き換える。HTTP では受けず、swap-usage-content の部品として使う。
+  | { type: 'update-archived-clip'; entryId: string; clipId: string; patch: UsageSwapPatch }
+  // 使用箇所（live と退避）をまとめて書き換える。update-clip・update-archived-clip を順に当てたのと同じ結果で、送信の予算は1件（素材の試し差し替えの採用）。
+  | { type: 'swap-usage-content'; live: Array<{ clipId: string; patch: UsageSwapPatch }>; archived: Array<{ entryId: string; clipId: string; patch: UsageSwapPatch }> }
   | { type: 'replace-audio-source'; trackId: string; fromAssetId: string; toAssetId: string }
   | { type: 'replace-text-style-asset'; fromAssetId: string; toAssetId: string }
   | { type: 'remove-asset'; assetId: string }
@@ -78,6 +89,22 @@ function range(from: number, to: number): void {
   }
 }
 function overlaps(a: number, b: number, c: number, d: number): boolean { return a < d && c < b; }
+/** update-archived-clip の本体（swap-usage-content と共有）。`next` は呼び出し側が複製済みの文書。 */
+function writeArchivedClip(next: SequenceDocument, entryId: string, clipId: string, patch: UsageSwapPatch): void {
+  const clip = next.cutArchive?.entries.find(e => e.id === entryId)?.clips.find(c => c.id === clipId);
+  if (!clip) throw new SequenceError('MISSING_TARGET', '対象の退避クリップが見つかりません', [entryId, clipId]);
+  // 戻すときの速度・旧形式の照合は退避した中身に依存する。live の update-clip が専用コマンドへ回すのと同じく、ここでは書き換えない。
+  if (clip.speed || clip.insertOwnSpeed || clip.legacyAudioContinuity || clip.legacyCaptionContinuity || clip.legacyMainRole)
+    throw new SequenceError('INVALID_DOCUMENT', '速度や旧形式の記録がある退避クリップは書き換えられません', [clipId]);
+  // Explicit keys only: IDs, time and every other saved field stay as archived. The result is checked by validateCutArchive.
+  if (patch.name !== undefined) clip.name = patch.name;
+  clip.content = structuredClone(patch.content);
+}
+/** 外したトラックを指すメインの記録は残さない（映像なら記録ごと、原音ならその項目だけ）。トラックを消す全経路で共有する。 */
+function releaseMainTracks(next: SequenceDocument, removed: ReadonlySet<string>): void {
+  if(next.main&&removed.has(next.main.videoTrackId))delete next.main;
+  else if(next.main?.audioTrackId!==undefined&&removed.has(next.main.audioTrackId))delete next.main.audioTrackId;
+}
 function allocator(document: SequenceDocument): (prefix: string) => string {
   const used = new Set([
     ...archiveReservedIds(document),
@@ -285,10 +312,34 @@ export function extractSequenceWindow(document:SequenceDocument,start:number,end
 
 /** A command increments the edit revision only when canonical content actually changes. */
 export function applySequenceCommand(document: SequenceDocument, command: SequenceCommand): SequenceDocument {
+  return applySequenceCommandInternal(document,command);
+}
+
+/** Isolated preview/dry-run. Never calls a session; yields to cancellation between bounded groups. */
+export async function previewSilenceCuts(document:SequenceDocument,ranges:SilenceRange[],checkpoint:()=>Promise<void>):Promise<SequenceDocument>{
+  validateSequenceDocument(document);validateSilenceRanges(ranges,document.sequenceEndFrame);
+  if(!ranges.length)return document;
+  let next=document;
+  for(let i=ranges.length-1;i>=0;i--){next=applySequenceCommandInternal(next,{type:'ripple-delete',...ranges[i]!},true);if(i%8===0)await checkpoint();}
+  next={...next,revision:document.revision+1};validateSequenceDocument(next);return next;
+}
+
+/** Only the validated, nonempty ripple children of one silence transaction defer full validation. */
+function applySequenceCommandInternal(document: SequenceDocument, command: SequenceCommand, silenceChild=false): SequenceDocument {
+  if(command.type==='apply-silence-cut'){
+    validateSequenceDocument(document);
+    validateSilenceRanges(command.ranges,document.sequenceEndFrame);
+    if(!command.ranges.length)return document;
+    let result=document;
+    for(let i=command.ranges.length-1;i>=0;i--)result=applySequenceCommandInternal(result,{type:'ripple-delete',...command.ranges[i]!},true);
+    result={...result,revision:document.revision+1};
+    validateSequenceDocument(result);
+    return result;
+  }
   if(isNativeSpeedCommandType(command.type))validateNativeSpeedCommand(command);
   // sequenceContentBytes validates as well as canonicalizing. Retain the input
   // bytes so no-op detection does not repeat the same full-document validation.
-  const originalContent=sequenceContentBytes(document);
+  const originalContent=silenceChild?null:sequenceContentBytes(document);
   const recipes = new Map<string, Slice[]>();
   let next: SequenceDocument;
   // 後処理が見るコマンド。close は「操作前の文書に対する ripple-delete」そのものなので、
@@ -316,7 +367,9 @@ export function applySequenceCommand(document: SequenceDocument, command: Sequen
       const edited=editSceneFades(document,command.targets,command.change);
       // Scene-fade editing structurally shares unchanged clips. Subsequent speed
       // rebinding mutates their saved basis, so isolate it before that boundary.
-      next=edited===document?document:structuredClone(edited);break;
+      next=edited===document?document:structuredClone(edited);
+      if(next!==document)releaseMainTracks(next,new Set(document.tracks.filter(t=>!next.tracks.some(n=>n.id===t.id)).map(t=>t.id)));
+      break;
     }
     case 'set-transition': {
       const current = document.transitions.find(t => t.joinKey === command.joinKey);
@@ -373,6 +426,7 @@ export function applySequenceCommand(document: SequenceDocument, command: Sequen
           const empty = [...lanes].filter(id => !next.clips.some(c => c.trackId === id)
             && !document.clips.some(c => c.trackId === id && c.content.kind !== 'scene-fade'));
           next.tracks = next.tracks.filter(t => !empty.includes(t.id));
+          releaseMainTracks(next, new Set(empty));
         }
         const out = next.clips.find(c => c.id === join.outClipId)!, incoming = next.clips.find(c => c.id === join.inClipId)!;
         const before = frame - wanted.startFrame, after = wanted.startFrame + wanted.durationFrames - frame;
@@ -599,7 +653,18 @@ export function applySequenceCommand(document: SequenceDocument, command: Sequen
       if (document.clips.some(c=>c.trackId===command.trackId)) throw new SequenceError('INVALID_RANGE','クリップを移動または削除して、空にしてからトラックを削除してください',[command.trackId]);
       next=structuredClone(document);
       next.tracks=next.tracks.filter(t=>t.id!==command.trackId);
+      releaseMainTracks(next,new Set([command.trackId]));
       break;
+    }
+    case 'set-main-tracks': {
+      // 形とトラックの実在・種類は末尾の validateSequenceDocument が見る。
+      next=structuredClone(document);next.main=structuredClone(command.main);break;
+    }
+    case 'set-sequence-format': {
+      if(!isUninitializedSequence(document))throw new SequenceError('INVALID_RANGE','素材や編集の記録がある案件では、fps・解像度を変えられません');
+      if(!isRational(command.fps)||command.fps.num<=0||!Number.isSafeInteger(command.width)||command.width<1||!Number.isSafeInteger(command.height)||command.height<1)
+        throw new SequenceError('INVALID_RANGE','fps・解像度の指定が不正です');
+      next=structuredClone(document);next.fps=rational(command.fps.num,command.fps.den);next.resolution={width:command.width,height:command.height};break;
     }
     case 'insert': {
       const reserved=new Set(archiveReservedIds(document));
@@ -736,6 +801,29 @@ export function applySequenceCommand(document: SequenceDocument, command: Sequen
       next=rebindSpeedProperty(document,next,command.clipId);
       break;
     }
+    case 'update-archived-clip': {
+      next = structuredClone(document);
+      writeArchivedClip(next, command.entryId, command.clipId, command.patch);
+      break;
+    }
+    case 'swap-usage-content': {
+      if (command.live.length + command.archived.length > MAX_USAGE_SWAP_TARGETS) throw new SequenceError('INVALID_RANGE', 'まとめる編集操作が多すぎます');
+      // 送られた片が1つの使用箇所の全片と一致し、変えてよいキーだけを変えていること（HTTP から直接送られても一部や別の片は書き換えない）。
+      assertWholeUsage(document, command);
+      // 複製と検証（末尾）を1回にして、update-clip と同じ規則（明示したキーだけ・挿入独自速度の保護・速度の付け直し）を片ごとに当てる。
+      next = structuredClone(document);
+      const clips = new Map(next.clips.map(c => [c.id, c])), originals = new Map(document.clips.map(c => [c.id, c]));
+      for (const item of command.live) {
+        const clip = clips.get(item.clipId)!; // assertWholeUsage が実在を確かめ済み
+        if (item.patch.name !== undefined) clip.name = item.patch.name;
+        clip.content = structuredClone(item.patch.content);
+        guardInsertOwnProperty(originals.get(item.clipId)!, clip);
+        // 画像・BGM では速度の付け直しは文書をそのまま返すか例外を投げる。作り直しが要る片は到達しない想定なので、遅い逐次経路を残さず拒否する。
+        if (rebindSpeedProperty(document, next, item.clipId) !== next) throw new SequenceError('INVALID_DOCUMENT', '使用箇所の差し替えで速度の付け直しが必要な片があります', [item.clipId]);
+      }
+      for (const item of command.archived) writeArchivedClip(next, item.entryId, item.clipId, item.patch);
+      break;
+    }
     case 'apply-text-style-all': {
       const asset=document.assets.find(item=>item.id===command.assetId&&item.kind==='component');
       if(!asset?.textStyleCatalog)throw new SequenceError('MISSING_TARGET','スタイルの部品が見つかりません。スタイル一覧を開き直してください。',[command.assetId]);
@@ -772,8 +860,8 @@ export function applySequenceCommand(document: SequenceDocument, command: Sequen
   // restore-cut explicitly restores the archived ordinary completion floor as well.
   if(effect.type!=='restore-cut'&&effect.type!=='resize-cut-boundary')next=rebindInsertOwnCompletion(document,next,effect);
   if(!['batch','resize-cut-boundary','upgrade-native-speed-operations','set-native-global-speed','set-native-main-speed','reset-native-main-speed'].includes(command.type))next=rebindOperationBasis(document,next);
-  if (sequenceContentBytes(next) === originalContent) return document;
+  if (!silenceChild && sequenceContentBytes(next) === originalContent) return document;
   next.revision = document.revision + 1;
-  validateSequenceDocument(next);
+  if(!silenceChild)validateSequenceDocument(next);
   return next;
 }

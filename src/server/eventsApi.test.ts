@@ -21,6 +21,11 @@ import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
 import { transcribeJobs } from './transcribeApi';
 import type { RenderJob, RenderJobEvent } from './renderJobTypes';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { mediaCopyJobs } from './sequence/mediaCopy/jobs';
+import type { CopyJobView } from '../shared/mediaCopy';
 
 /** SSE 用の fake ServerResponse。writeHead/write/end を記録する。 */
 function makeSseRes(): { res: ServerResponse; messages(): Array<{ ch: string; msg: unknown }>; ended(): boolean } {
@@ -385,5 +390,52 @@ describe('handleEventsSync', () => {
     for (const ch of ['projects', 'watch', 'bogus']) {
       expect(() => handleEventsSync('p1', ch)).toThrow(HttpError);
     }
+  });
+});
+
+describe('handleEventsSse — copy-jobs（速いドライブへのコピーの作業の一覧）', () => {
+  const flush = () => new Promise<void>((resolve) => { setImmediate(resolve); });
+  it('一覧は同時に1本だけ読み、読んでいる間の変化は読み終えてから1回だけ読み直して新しい一覧を送る。閉じた後は読まない', async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'copy-jobs-channel-')));
+    try {
+      mkdirSync(join(root, 'p1'));
+      const reads: Array<(jobs: CopyJobView[]) => void> = [];
+      let changed: (() => void) | undefined;
+      const list = vi.spyOn(mediaCopyJobs, 'list').mockImplementation(() => new Promise((resolve) => { reads.push(resolve); }));
+      const unsubscribe = vi.fn();
+      const subscribe = vi.spyOn(mediaCopyJobs, 'subscribe').mockImplementation((_root, listener) => { changed = listener; return unsubscribe; });
+      const job = (jobId: string) => ({ jobId }) as CopyJobView;
+      const { res, messages } = makeSseRes();
+      const { req, close } = makeSseReq();
+      handleEventsSse(req, res, root, 'p1');
+      // 窓口と同じ鍵（OS の実パスの解決）で購読し、接続した時に1回読む
+      expect(subscribe).toHaveBeenCalledWith(join(root, 'p1'), expect.any(Function));
+      expect(list).toHaveBeenCalledTimes(1);
+      changed!(); changed!(); changed!();
+      expect(list).toHaveBeenCalledTimes(1);   // 読んでいる間は2本目を読まない
+      reads[0]!([job('old')]); await flush();
+      expect(list).toHaveBeenCalledTimes(2);   // 読んでいる間に変化があったので1回だけ読み直す
+      reads[1]!([job('new')]); await flush();
+      expect(list).toHaveBeenCalledTimes(2);
+      const sent = () => messages().filter((m) => m.ch === 'copy-jobs').map((m) => m.msg);
+      expect(sent()).toEqual([{ type: 'list', jobs: [job('old')] }, { type: 'list', jobs: [job('new')] }]);
+      // 閉じた後: 読みかけの一覧は送らず、変化も読まない
+      changed!(); expect(list).toHaveBeenCalledTimes(3);
+      close(); reads[2]!([job('late')]); await flush(); changed!(); await flush();
+      expect(unsubscribe).toHaveBeenCalledTimes(1); expect(list).toHaveBeenCalledTimes(3);
+      expect(sent()).toHaveLength(2);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('無い案件・不正な ID は空の一覧だけを送り、購読しない', async () => {
+    const list = vi.spyOn(mediaCopyJobs, 'list');
+    const subscribe = vi.spyOn(mediaCopyJobs, 'subscribe');
+    const { res, messages } = makeSseRes();
+    const { req, close } = makeSseReq();
+    handleEventsSse(req, res, '/root', '../outside');
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    expect(messages().filter((m) => m.ch === 'copy-jobs')).toEqual([{ ch: 'copy-jobs', msg: { type: 'list', jobs: [] } }]);
+    expect(list).not.toHaveBeenCalled(); expect(subscribe).not.toHaveBeenCalled();
+    close();
   });
 });

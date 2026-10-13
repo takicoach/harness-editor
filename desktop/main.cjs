@@ -2,7 +2,7 @@ const {app, BrowserWindow, dialog, Menu, shell} = require('electron');
 const {spawn} = require('node:child_process');
 const {mkdirSync, existsSync, appendFileSync, readFileSync, writeFileSync} = require('node:fs');
 const {join, resolve} = require('node:path');
-const {isEditorURL, isExternalURL, validateProjectRoot} = require('./policy.cjs');
+const {isEditorURL, isExternalURL, validateProjectRoot, widenBackendThreadPool, childHasExited} = require('./policy.cjs');
 app.setName('Harness Editor');
 app.setPath('userData', process.env.HARNESS_DESKTOP_USER_DATA ? resolve(process.env.HARNESS_DESKTOP_USER_DATA) : join(app.getPath('appData'),'Harness Editor'));
 let window, backend, origin, quitting = false, stopping = false;
@@ -26,7 +26,7 @@ function reportError(title,message) {
 }
 function stopBackend() {
   if (stopping) return; stopping = true;
-  if (!backend || backend.exitCode !== null) { quitting=true;app.quit();return; }
+  if (childHasExited(backend)) { quitting=true;app.quit();return; }
   backend.once('exit',()=>{quitting=true;app.quit();});
   if (backend.connected) backend.send('shutdown'); else backend.kill('SIGTERM');
   const timer = setTimeout(()=>backend?.kill('SIGKILL'),6500);timer.unref();
@@ -88,14 +88,15 @@ else {
     if (!node || !existsSync(node)) throw new Error('同梱Node.jsが見つかりません。開発時はHARNESS_DESKTOP_NODEを指定してください。');
     const env={...process.env,HARNESS_PROJECT_ROOT:projectRoot,HARNESS_DESKTOP_CACHE:join(app.getPath('userData'),'vite-cache'),HARNESS_MANAGED_AI_DIR:join(app.getPath('userData'),'ai-tools'),SME_NO_OPEN:'1',HARNESS_DESKTOP_PORT:String(savedPort()),PATH:`${join(runtime,'tools')}:${process.env.PATH||'/usr/bin:/bin'}`};
     delete env.NODE_OPTIONS; delete env.NODE_PATH; delete env.ELECTRON_RUN_AS_NODE;
+    widenBackendThreadPool(env);
     if(app.isPackaged){env.HARNESS_FFMPEG=join(runtime,'tools','ffmpeg');env.HARNESS_FFPROBE=join(runtime,'tools','ffprobe');}
     backend=spawn(node,['--import','tsx',join(runtime,'desktop','server.mjs')],{cwd:runtime,env,stdio:['ignore','pipe','pipe','ipc']});
     backend.stdout.on('data',data=>writeLog(data.toString()));backend.stderr.on('data',data=>writeLog(data.toString()));
-    backend.on('exit',(code)=>{writeLog(`server exit ${code}`);if(!stopping&&origin){reportError('エディターが停止しました','編集サーバーが停止しました。ログフォルダーのdesktop.logを確認してください。');quitting=true;app.quit();}});
+    backend.on('exit',(code,signal)=>{writeLog(`server exit ${code}${signal?` ${signal}`:''}`);if(!stopping&&origin){reportError('エディターが停止しました','編集サーバーが停止しました。ログフォルダーのdesktop.logを確認してください。');quitting=true;app.quit();}});
     origin=await new Promise((accept,reject)=>{
       const timeout=setTimeout(()=>reject(new Error('起動が時間内に完了しませんでした')),90000);
       backend.once('error',error=>{clearTimeout(timeout);reject(error);});
-      backend.once('exit',code=>{clearTimeout(timeout);reject(new Error(`編集サーバーの終了: ${code}`));});
+      backend.once('exit',(code,signal)=>{clearTimeout(timeout);reject(new Error(`編集サーバーの終了: ${code??signal}`));});
       backend.on('message',message=>{if(message?.type==='ready'&&/^http:\/\/127\.0\.0\.1:\d+$/.test(message.origin)){clearTimeout(timeout);accept(message.origin);}});
     });
     writeFileSync(portFile,JSON.stringify({port:Number(new URL(origin).port)}));

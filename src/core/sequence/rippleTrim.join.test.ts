@@ -244,3 +244,19 @@ describe('静的な表示設定が違う片は結合しない（Codex P1）',()=
     expect(sampleVisualTransform(at(next,'v1',101),151).scale).toBeCloseTo(1.375,10);
   });
 });
+describe('カットを戻した片の結合（試し差し替えの続き番号）',()=>{
+  const restored=()=>{
+    const cut=applySequenceCommand(fixture(),{type:'ripple-delete',startFrame:100,endFrame:120});
+    return applySequenceCommand(cut,{type:'restore-cut',entryId:cut.cutArchive!.entries[0]!.id});
+  };
+  it('戻した BGM の片は、左片の終端をリップル延長すると join になる（音は変わらない）',()=>{
+    const doc=restored(),left=at(doc,'a2',0);
+    expect(left.durationFrames).toBe(100);
+    expect(rippleTrimPlan(doc,{type:'trim',clipId:left.id,edge:'end',frame:110,ripple:true}).kind).toBe('join');
+  });
+  it('戻した映像片は従来どおり join しない',()=>{
+    const doc=restored(),left=at(doc,'v1',0);
+    expect(left.durationFrames).toBe(100);
+    expect(rippleTrimPlan(doc,{type:'trim',clipId:left.id,edge:'end',frame:110,ripple:true}).kind).not.toBe('join');
+  });
+});

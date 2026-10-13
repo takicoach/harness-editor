@@ -12,11 +12,17 @@ import type { NativeExportStatus } from '../../shared/nativeExport';
 import {nativeExportSettings} from '../../shared/nativeExport';
 import {targetResolution} from '../../shared/renderPreset';
 import { runSequenceExport,type ExportRunInput } from './exportRunner';
+import { isExportFailure } from './exportParallel';
 import { acquireExportAdmission,activeExportAdmission } from './exportAdmission';
 import { prepareLegacyExport } from './legacyExports';
 import { assertVerifiedSettings,createExportRecord,digest,exportActive,exportDirectory,exportDownloadUrl,exportIds,exportScratchFiles,exportJobId,exportRequestSchema,legacySnapshotRequestSchema,hasFrozenSettings,hashExportFile,ownerAlive,persistExport,processRegistry,readExportInput,readExportRecord,verifiedExportOutput,type ExportRecord,type ExportRequest,type LegacySnapshotExportRequest } from './exportRecords';
 
-interface ExportJob {record:ExportRecord;readonly status:NativeExportStatus;readonly plan:ScenePlan;projectDirectory:string;directory:string;controller:AbortController;completion:Promise<void>;storageError?:boolean;releaseAdmission?():void}
+interface ExportJob {record:ExportRecord;readonly status:NativeExportStatus;readonly plan:ScenePlan;
+  /** The plan this process started rendering, shared with the runner while it runs. Every
+   * /export/input and /export/asset request reads job.plan; rebuilding it from input.json
+   * each time cost as much as the request itself. Cleared when the run ends. */
+  running?:ScenePlan;
+  projectDirectory:string;directory:string;controller:AbortController;completion:Promise<void>;storageError?:boolean;releaseAdmission?():void}
 interface LegacyReservation {root:string;projectId:string;id:string;controller:AbortController;releaseAdmission:()=>void;started:boolean}
 export interface LegacySnapshotExportReservation {
   readonly id:string;readonly signal:AbortSignal;
@@ -37,9 +43,10 @@ export class SequenceExports {
   private key(root:string,id:string){return `${root}\0${id}`;}
   private track(key:string,job:ExportJob){this.jobs.set(key,job);runningHere.add(key);}
   private untrack(key:string){this.jobs.delete(key);runningHere.delete(key);}
-  private wrap(root:string,record:ExportRecord):ExportJob {
-    return {record,get status(){return record.status;},get plan(){return new ScenePlan(readExportInput(root,record));},projectDirectory:root,
+  private wrap(root:string,record:ExportRecord,running?:ScenePlan):ExportJob {
+    const job:ExportJob={record,running,get status(){return record.status;},get plan(){return job.running??new ScenePlan(readExportInput(root,record));},projectDirectory:root,
       directory:exportDirectory(root,record.status.id),controller:new AbortController(),completion:Promise.resolve()};
+    return job;
   }
   private load(root:string,id:string):ExportJob {
     const cached=this.jobs.get(this.key(root,id));
@@ -148,7 +155,7 @@ export class SequenceExports {
       // Admission covers publication as well as encoding, including another server's start.
       if(this.list(root).some(job=>exportActive(job.phase)))throw new HttpError(409,'別の書き出しが進行中です。完了を待ってください');
       createExportRecord(root,record,plan.document);
-      const job=this.wrap(root,record);job.releaseAdmission=release;this.track(this.key(root,id),job);
+      const job=this.wrap(root,record,plan);job.releaseAdmission=release;this.track(this.key(root,id),job);
       job.completion=this.run(job,plan,origin);return {...job.status};
     }catch(error){release();throw error;}
   }
@@ -165,6 +172,9 @@ export class SequenceExports {
       if(hasFrozenSettings(record))assertVerifiedSettings(verification,settings,status.outputResolution);
       const output=await hashExportFile(join(directory,'output.mp4'),controller.signal);
       record.output={sha256:output.sha256,bytes:output.bytes,verificationHash:digest(verificationBytes)};
+      // Rendering used the plan made at the start, not input.json. Publish only while the saved
+      // input still is that plan's input, as after completion and restart every reader checks it.
+      readExportInput(job.projectDirectory,record);
       controller.signal.throwIfAborted();status.phase='complete';status.completedFrames=status.totalFrames;status.finishedAt=new Date().toISOString();
       status.downloadUrl=exportDownloadUrl(status.projectId,status.id);
       persistExport(directory,record);
@@ -179,9 +189,11 @@ export class SequenceExports {
       }
       finally{await unlink(receipt).catch(()=>undefined);}
     }catch(error) {
-      status.phase=controller.signal.aborted?'cancelled':'failed';status.finishedAt=new Date().toISOString();delete status.downloadUrl;delete record.output;
-      if(!controller.signal.aborted)status.error=error instanceof Error?error.message.slice(0,4000):String(error).slice(0,4000);
+      // The export's own first failure stays its result even when a cancel arrived while it was cleaning up.
+      status.phase=controller.signal.aborted&&!isExportFailure(error)?'cancelled':'failed';status.finishedAt=new Date().toISOString();delete status.downloadUrl;delete record.output;
+      if(status.phase==='failed')status.error=error instanceof Error?error.message.slice(0,4000):String(error).slice(0,4000);
     }finally {
+      job.running=undefined;
       try{if(!published)persistExport(directory,record);job.releaseAdmission?.();this.untrack(this.key(job.projectDirectory,status.id));}
       catch(error){if(!published){status.phase='failed';delete status.downloadUrl;}job.storageError=true;status.error=`書き出し結果の記録を保存できません: ${String(error).slice(0,2000)}`;}
     }
@@ -218,7 +230,18 @@ export class SequenceExports {
     }
   }
   activeCount(){return new Set([...this.reservations.keys(),...[...this.jobs.entries()].filter(([,job])=>exportActive(job.status.phase)).map(([key])=>key)]).size;}
-  killAll(){for(const reservation of this.reservations.values())reservation.controller.abort();for(const job of this.jobs.values())if(exportActive(job.status.phase))job.controller.abort();}
+  killAll(){return this.stopAll();}
+  /** Abort every export (synchronously) and wait until their runners have ended, which closes their browsers
+   * and FFmpeg, for at most timeoutMs. True when all ended in time. Server shutdown awaits this. */
+  async stopAll(timeoutMs=4000):Promise<boolean>{
+    for(const reservation of this.reservations.values())reservation.controller.abort();
+    const running=[...this.jobs.values()].filter(job=>exportActive(job.status.phase));
+    for(const job of running)job.controller.abort();
+    if(!running.length)return true;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try{return await Promise.race([Promise.allSettled(running.map(job=>job.completion)).then(()=>true),new Promise<boolean>(resolve=>{timer=setTimeout(()=>resolve(false),timeoutMs);})]);}
+    finally{clearTimeout(timer);}
+  }
   async download(projectDirectory:string,id:string,signal?:AbortSignal) {
     const job=this.job(projectDirectory,id),record=await prepareLegacyExport(job.projectDirectory,job.record,signal);
     return verifiedExportOutput(job.projectDirectory,record,signal);

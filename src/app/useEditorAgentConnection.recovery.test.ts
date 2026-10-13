@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import {act,cleanup,renderHook} from '@testing-library/react';
+import {StrictMode,createElement,type ReactNode} from 'react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {useEditorAgentConnection,type AsyncEditorBridge} from './useEditorAgentConnection';
 import type {EditorSessionSnapshot} from '../shared/editorSessions';
@@ -75,4 +76,20 @@ it('preserves a server rejection reason instead of misreporting a network failur
   expect(console.warn).toHaveBeenCalledWith('AI接続の確認に失敗しました',expect.objectContaining({name:'ApiError',status:409,message:reason}));
   rejected=false;await act(async()=>{await vi.advanceTimersByTimeAsync(2000);});
   expect(result.current.transportError).toBeNull();expect(result.current.connection).toBe('connected');
+});
+
+// 開発版の React（StrictMode）は準備処理を2回走らせる。2回目の合図が1回目を追い越すと、サーバは古い番号を 409 STALE_HEARTBEAT で断る（デスクトップ版の画面でも出ていた）
+it('sends one heartbeat at a time across a remounted effect, so a newer number never overtakes an older one',async()=>{
+  const sent:number[]=[];let inFlight=0,maxInFlight=0;const releases:(()=>void)[]=[];
+  vi.stubGlobal('fetch',vi.fn(async(url:string,init?:RequestInit)=>{
+    if(!url.endsWith('/heartbeat'))return response({ok:true});
+    sent.push(JSON.parse(String(init!.body)).sequence);inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);
+    await new Promise<void>(resolve=>releases.push(resolve));inFlight--;return response({deliveries:[]});
+  }));
+  renderHook(()=>useEditorAgentConnection(bridge(),'project-a',vi.fn()),{wrapper:({children}:{children:ReactNode})=>createElement(StrictMode,null,children)});
+  await act(async()=>{});
+  for(let round=0;round<3;round++)await act(async()=>{releases.splice(0).forEach(release=>release());await vi.advanceTimersByTimeAsync(2000);});
+  expect(sent.length).toBeGreaterThan(1);
+  expect(maxInFlight).toBe(1);
+  expect(sent).toEqual([...sent].sort((a,b)=>a-b));
 });

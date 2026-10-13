@@ -44,6 +44,8 @@ export type LearningDiffState =
       result: LearningApproveResponse;
       /** 新しく記録した件数（応答の recorded の合計。応答に無ければ送った件数）。 */
       recordedCount: number;
+      /** 差分の partialNote（後から足した素材を比べていない旨）。完了画面にも出す。 */
+      partialNote?: string;
     };
 
 export interface UseLearningDiff {
@@ -158,7 +160,7 @@ export function useLearningDiff(): UseLearningDiff {
         if (!live(session.token)) return;
         const recorded = result.recorded;
         const recordedCount = recorded ? recorded.cut + recorded.words + recorded.telops + recorded.ses : sent;
-        update({ status: 'done', projectId, jobId, result, recordedCount });
+        update({ status: 'done', projectId, jobId, result, recordedCount, ...(diff.partialNote !== undefined ? { partialNote: diff.partialNote } : {}) });
       } catch (e) {
         if (!live(session.token)) return;
         update({ status: 'review', projectId, jobId, diff, error: `学習を記録できませんでした: ${message(e)}` });

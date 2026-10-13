@@ -453,6 +453,7 @@ export function App() {
 
   // New projects always use managed media and open in the native editor.
   const handleCreateProject = useCallback(async (name: string, source: CreateSource) => {
+    if (source.kind === 'empty' || source.kind === 'videos') throw new Error('この画面では作成できません。新しい編集画面から作成してください');
     const { id } = source.kind === 'upload-images' ? await createNativeImageProject(name, source.files)
       : source.kind === 'link-images' ? await createNativeImageProject(name, source.files.map(file => file.path))
       : await createNativeProject(name, source.kind === 'upload' ? source.file : source.path);

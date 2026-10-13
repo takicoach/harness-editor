@@ -28,7 +28,9 @@ function readPending(projectId:string):StartRequest|null {
   if(value.settings!==undefined)value.settings=nativeExportSettings(value.settings);
   return value;
 }
-export function NativeExportControl({ projectId, disabled, revision, resolution,save,onBusyChange,onComplete }: { projectId: string; disabled: boolean; revision: number; resolution:{width:number;height:number};save(): Promise<boolean>;onBusyChange?(busy:boolean):void;
+export function NativeExportControl({ projectId, disabled, disabledReason, revision, resolution,save,onBusyChange,onComplete }: { projectId: string; disabled: boolean; revision: number; resolution:{width:number;height:number};save(): Promise<boolean>;onBusyChange?(busy:boolean):void;
+  /** 指定があれば新しい書き出しを始めさせず、理由をボタンの title と見える補足文で示す（試し表示中など）。 */
+  disabledReason?:string;
   /** この画面で開始・回収・監視した実行中ジョブが完了した時に、1ジョブにつき1回だけ呼ぶ（履歴で選んだ過去のジョブでは呼ばない）。 */
   onComplete?(job:NativeExportStatus):void }) {
   const [job,setJob]=useState<NativeExportStatus|null>(null),[history,setHistory]=useState<History>({jobs:[],total:0,nextOffset:null});
@@ -94,6 +96,8 @@ export function NativeExportControl({ projectId, disabled, revision, resolution,
     return ()=>{projectEpoch.current++;controller.abort();};
   },[projectId]);
   const running=history.jobs.find(active)??null;
+  // 理由つきの停止も、通常の disabled と同じく「新しく始める」操作だけを止める（再確認と実行中の表示は残す）。
+  const blocked=disabled||!!disabledReason,reason=disabledReason&&!pending&&!running?disabledReason:undefined;
   // 書き出し中は音声の補正を受け付けない（サーバーも 409 で拒否する）。上位へ状態だけ伝える。
   useEffect(()=>{onBusyChange?.(!!running||starting);},[running?.id,running?.phase,starting,onBusyChange]);
   useEffect(()=>{
@@ -162,7 +166,8 @@ export function NativeExportControl({ projectId, disabled, revision, resolution,
     }catch(error){setError(message(error));}finally{setVerifying(false);}
   };
   return <div className="native-export">
-    <button className="btn-primary" data-tutorial="export" data-native-script-flush disabled={starting||loading||storageBroken||(disabled&&!pending&&!running)} onClick={()=>{if(pending||running)void start();else{setOpened(true);setConfiguring(true);setJob(null);setError(null);}}}>{pending?'開始状況を再確認':running?'書き出し中…':starting?checking?'素材を確認中…':'保存中…':'書き出し'}</button>
+    <button className="btn-primary" data-tutorial="export" data-native-script-flush disabled={starting||loading||storageBroken||(blocked&&!pending&&!running)} title={reason} onClick={()=>{if(pending||running)void start();else{setOpened(true);setConfiguring(true);setJob(null);setError(null);}}}>{pending?'開始状況を再確認':running?'書き出し中…':starting?checking?'素材を確認中…':'保存中…':'書き出し'}</button>
+    {reason&&<span className="native-export-reason">{reason}</span>}
     {(history.jobs.length>0||error||!!preflight?.issues.length)&&!opened&&<button aria-label="書き出し結果を表示" onClick={()=>setOpened(true)}>↓</button>}
     {opened&&<section className="native-export-panel" role="region" aria-label="動画の書き出し">
       <div className="native-export-heading"><strong role="heading" aria-level={3}>{pending?'開始状況を確認してください':starting?checking?'素材と接続を確認しています':'書き出しを準備しています':job?labels[job.phase]:'動画の書き出し'}</strong><button aria-label="書き出しパネルを閉じる" onClick={()=>setOpened(false)}>×</button></div>
@@ -173,7 +178,7 @@ export function NativeExportControl({ projectId, disabled, revision, resolution,
         <ul>{preflight.issues.map(issue=><li key={issue.assetId}><b>{issue.name}</b><span>{issue.message}</span></li>)}</ul>
         <p>接続を確認し、場所を変更した素材は素材欄の「リンクし直す」で指定してから、もう一度開始してください。</p>
       </div>}
-      {configuring&&!pending&&!running&&<fieldset className="native-export-settings" disabled={starting||disabled||loading||storageBroken}>
+      {configuring&&!pending&&!running&&<fieldset className="native-export-settings" disabled={starting||blocked||loading||storageBroken}>
         <legend>書き出し設定</legend>
         <div className="native-export-presets">{(Object.keys(RENDER_PRESETS) as RenderPresetId[]).map(id=><button key={id} aria-pressed={settings.resolution===RENDER_PRESETS[id].resolution&&settings.quality===RENDER_PRESETS[id].quality} onClick={()=>setSettings(nativeExportSettings({resolution:RENDER_PRESETS[id].resolution,quality:RENDER_PRESETS[id].quality}))}>{presetLabel(id,resolution.width===resolution.height?'square':resolution.width>resolution.height?'landscape':'portrait')}</button>)}</div>
         <label>解像度<select aria-label="書き出し解像度" value={settings.resolution} onChange={event=>setSettings(previous=>({...previous,resolution:event.target.value as RenderResolution}))}>

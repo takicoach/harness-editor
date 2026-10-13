@@ -4,7 +4,7 @@ import {TaskProgress} from '../components/TaskProgress';
 import { Icon } from '../Icon';
 import { playbackRateLabel } from '../preview/transport';
 import type { ClipVisual, SequenceDocument } from '../../core/sequence/model';
-import { ScenePlan } from '../../core/sequence/scenePlan';
+import { ScenePlan, scenePlanFor } from '../../core/sequence/scenePlan';
 import { timeNumber } from '../../core/sequence/time';
 import { NativePreviewBridge } from '../../preview/native/previewBridge';
 import { NativeAudioTransport } from '../../preview/native/audioTransport';
@@ -344,7 +344,7 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
     if(planSession.current===sessionId&&planRef.current?.document.id===doc.id&&planRef.current.document.revision>=doc.revision)return;
     planSession.current=sessionId;
     temporary.current=null;inspectorPreview.current=null;
-    const nextPlan=new ScenePlan(doc),previous=planRef.current;
+    const nextPlan=scenePlanFor(doc),previous=planRef.current;
     const keepAudio=previous?.document.id===doc.id&&(playingRef.current||preparation.current!==null)
       &&audioPlanIdentity(previous.document)===audioPlanIdentity(nextPlan.document);
     seekIntent.current=null; version.current++; setReady(false); setRecoveryAvailable(false);
@@ -366,8 +366,8 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
   const renderManipulation=async(document:SequenceDocument|null,isTemporary:boolean)=>{
     const painter=renderer.current;
     if(isTemporary)temporary.current=document?new ScenePlan(document):null;
-    else if(document){temporary.current=null;planRef.current=new ScenePlan(document);}
-    if(!document){const current=manipulation?.readDocument();if(current&&(current.id!==planRef.current?.document.id||current.revision!==planRef.current?.document.revision))planRef.current=new ScenePlan(current);}
+    else if(document){temporary.current=null;planRef.current=scenePlanFor(document);}
+    if(!document){const current=manipulation?.readDocument();if(current&&(current.id!==planRef.current?.document.id||current.revision!==planRef.current?.document.revision))planRef.current=scenePlanFor(current);}
     const draw=async()=>{
       let request=show(current.current),result=await request;
       if(document)return result;

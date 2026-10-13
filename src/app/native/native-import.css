@@ -1,0 +1,15 @@
+/* 読み込み中の仮の枠（文書の外・設計 §2-6）。クリップと見分けられる破線と斜線。
+   枠はポインタを通す（下の行のスクラブ・選択解除・範囲の開始を妨げない）。取り消しボタンだけ受ける。 */
+.native-import-frame{position:absolute;pointer-events:none;top:3px;bottom:3px;z-index:2;display:flex;flex-direction:column;justify-content:center;gap:2px;min-width:8px;padding:2px 6px;overflow:hidden;
+  border:1px dashed var(--accent);border-radius:var(--radius-sm);color:var(--fg-0);font-size:var(--native-font-sub);
+  background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--accent) 14%,transparent) 0 6px,transparent 6px 12px)}
+.native-import-frame[data-phase=failed]{border-color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.native-import-name,.native-import-phase{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.native-import-phase{color:var(--fg-2)}
+.native-import-cancel{pointer-events:auto;align-self:flex-start;min-height:0;padding:2px 6px;font-size:var(--native-font-sub)}
+.native-import-lane{position:relative}
+.native-import-batches{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.native-import-batch{padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-1);font-size:var(--native-font-sub)}
+.native-import-batch[data-phase=partial],.native-import-batch[data-phase=failed]{border-color:var(--danger)}
+.native-import-batch p,.native-import-batch ul{margin:0 0 4px}
+.native-import-actions{display:flex;flex-wrap:wrap;gap:6px}

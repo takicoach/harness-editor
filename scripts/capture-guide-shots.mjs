@@ -1,4 +1,4 @@
-/** Capture the public 0.7 guide from the real editor, using a disposable project.
+/** Capture the public guide from the real editor, using a disposable project.
  * Usage: node scripts/capture-guide-shots.mjs --video /path/to/approved-demo.mp4
  * The source video must be cleared for publication. It is never copied into Git.
  */
@@ -13,7 +13,7 @@ const repo=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2), video=args[args.indexOf('--video')+1];
 const skipExport=args.includes('--skip-export'); // Keep the previous real export capture when adjusting other shots.
 if(!args.includes('--video')||!video) throw new Error('Pass --video with footage approved for publication');
-const work=mkdtempSync(join(tmpdir(),'harness-guide-07-'));
+const work=mkdtempSync(join(tmpdir(),'harness-guide-'));
 const output=join(repo,'docs/images/guide');
 const name='ゴルフレッスンの振り返り', project=join(work,'projects',name);
 const ffmpeg=process.env.HARNESS_FFMPEG??'ffmpeg';
@@ -107,6 +107,33 @@ try {
  await page.locator('.color-wheels').scrollIntoViewIfNeeded();
  await shot('color-grading');
  await page.setViewportSize({width:1600,height:1050});
+ for(let i=0;i<7;i++)await page.getByRole('separator',{name:'設定パネルのサイズ'}).press('ArrowRight');
+ // Thumbnail studio: a frame of the sample video as the background, a standard text style, and a short heading.
+ await page.getByRole('group',{name:'モード',exact:true}).getByRole('button',{name:'サムネ',exact:true}).click();
+ await expect(page.locator('.native-thumbnail')).toBeVisible({timeout:60000});
+ const rail=page.getByRole('navigation',{name:'サムネの道具'});
+ await rail.getByRole('button',{name:'素材'}).click();
+ const materials=page.getByRole('complementary',{name:'素材'});
+ await materials.getByRole('button',{name:'main.mp4のコマを選ぶ'}).click();
+ for(let i=0;i<60;i++)await materials.getByRole('button',{name:'次のコマ'}).click();
+ await materials.getByRole('button',{name:'このコマを背景にする'}).click();
+ await rail.getByRole('button',{name:'テンプレ'}).click();
+ await page.getByRole('complementary',{name:'テンプレ'}).getByRole('button',{name:'袋文字 2 重（黄×黒×白）'}).click();
+ const canvasFrame=page.frameLocator('.native-thumbnail iframe[data-native-preview]');
+ await expect(canvasFrame.locator('[data-native-clip] canvas').first()).toBeAttached({timeout:60000});
+ const outline=page.locator('.native-thumbnail-outline').first(), field=page.getByRole('textbox',{name:'文字の編集'});
+ await expect(async()=>{const box=await outline.boundingBox();await page.mouse.dblclick(box.x+box.width/2,box.y+box.height/2);await expect(field).toBeVisible({timeout:1000});}).toPass({timeout:30000});
+ await field.fill('今日の一打');
+ await page.keyboard.press('ControlOrMeta+Enter');
+ await expect(field).toBeHidden();
+ await expect(canvasFrame.locator('[data-native-clip]').filter({hasText:'今日の一打'})).toBeAttached({timeout:30000});
+ await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'保存',exact:true}).click();
+ await expect(page.getByText('保存済み',{exact:true})).toBeVisible({timeout:30000});
+ await page.waitForTimeout(4000);
+ await shot('thumbnail');
+ await page.getByRole('group',{name:'モード',exact:true}).getByRole('button',{name:'編集',exact:true}).click();
+ await expect(page.locator('.native-timeline-panel')).toBeVisible({timeout:60000});
  await page.locator('.native-ai-band').click();
  await page.getByRole('button',{name:'インストール',exact:true}).waitFor();
  await shot('ai');
@@ -127,8 +154,8 @@ try {
  writeFileSync(join(work,'editor-dom.txt'),await page.locator('body').innerText());
  if(errors.length)throw new Error(errors.join('\n'));
  mkdirSync(output,{recursive:true});
- for(const id of ['home','create-project','editor-dark','editor-light','cut','materials','telop','color-grading','ai','export',...skipExport?[]:['learning','learning-detail']])cpSync(join(work,`${id}.png`),join(output,`${id}.png`));
- writeFileSync(join(output,'capture.json'),JSON.stringify({version:'0.7.0',capturedAt:new Date().toISOString(),viewport:{width:1600,height:1050},source:'approved sample video; disposable project; AI installation state shown as uninstalled'},null,2)+'\n');
+ for(const id of ['home','create-project','editor-dark','editor-light','cut','materials','telop','color-grading','thumbnail','ai','export',...skipExport?[]:['learning','learning-detail']])cpSync(join(work,`${id}.png`),join(output,`${id}.png`));
+ writeFileSync(join(output,'capture.json'),JSON.stringify({version:'0.8.0',capturedAt:new Date().toISOString(),viewport:{width:1600,height:1050},source:'approved sample video; disposable project; AI installation state shown as uninstalled'},null,2)+'\n');
  console.log(`Complete: ${output}`);
 } catch(error) {
  const page=browser?.contexts()[0]?.pages()[0];

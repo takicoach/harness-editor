@@ -370,6 +370,27 @@
         }
       ],
       "builtAt": "2026-09-16T09:11:55+00:00"
+    },
+    {
+      "id": "noto-sans-jp-black",
+      "family": "Noto Sans JP Black",
+      "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+      "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt",
+      "licenseType": "OFL",
+      "upstreamSha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+      "sha256": "dabb5cb881f59f33e2695454b35dae95cbe51944b7309eb6de04d36754f6c081",
+      "bytes": 2013548,
+      "subsetRanges": "U+0020-007E,U+00A0-00FF,U+2010-2027,U+2030-205E,U+2190-2193,U+25A0-25FF,U+3000-303F,U+3041-309F,U+30A0-30FF,U+31F0-31FF,U+FF01-FF60,U+FFE0-FFE6,U+4E00-9FFF,U+3400-4DBF",
+      "weights": [
+        {
+          "weight": 900,
+          "file": "noto-sans-jp-black.woff2",
+          "upstreamSha256": "c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f",
+          "sha256": "dabb5cb881f59f33e2695454b35dae95cbe51944b7309eb6de04d36754f6c081",
+          "bytes": 2013548
+        }
+      ],
+      "builtAt": "2026-10-03T01:17:02+00:00"
     }
   ]
 }

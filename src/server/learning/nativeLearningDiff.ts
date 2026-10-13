@@ -8,7 +8,9 @@
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { loadProject } from '../../core/project';
-import type { SequenceDocument } from '../../core/sequence/model';
+import { audioFixRoot } from '../../core/sequence/assetReferences';
+import { mainTracks } from '../../core/sequence/mainTrack';
+import { clipEnd, type SequenceClip, type SequenceDocument } from '../../core/sequence/model';
 import { timeNumber } from '../../core/sequence/time';
 import { countUndistilledFeedback } from '../../learning';
 import type { LearningCandidateKey, LearningDiffResponse } from '../../shared/types';
@@ -34,6 +36,47 @@ export type NativeLearningDiff =
 function ineligible(reason: string): NativeLearningDiff {
   return { eligible: false, reason, response: { cut: null, words: null, telops: null, ses: null, undistilledCount: countUndistilledFeedback(), unavailableReason: reason } };
 }
+
+/**
+ * 移行した案件で、クリップがメインに後から足した素材のものなら、その素材の原本 ID を返す（それ以外は undefined）。
+ * メイン = mainTracks の映像トラックの映像と、原音トラックの原音（speech。空きに置いた BGM・効果音は数えない）。
+ * 音声補正した素材は原本で比べる（取り込んだ元の素材の補正版は足したものにしない。循環した記録は audioFixRoot と同じく止める）。
+ */
+function addedMainSource(finish: SequenceDocument): (clip: SequenceClip) => string | undefined {
+  const primary = finish.legacy?.primaryAssetId;
+  if (!primary) return () => undefined;
+  const { videoTrackId, audioTrackId } = mainTracks(finish), primaryRoot = audioFixRoot(finish, primary);
+  return (clip) => {
+    const content = clip.content;
+    const onMain = (content.kind === 'video' && clip.trackId === videoTrackId)
+      || (content.kind === 'audio' && content.role === 'speech' && clip.trackId === audioTrackId);
+    if (!onMain) return undefined;
+    const root = audioFixRoot(finish, content.assetId);
+    return root === primaryRoot ? undefined : root;
+  };
+}
+
+/** 移行した案件で、メインに後から足した素材の数（設計 第A段 §1 学習ループ）。比較元が無いのでカットは比べない。本編と保管庫（cutArchive。カットして残った分）の両方を見る。 */
+export function addedMainSources(finish: SequenceDocument): number {
+  const added = addedMainSource(finish);
+  const clips = [...finish.clips, ...(finish.cutArchive?.entries ?? []).flatMap((entry) => entry.clips)];
+  return new Set(clips.flatMap((clip) => added(clip) ?? [])).size;
+}
+
+/** 今のタイムラインで、メインに後から足した素材のクリップが占める区間（重なり・隣接は1つに合わせ、時刻順）。画面はここにすっぽり入る字幕・効果音の候補の既定のチェックを外す。 */
+export function addedMainRanges(finish: SequenceDocument): Array<{ startFrame: number; endFrame: number }> {
+  const added = addedMainSource(finish);
+  const spans = finish.clips.filter((clip) => added(clip) !== undefined).map((clip) => ({ startFrame: clip.startFrame, endFrame: clipEnd(clip) }))
+    .sort((a, b) => a.startFrame - b.startFrame);
+  const merged: Array<{ startFrame: number; endFrame: number }> = [];
+  for (const span of spans) {
+    const last = merged.at(-1);
+    if (last && span.startFrame <= last.endFrame) last.endFrame = Math.max(last.endFrame, span.endFrame);
+    else merged.push({ ...span });
+  }
+  return merged;
+}
+export const addedSourcesNote = (count: number) => `後から足した素材（${count}本）のカットは比べていません。その部分の字幕・効果音の候補は、最初はチェックを外しています`;
 
 interface OperationLike { phase?: unknown; request?: { projectId?: unknown; sequence?: { documentId?: unknown } | null } | null }
 const isOperationLike = (value: unknown): value is OperationLike => typeof value === 'object' && value !== null;
@@ -87,7 +130,7 @@ export async function computeNativeLearningDiff(dir: string, jobId: string): Pro
   }
   const project = loadProject(readProjectFiles(root));
   const legacyFps = project.videoConfig.fps, finishFps = timeNumber(finish.fps);
-  const archivedClips = (finish.cutArchive?.entries ?? []).flatMap((entry) => entry.clips);
+  const archivedClips = (finish.cutArchive?.entries ?? []).flatMap((entry) => entry.clips), added = addedMainSources(finish);
   return {
     eligible: true,
     finish,
@@ -100,6 +143,7 @@ export async function computeNativeLearningDiff(dir: string, jobId: string): Pro
       undistilledCount: countUndistilledFeedback(),
       aiEditCount: countAiEditsAfterImport(root, finish.id),
       baselineLabel: NATIVE_BASELINE_LABEL,
+      ...(added > 0 ? { partialNote: addedSourcesNote(added), partialRanges: addedMainRanges(finish) } : {}),
       candidateKey: { jobId, documentId: finish.id, contentHash: record.status.contentHash },
     },
   };

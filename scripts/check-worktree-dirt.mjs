@@ -94,9 +94,11 @@ function currentState() {
  * 通常ランでは AAA_UPDATE_EVIDENCE が無いので、撮影 spec がここへ書けば従来どおり赤になる。
  */
 const EVIDENCE_DIR_REL = 'docs/reports/aaa-screenshots/';
+// スライド画面の撮影（計画 Part B の完了条件）の置き場。証拠更新ランでだけ書く（tests/slidesHelpers.ts）。
+const SLIDES_SHOTS_DIR_REL = 'docs/research/2026-10-04-slides/shots/';
 const EVIDENCE_UPDATE = process.env.AAA_UPDATE_EVIDENCE === '1';
 function isIntentionalEvidenceWrite(path) {
-  return EVIDENCE_UPDATE && path.startsWith(EVIDENCE_DIR_REL);
+  return EVIDENCE_UPDATE && (path.startsWith(EVIDENCE_DIR_REL) || path.startsWith(SLIDES_SHOTS_DIR_REL));
 }
 
 const mode = process.argv[2];

@@ -295,3 +295,48 @@ it('keeps history, busy checks, and new exports working around one unreadable re
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('書き出し記録'),broken,expect.anything());
   }finally{warn.mockRestore();await rm(directory,{recursive:true,force:true});}
 });
+// Parallel export (Codex P1): the export's own first failure is its result even when a cancel arrives
+// while it cleans up; a user cancel alone stays cancelled.
+it('records the first internal failure as failed, not cancelled, even if a cancel arrives during cleanup',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'native-export-failure-'));let id='';
+  const {renderExportFrames}=await import('./exportParallel');
+  const jobs=new SequenceExports(async input=>{
+    const failure=await renderExportFrames({parallel:{workers:2,blockFrames:2},frames:8,signal:input.signal,frame:async()=>undefined,
+      open:async worker=>{if(worker===1)throw new Error('描き手のブラウザが落ちました');return {surface:{capture:async()=>Buffer.alloc(1)},close:async()=>undefined};}}).catch(error=>error);
+    jobs.cancel(directory,id);
+    throw failure;
+  });
+  try{
+    id=jobs.start(directory,'case','http://127.0.0.1',{sessionId:'session',expectedRevision:3,executionId:'failure'},state).id;
+    await jobs.job(directory,id).completion;
+    expect(jobs.job(directory,id).status).toMatchObject({phase:'failed',error:'描き手のブラウザが落ちました'});
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+it('stopAll aborts every export and waits for it to end, but no longer than its bound',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'native-export-stop-'));
+  const prompt=new SequenceExports(async input=>{await new Promise<void>((_,reject)=>input.signal.addEventListener('abort',()=>setTimeout(()=>reject(new Error('中止')),30),{once:true}));});
+  try{
+    const started=prompt.start(directory,'case','http://127.0.0.1',{sessionId:'session',expectedRevision:3,executionId:'stop-prompt'},state);
+    expect(await prompt.stopAll(5000)).toBe(true);
+    expect(prompt.job(directory,started.id).status.phase).toBe('cancelled');
+  }finally{await rm(directory,{recursive:true,force:true});}
+  const other=await mkdtemp(join(tmpdir(),'native-export-stop-stuck-'));let release!:()=>void;
+  const stuck=new SequenceExports(()=>new Promise<void>(resolve=>{release=resolve;}));
+  try{
+    const started=stuck.start(other,'case','http://127.0.0.1',{sessionId:'session',expectedRevision:3,executionId:'stop-stuck'},state);
+    const began=Date.now();
+    expect(await stuck.stopAll(50)).toBe(false);
+    expect(Date.now()-began).toBeLessThan(2000);
+    release();await stuck.job(other,started.id).completion;
+  }finally{release?.();await rm(other,{recursive:true,force:true});}
+});
+it('the dev server waits (bounded) for running exports when it closes',async()=>{
+  const {smeServer}=await import('../plugin');const {sequenceExports}=await import('./exports');
+  const stopAll=vi.spyOn(sequenceExports,'stopAll').mockResolvedValue(true);
+  try{
+    const hook=smeServer().closeBundle;
+    expect(typeof hook).toBe('function');
+    await (hook as unknown as ()=>Promise<void>).call({});
+    expect(stopAll).toHaveBeenCalledTimes(1);
+  }finally{stopAll.mockRestore();}
+});

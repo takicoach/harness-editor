@@ -15,6 +15,7 @@ const DIFF: LearningDiffResponse = { cut: null, words: null, ses: null, undistil
   candidateKey: { jobId: 'job-1', documentId: 'doc-a', contentHash: 'c'.repeat(64) } };
 const RESULT: LearningApproveResponse = { cutRulesPromoted: 0, cutConflicts: 0, wordsPromoted: 0, wordConflicts: 0, telopRulesPromoted: 0,
   telopConflicts: 0, seRulesPromoted: 0, seConflicts: 0, undistilledCount: 1, recorded: { cut: 0, words: 0, telops: 1, ses: 0 }, alreadyRecorded: 0, promotedRules: [] };
+const PARTIAL_NOTE = '後から足した素材（1本）のカットは比べていません。その部分の字幕・効果音の候補は、最初はチェックを外しています';
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 function Harness() {
@@ -54,6 +55,36 @@ it('台帳の更新に失敗した承認は、完了画面に注意の1行を出
   await act(async () => fireEvent.click(view.getByRole('button', { name: '選択分を学習する' })));
   const done = await waitFor(() => view.getByRole('dialog', { name: '学習結果' }));
   expect(done.querySelector('[role="alert"]')?.textContent).toContain('スキル側の取り出し済み台帳を更新できませんでした');
+});
+
+it('後から足した素材がある案件で候補0件なら、注記を出し「閉じる」で承認を送らずに閉じる（学習を記録しない）', async () => {
+  const requests: Array<string | undefined> = [];
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+    requests.push(init?.method);
+    return init?.method === 'POST' ? json(200, RESULT)
+      : json(200, { ...DIFF, telops: [], partialNote: PARTIAL_NOTE, partialRanges: [] });
+  }));
+  const view = render(<Harness />);
+  const dialog = await waitFor(() => view.getByRole('dialog', { name: 'AIとの差分レビュー' }));
+  expect(dialog.textContent).toContain(PARTIAL_NOTE);
+  expect(dialog.textContent).toContain('学習は完了していません');
+  expect(view.queryByRole('button', { name: '選択分を学習する' })).toBeNull();
+  fireEvent.click(view.getByRole('button', { name: '閉じる' }));
+  expect(view.queryByRole('dialog')).toBeNull();
+  expect(requests.filter((method) => method === 'POST')).toEqual([]);
+  expect(requests).toHaveLength(1);
+});
+
+it('後から足した素材がある案件で承認すると、完了画面にも注記を出す', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) =>
+    init?.method !== 'POST' ? json(200, { ...DIFF, partialNote: PARTIAL_NOTE, partialRanges: [{ startFrame: 205, endFrame: 245 }] }) : json(200, RESULT)));
+  const view = render(<Harness />);
+  await waitFor(() => expect(view.getByRole('dialog', { name: 'AIとの差分レビュー' })).toBeTruthy());
+  // 足した素材の上の字幕（205–245）は最初はチェックが外れている。
+  expect(view.getAllByRole('checkbox').map((box) => (box as HTMLInputElement).checked)).toEqual([true, false]);
+  await act(async () => fireEvent.click(view.getByRole('button', { name: '選択分を学習する' })));
+  const done = await waitFor(() => view.getByRole('dialog', { name: '学習結果' }));
+  expect(done.querySelector('[role="note"]')?.textContent).toBe(PARTIAL_NOTE);
 });
 
 it('他のダイアログ（.preference-overlay）が開いている間は学習パネルを描かず、閉じたら描いてフォーカスする', async () => {

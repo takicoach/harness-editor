@@ -8,7 +8,16 @@ import type { InstructionInbox } from '../instructionInbox';
 import { getNextInstruction, reportInstructionStatus } from './tools';
 import type { EditorAgentService } from '../editorAgentService';
 import { editorToolInputError, registerEditorTools } from './editorTools';
+import { aiFocus, type AiFocusRegistry } from '../aiFocus';
+import { EDITOR_BRIEF } from '../../shared/agentPrompts';
+import { registerContextTools } from './contextTools';
+import { slidesAgent } from '../slides/agent';
+import { registerSlidesTools } from '../slides/mcpTools';
+import { thumbnailAgent } from '../thumbnail/agent';
+import { registerThumbnailTools, THUMBNAIL_MODE_DENIAL } from '../thumbnail/mcpTools';
 import { editorAgentRequestIdentifiers, publicEditorAgentError } from '../../shared/editorAgentErrors';
+import type { AiWriteGuard } from '../aiFocus';
+import { isAiTabRequest, noteAiTabMcp } from './aiTabClient';
 
 // ロングポーリングのブロック上限。5 分のプロンプトキャッシュ TTL 未満に保ち、
 // 再呼び出し時のコールド再計算（高額化）を避ける。
@@ -72,15 +81,25 @@ async function withRequestAbort<T>(
 }
 
 /** 受け箱の2操作に、利用可能なら型付き編集と案件・方針の読み取りを追加する。 */
-function buildMcpServer(inbox: InstructionInbox, editor?: EditorAgentService): McpServer {
-  const server = new McpServer({ name: 'harness-editor', version: '0.1.0' });
-  if (editor) registerEditorTools(server, editor);
+function buildMcpServer(inbox: InstructionInbox, editor: EditorAgentService | undefined, focus: AiFocusRegistry, guard: AiWriteGuard | undefined, origin: string): McpServer {
+  // 説明書は初期化時の説明と最初の依頼の両方に入れる（設計書 4。Codex が instructions を読むかは T0 の結果を参照）。
+  const server = new McpServer({ name: 'harness-editor', version: '0.1.0' }, { instructions: EDITOR_BRIEF });
+  // AI タブの土台: 今の画面と依頼時点を返す道具（依頼のたびに最初に呼ばせる）。
+  registerContextTools(server, { focus, sessions: editor ? () => editor.sessions.list() : undefined });
+  // guard は AI タブの接続だけに付く（依頼時点の案件にだけ書ける）。外からの接続は今までどおり。
+  if (editor) registerEditorTools(server, editor, guard);
+  // スライドの道具は編集画面が無くても使える（保存はサーバーの SlidesService が行う）。
+  registerSlidesTools(server, slidesAgent, guard);
+  // サムネの道具。書き込みは依頼の記録で守り、依頼時点は thumbnail_begin だけが見る（AI タブの接続だけ）。
+  registerThumbnailTools(server, thumbnailAgent, { origin, beginGuard: guard
+    ? (projectId) => guard(projectId) ?? (focus.request()?.mode === 'thumbnail' ? null : THUMBNAIL_MODE_DENIAL) : undefined });
 
   server.registerTool(
     'get_next_instruction',
     {
       title: '次の編集指示を取得',
       description:
+        '非推奨（AI タブは待機しない。外から使う人のために 1 版残す）。' +
         'エディタ画面から届いた未処理の編集指示を 1 件取り出す。無ければサーバ側で最大 waitMs ' +
         'ブロックして待つ（待機中はトークンを消費しない）。字幕本文はeditor_read→editor_validate→editor_applyを優先し、人の未保存編集を保護する。未対応操作は能力と既存案件の契約を確認する。',
       inputSchema: {
@@ -113,7 +132,7 @@ function buildMcpServer(inbox: InstructionInbox, editor?: EditorAgentService): M
       title: '編集指示の結果を報告',
       description: '指示の処理結果（done/failed）と一言返答を画面へ書き戻す。編集が終わったら必ず呼ぶ。',
       inputSchema: {
-        id: z.string().describe('get_next_instruction が返した指示 id'),
+        id: z.string().describe('依頼文の末尾の「（依頼 #12）」の番号（#12 でも 12 でもよい）、または get_next_instruction が返した指示 id'),
         status: z.enum(['done', 'failed']),
         reply: z.string().describe('画面に表示する一言（例: テロップを赤にしました / 対象が特定できません）'),
       },
@@ -194,7 +213,10 @@ export async function handleMcpRequest(
   inbox: InstructionInbox,
   parsedBody: unknown,
   editor?: EditorAgentService,
+  focus: AiFocusRegistry = aiFocus,
 ): Promise<void> {
+  const aiTab = isAiTabRequest(req.url);
+  if (aiTab) noteAiTabMcp();
   const sessionId = req.headers['mcp-session-id'];
   if (typeof sessionId === 'string') {
     const existing = transports.get(sessionId);
@@ -243,7 +265,8 @@ export async function handleMcpRequest(
   transport.onclose = () => {
     if (transport.sessionId && transports.get(transport.sessionId) === entry) transports.delete(transport.sessionId);
   };
-  const server = buildMcpServer(inbox, editor);
+  const origin = `http://127.0.0.1:${req.socket.localPort ?? 0}`;
+  const server = buildMcpServer(inbox, editor, focus, aiTab ? (projectId) => focus.checkWriteTarget(projectId) : undefined, origin);
   await server.connect(transport);
   if (editor) installEditorInputValidation(transport);
   await withRequestAbort(req, res, undefined, parsedBody,

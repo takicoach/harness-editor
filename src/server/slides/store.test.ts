@@ -1,0 +1,86 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { slidesFixture } from '../../core/slides/fixtures';
+import { designProcessAlive } from '../design/documentStore';
+import { ThumbnailStore } from '../thumbnail/store';
+import { SlidesStore } from './store';
+
+const directories: string[] = [];
+afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
+function project(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'slides-store-'));
+  directories.push(directory); mkdirSync(join(directory, '.harness'));
+  return directory;
+}
+const deadPid = (): number => spawnSync(process.execPath, ['-e', '']).pid!;
+const changed = (revision: number, notes: string) => { const document = slidesFixture(); document.revision = revision; document.pages[0]!.notes = notes; return document; };
+
+describe('SlidesStore（保存の共通部品）', () => {
+  it('形式は harness-slides。同じ実行 ID の再送は二重に書かない', () => {
+    const store = new SlidesStore(project()), document = slidesFixture();
+    expect(store.save({ expectedSavedRevision: null, executionId: 'save-1', document })).toMatchObject({ replayed: false, savedRevision: 0 });
+    const bytes = readFileSync(store.file, 'utf8');
+    expect(store.save({ expectedSavedRevision: null, executionId: 'save-1', document })).toMatchObject({ replayed: true, appliedRevision: 0 });
+    expect(readFileSync(store.file, 'utf8')).toBe(bytes);
+    expect(JSON.parse(bytes)).toMatchObject({ format: 'harness-slides', version: 1, receipts: [expect.objectContaining({ executionId: 'save-1' })] });
+    expect(store.file.endsWith(join('.harness', 'slides.v1.json'))).toBe(true);
+    expect(() => store.save({ expectedSavedRevision: null, executionId: 'save-1', document: changed(1, '別') })).toThrow('同じ保存IDに異なる内容があります');
+  });
+  it('保存のたびに直前の正常版を控えに残す。古い版からの保存は断る', () => {
+    const store = new SlidesStore(project());
+    store.save({ expectedSavedRevision: null, executionId: 'a', document: slidesFixture() });
+    store.save({ expectedSavedRevision: 0, executionId: 'b', document: changed(1, '変更後') });
+    expect(JSON.parse(readFileSync(store.backupFile, 'utf8')).document.pages[0].notes).toBe('');
+    expect(() => store.save({ expectedSavedRevision: 0, executionId: 'c', document: changed(2, '古い版から') })).toThrow('保存済みのスライドが更新されています');
+  });
+  it('持ち主のプロセスが無いロックは回収し、使用中のロックは奪わない', () => {
+    const store = new SlidesStore(project()), pid = deadPid();
+    expect(designProcessAlive(pid)).toBe(false);
+    writeFileSync(store.lockFile, JSON.stringify({ pid, startedAt: '2026-10-04T00:00:00.000Z' }));
+    store.save({ expectedSavedRevision: null, executionId: 'a', document: slidesFixture() });
+    expect(existsSync(store.lockFile)).toBe(false);
+    writeFileSync(store.lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    expect(() => store.save({ expectedSavedRevision: 0, executionId: 'b', document: changed(1, 'x') })).toThrow('別の保存処理が進行中です');
+    expect(JSON.parse(readFileSync(store.lockFile, 'utf8')).pid).toBe(process.pid);
+  });
+  it('読めないロックは 30 秒を過ぎるまで奪わない。古いロックは回収し、解除は持ち主の nonce のときだけ', () => {
+    const store = new SlidesStore(project());
+    writeFileSync(store.lockFile, '');
+    expect(() => store.save({ expectedSavedRevision: null, executionId: 'a', document: slidesFixture() })).toThrow('別の保存処理が進行中です');
+    const old = new Date(Date.now() - 60_000); utimesSync(store.lockFile, old, old);
+    expect(() => store.save({ expectedSavedRevision: null, executionId: 'a', document: slidesFixture() })).not.toThrow();
+    writeFileSync(store.lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date(Date.now() - 10 * 60_000).toISOString(), nonce: 'old' }));
+    store.save({ expectedSavedRevision: 0, executionId: 'b', document: changed(1, 'x') });
+    expect(existsSync(store.lockFile)).toBe(false);
+    const other = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), nonce: 'other' });
+    writeFileSync(store.lockFile, other);
+    (store as unknown as { releaseLock(nonce: string): void }).releaseLock('mine');
+    expect(readFileSync(store.lockFile, 'utf8')).toBe(other);
+  });
+  it('壊れたファイルは改名して保全し、控えから復旧できる', () => {
+    const directory = project(), store = new SlidesStore(directory);
+    store.save({ expectedSavedRevision: null, executionId: 'a', document: slidesFixture() });
+    store.save({ expectedSavedRevision: 0, executionId: 'b', document: changed(1, '最新') });
+    writeFileSync(store.file, '{壊れた');
+    const result = store.load();
+    expect(result.kind).toBe('broken');
+    if (result.kind !== 'broken') return;
+    expect(result.preservedFile).toMatch(/^slides\.v1\.broken-.+\.json$/);
+    expect(readFileSync(join(directory, '.harness', result.preservedFile), 'utf8')).toBe('{壊れた');
+    expect([existsSync(store.file), store.brokenFiles(), store.hasBackup()]).toEqual([false, [result.preservedFile], true]);
+    expect(store.recoverFromBackup('recover-1').document.pages[0]!.notes).toBe('');
+  });
+  it('衝突時の退避ファイルを作る', () => {
+    const directory = project(), name = new SlidesStore(directory).evacuate(changed(3, '退避'));
+    expect(name).toMatch(/^slides\.v1\.unsaved-.+\.json$/);
+    expect(JSON.parse(readFileSync(join(directory, '.harness', name), 'utf8')).document.pages[0].notes).toBe('退避');
+  });
+  it('サムネのロックとは別なので、サムネの保存中でもスライドは保存できる', () => {
+    const directory = project();
+    writeFileSync(new ThumbnailStore(directory).lockFile, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), nonce: 'thumb' }));
+    expect(() => new SlidesStore(directory).save({ expectedSavedRevision: null, executionId: 'a', document: slidesFixture() })).not.toThrow();
+  });
+});

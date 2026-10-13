@@ -2,7 +2,7 @@
 import {act,cleanup,renderHook} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {DragEvent} from 'react';
-import {useNativeAssetDrop} from './useNativeAssetDrop';
+import {LIBRARY_TYPE,useNativeAssetDrop} from './useNativeAssetDrop';
 
 afterEach(()=>{cleanup();document.body.replaceChildren();});
 function setup(){
@@ -66,4 +66,35 @@ it('moving inside the current track does not retire its placement cursor',()=>{
   const h=setup(),track=document.createElement('div'),child=document.createElement('span');track.dataset.nativeTrack='track';track.append(child);h.element.append(track);h.start();h.over();
   act(()=>child.dispatchEvent(new Event('dragover',{bubbles:true})));
   expect(h.hook.result.current.preview).toEqual({frame:18,trackId:'track'});
+});
+
+function librarySetup(withDrop=true){
+  const element=document.createElement('div');document.body.append(element);
+  const dropLibrary=vi.fn(),valid=vi.fn(()=>false);
+  const props={scroller:{current:element},ownerKey:'A:1',disabled:false,position:(x:number)=>x-132,valid,drop:vi.fn(),...(withDrop?{dropLibrary}:{})};
+  const hook=renderHook(()=>useNativeAssetDrop(props));
+  const event=(x=150)=>({clientX:x,clientY:50,preventDefault:vi.fn(),relatedTarget:null,dataTransfer:{types:[LIBRARY_TYPE],getData:()=>'media:se/a.wav',dropEffect:''}} as unknown as DragEvent);
+  const start=()=>act(()=>{const e=new Event('dragstart');Object.defineProperty(e,'dataTransfer',{value:{types:[LIBRARY_TYPE]}});window.dispatchEvent(e);});
+  return {props,dropLibrary,valid,hook,event,start};
+}
+it('accepts a library drag: over previews, drop calls dropLibrary without asset validation',()=>{
+  const h=librarySetup();h.start();const over=h.event();act(()=>h.hook.result.current.over(over,'track'));
+  expect(over.preventDefault).toHaveBeenCalled();expect(h.hook.result.current.preview).toEqual({frame:18,trackId:'track'});
+  act(()=>h.hook.result.current.drop(h.event(),'track'));
+  expect(h.dropLibrary).toHaveBeenCalledExactlyOnceWith('media:se/a.wav',18,'track');expect(h.valid).not.toHaveBeenCalled();expect(h.hook.result.current.preview).toBeNull();
+});
+it('ignores a library drag when dropLibrary is not provided',()=>{
+  const h=librarySetup(false);h.start();const over=h.event();act(()=>h.hook.result.current.over(over,'track'));
+  expect(over.preventDefault).not.toHaveBeenCalled();expect(h.hook.result.current.preview).toBeNull();
+  const drop=h.event();act(()=>h.hook.result.current.drop(drop,'track'));expect(drop.preventDefault).not.toHaveBeenCalled();expect(h.dropLibrary).not.toHaveBeenCalled();
+});
+it('does not place a library drag after Escape, and a new drag works', ()=>{
+  const h=librarySetup();h.start();act(()=>h.hook.result.current.over(h.event(),'track'));
+  act(()=>{window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));});
+  act(()=>h.hook.result.current.drop(h.event(),'track'));expect(h.dropLibrary).not.toHaveBeenCalled();
+  h.start();act(()=>h.hook.result.current.over(h.event(),'track'));act(()=>h.hook.result.current.drop(h.event(),'track'));expect(h.dropLibrary).toHaveBeenCalledTimes(1);
+});
+it('owner change retires an ongoing library drag',()=>{
+  const h=librarySetup();h.start();act(()=>h.hook.result.current.over(h.event(),'track'));
+  h.props.ownerKey='B:2';h.hook.rerender();act(()=>h.hook.result.current.drop(h.event(),'track'));expect(h.dropLibrary).not.toHaveBeenCalled();
 });

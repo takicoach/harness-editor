@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {stageTranscriptionScript} from './runtime-support.mjs';
 
-test('packaged runtime resolves the transcription script from src/server and src/server/sequence', async () => {
+test('packaged runtime resolves the transcription script from both server entry points', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'desktop-runtime-support-'));
   const source = join(scratch, 'source'), runtime = join(scratch, 'runtime');
   try {

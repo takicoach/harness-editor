@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isLocalHostHeader } from './localGuard';
 import { ptySessions } from './ptySession';
+import { handleTerminalInput } from './aiTerminalInput';
 
 const TOKEN_TTL_MS = 30_000;
 const MAX_INPUT_CHARS = 8192;
@@ -109,9 +110,13 @@ function attachWriter(ws: WebSocket): void {
     // 制御メッセージと識別できず接続状態を偽装されうる（codex-review 2026-08-03 指摘）。
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'data', data: chunk }));
   });
-  detachExit = ptySessions.onExit((code) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'exit', code }));
+  detachExit = ptySessions.onExit((code, reason) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'exit', code, reason }));
   });
+  // 接続より先に終わっていた（Codex のログイン切れは 1 秒ほどで終わる）なら、ここで終了を知らせる。
+  if (ptySessions.state() === 'exited') {
+    ws.send(JSON.stringify({ type: 'exit', code: ptySessions.lastExitCode() ?? -1, reason: ptySessions.lastExitReason() }));
+  }
   const onMessage = (raw: WebSocket.RawData): void => {
     // 主防御その1: close() の30秒猶予中に旧 ws の message ハンドラが生き残っていても、
     // 自分が現在の writer でなければ何もしない（takeover 後の書き込み継続を防ぐ）。
@@ -141,6 +146,8 @@ function attachWriter(ws: WebSocket): void {
     }
     if (msg.type === 'input' && typeof msg.data === 'string' && msg.data.length <= MAX_INPUT_CHARS) {
       ptySessions.write(msg.data);
+      // AI タブの土台: 送信（Enter）の瞬間の主画面の状況を「依頼時点」として残す。
+      handleTerminalInput(msg.data);
     } else if (msg.type === 'resize' && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
       ptySessions.resize(msg.cols, msg.rows);
     }

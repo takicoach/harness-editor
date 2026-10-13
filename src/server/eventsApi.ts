@@ -13,7 +13,7 @@
  *
  * id 無し（ホーム画面）: projects チャネルのみ。
  * id 有り（エディタ画面）: projects・watch・claude・render・denoise・normalize・
- * preview-proxy・transcribe の全チャネル。
+ * preview-proxy・transcribe・imports・copy-jobs の全チャネル。
  *
  * ## GET /api/events/sync?id=<projectId>&ch=<channel>（キャッチアップ用・2026-07-23 追加）
  *
@@ -27,7 +27,7 @@
  * メッセージ処理経路（`nextRenderState` 等の reducer）へ順に流し込んでから、以降はバス購読
  * に委ねる。sync とバスイベントの順序レースは snapshot が正なので許容する
  * （旧・接続ごと EventSource 方式でも同様のレースはあった）。
- * 対象 ch: `claude`/`render`/`denoise`/`normalize`/`preview-proxy`/`transcribe`。
+ * 対象 ch: `claude`/`render`/`denoise`/`normalize`/`preview-proxy`/`transcribe`/`imports`（取り込みの束の一覧）/`copy-jobs`（速いドライブへのコピーの作業の一覧）。
  * `projects`/`watch` は対象外（`useProjectsWatch` は初期 REST fetch を別途持つ・
  * `watch` は「外部変更フラグ」のみで保持すべき初期状態が無い）。
  * **sync は読み取り専用**（M-1・2026-07-23 追補）: terminal ジョブの snapshot を返す場合も
@@ -36,6 +36,8 @@
  * （sync がもう1箇所の破棄経路になると、複数タブから同時に sync が飛んだ場合に
  * どちらが「観測者」だったか曖昧になり、接続中の wireJobChannel 側が discard 済みの
  * ジョブを見て取りこぼす競合を生みうるため）。
+ * 例外: `copy-jobs` の一覧（接続時・sync）は、その案件に初めて触れた時に終わったプロセスのコピーの作業を回収する
+ * （記録の書き換えと、記録にある自分の途中のファイルの削除がありうる。2回目からは書かない。mediaCopyJobs.list）。
  *
  * 契約: SSE は**この 1 本へ統合**する。新しい通知が要るときは新エンドポイントを
  * 足すのではなく、このイベント経路のチャネルを増やす。
@@ -54,6 +56,10 @@ import { normalizeJobs } from './normalizeApi';
 import { previewProxyJobs } from './previewProxyApi';
 import { transcribeJobs } from './transcribeApi';
 import { sequenceService } from './sequence/service';
+import { importBatches } from './sequence/importBatches';
+import { copyJobsRoot, mediaCopyJobs } from './sequence/mediaCopy/jobs';
+import { thumbnailService } from './thumbnail/service';
+import { slidesService } from './slides/service';
 
 const HEARTBEAT_MS = 25_000;
 
@@ -216,6 +222,45 @@ function wireWatchChannel(
   }
 }
 
+/** imports チャネル（取り込みの束の一覧型）。接続時・変化ごとに案件の束を全部送る（sync と共用）。 */
+export function importChannelMessages(root: string, projectId: string): unknown[] {
+  try { return [{ type: 'list', batches: importBatches.list(resolveProjectDir(root, projectId)) }]; }
+  catch { return [{ type: 'list', batches: [] }]; }
+}
+function wireImportsChannel(root: string, projectId: string, send: (ch: string, msg: unknown) => void): () => void {
+  for (const message of importChannelMessages(root, projectId)) send('imports', message);
+  try {
+    return importBatches.subscribe(resolveProjectDir(root, projectId), () => { for (const message of importChannelMessages(root, projectId)) send('imports', message); });
+  } catch { return () => {}; }
+}
+
+/**
+ * copy-jobs チャネル（速いドライブへのコピーの作業の一覧型。設計 §6）。接続時・変化ごとに案件の作業を全部送る（sync と共用）。
+ * 通知の再接続・案件を開き直した時は、接続時の一覧で取り直す。案件の鍵は窓口と同じ copyJobsRoot（ディスク上の形）。
+ * 一覧はその案件に初めて触れた時に終わったプロセスの作業を回収する（記録の書き換え・自分の途中のファイルの削除がありうる。2回目からは書かない）。
+ */
+export async function copyJobChannelMessages(root: string, projectId: string): Promise<unknown[]> {
+  try { return [{ type: 'list', jobs: await mediaCopyJobs.list(copyJobsRoot(resolveProjectDir(root, projectId))) }]; }
+  catch { return [{ type: 'list', jobs: [] }]; }
+}
+function wireCopyJobsChannel(root: string, projectId: string, send: (ch: string, msg: unknown) => void): () => void {
+  // 一覧はディスクを読むので非同期。読みは同時に1本だけにし、読んでいる間に変化があれば読み終えてからもう1回だけ読む
+  // （古い一覧が新しい一覧の後に届かない・変化を取りこぼさない・進み具合の通知のたびに読みを積み重ねない）。
+  let closed = false, reading = false, again = false;
+  const push = (): void => {
+    if (closed) return;
+    if (reading) { again = true; return; }
+    reading = true; again = false;
+    void copyJobChannelMessages(root, projectId).then((messages) => {
+      if (!closed) for (const message of messages) send('copy-jobs', message);
+    }).finally(() => { reading = false; if (again) push(); });
+  };
+  push();
+  let stop = (): void => {};
+  try { stop = mediaCopyJobs.subscribe(copyJobsRoot(resolveProjectDir(root, projectId)), push); } catch { /* 無い案件・不正な ID は一覧（空）だけ */ }
+  return () => { closed = true; stop(); };
+}
+
 /** claude チャネルの「今つないだら最初に届くはずのメッセージ列」（sync と共用）。 */
 function claudeChannelSnapshot(projectId: string): unknown[] {
   return instructionInbox.list(projectId).map((record) => ({ type: 'update', record }));
@@ -304,6 +349,16 @@ export function handleEventsSse(
       stops.push(sequenceService.subscribe(resolveProjectDir(root, projectId), () => send('sequence', { type: 'change' })));
       send('sequence', { type: 'open' });
     } catch { /* Missing projects still receive the established watch/error handling. */ }
+    stops.push(wireImportsChannel(root, projectId, send));
+    stops.push(wireCopyJobsChannel(root, projectId, send));
+    try {
+      // サムネ専用の変更通知（動画の sequence チャネルとは別）。案件が無いときは従来どおり watch が扱う。
+      stops.push(thumbnailService.subscribe(resolveProjectDir(root, projectId), event => send('thumbnail', event)));
+    } catch { /* 案件が無い */ }
+    try {
+      // スライド専用の変更通知（スライド案件のときだけ流れる）。
+      stops.push(slidesService.subscribe(resolveProjectDir(root, projectId), event => send('slides', event)));
+    } catch { /* 案件が無い */ }
     stops.push(wireClaudeChannel(projectId, send));
     stops.push(wireJobChannel('render', projectId, renderObservations, send,restoreRender));
     stops.push(wireJobChannel('denoise', projectId, denoiseJobs, send));

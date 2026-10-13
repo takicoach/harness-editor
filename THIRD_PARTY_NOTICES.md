@@ -406,7 +406,7 @@ Remotion は MIT ではなく独自ライセンス（Remotion License）で提�
 
 ## 同梱フォント（public/fonts/）
 
-SIL Open Font License 1.1。書体の一覧と原本は `public/fonts/LICENSES.md` と `public/fonts/fonts.manifest.json`、
+SIL Open Font License 1.1（Kosugi Maru だけ Apache License 2.0）。書体の一覧と原本は `public/fonts/LICENSES.md` と `public/fonts/fonts.manifest.json`、
 書体ごとのライセンス全文は `public/fonts/licenses/` にある。サブセット化のほかに改変はしていない。
 
 ## Cuelume（src/lib/vendor/cuelume/）

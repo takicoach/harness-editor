@@ -5,7 +5,7 @@
   "scripts": {
     "start": "electron main.cjs",
     "package:mac": "node build.mjs",
-    "test": "node --test policy.test.mjs server.test.mjs",
+    "test": "node --test policy.test.mjs server.test.mjs runtime-support.test.mjs",
     "build:media": "node build-media.mjs",
     "smoke": "node smoke.mjs"
   },

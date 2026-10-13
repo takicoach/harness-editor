@@ -5,7 +5,9 @@ import { transcriptIdentity } from '../../core/sequence/transcript';
 import { transcriptionActive,type NativeTranscriptionStatus } from '../../shared/nativeTranscription';
 import { nativeRequest,NativeApiError,type NativeSession } from './api';
 
-interface Props {projectId:string;occurrenceId:string;assetId:string;streamIndex:number;state:NativeSession;busy:boolean;read():NativeSession|null;accept(state:NativeSession):void}
+interface Props {projectId:string;occurrenceId:string;assetId:string;streamIndex:number;state:NativeSession;busy:boolean;read():NativeSession|null;accept(state:NativeSession):void;
+  /** 生成・確認・取り込みを始めた時。呼び出し側はここで対象の原音を固定する（再生位置で作り直されて操作が飛ばないように）。 */
+  onEngage?():void}
 const labels:Record<NativeTranscriptionStatus['phase'],string>={queued:'準備を待っています',preparing:'選んだ原音を準備しています','loading-model':'音声認識を準備しています',analyzing:'文字起こししています',writing:'結果を整理しています',completed:'文字起こしができました',failed:'文字起こしできませんでした',cancelled:'文字起こしを中止しました'};
 export function NativeTranscribeControl(props:Props) {
   const {projectId,assetId,streamIndex}=props;
@@ -31,7 +33,7 @@ export function NativeTranscribeControl(props:Props) {
     timer=setTimeout(poll,200);return()=>{controller.abort();clearTimeout(timer);};
   },[projectId,job?.id,job?.phase]);
   const run=async(work:()=>Promise<void>)=>{
-    const token=generation.current;setWorking(true);setError(null);
+    latest.current.onEngage?.();const token=generation.current;setWorking(true);setError(null);
     try{await work();}catch(error){if(token===generation.current)setError(error instanceof Error?error.message:String(error));}
     finally{if(token===generation.current)setWorking(false);}
   };

@@ -8,6 +8,7 @@ import {cacheDirectory,run,publishSequenceAudio} from './media';
 import {openSequenceAsset} from './assets';
 import {isSequenceReferenceFile} from './references';
 import {SharedPreparations} from './sharedPreparation';
+import {withFfmpegSlot} from './ffmpegGate';
 
 export interface SourceWindowAudioRequest {
   version:'source-window-v1';
@@ -97,7 +98,7 @@ export async function prepareSequenceSourceWindowAudio(projectDirectory:string,a
   signal?.throwIfAborted();
   const key=createHash('sha256').update(JSON.stringify([fingerprint,streamIndex,timing,info.size,isSequenceReferenceFile(asset.file)?0:info.mtimeMs,SOURCE_WINDOW_DSP_VERSION])).digest('hex');
   const directory=await cacheDirectory(projectDirectory,'source-window-audio'),destination=join(directory,`${key}.f32le`);
-  const result=await preparations.get(destination,async workSignal=>{
+  const result=await preparations.get(destination,async(workSignal,lane)=>{
     workSignal.throwIfAborted();
     const source=await openSequenceAsset(projectDirectory,asset,workSignal);
     try{
@@ -120,8 +121,8 @@ export async function prepareSequenceSourceWindowAudio(projectDirectory:string,a
     filters.push('aresample=48000');
     const temporary=join(directory,`${key}.${randomUUID()}.tmp`);
     try {
-      await run(ffmpeg.bin,['-hide_banner','-loglevel','error','-nostdin','-fd','3','-i','fd:','-map',`0:${streamIndex}`,'-vn',
-        '-af',filters.join(','),'-ac','2','-ar','48000','-f','f32le',temporary],workSignal,source.handle.fd);
+      await withFfmpegSlot(lane,workSignal,()=>run(ffmpeg.bin,['-hide_banner','-loglevel','error','-nostdin','-fd','3','-i','fd:','-map',`0:${streamIndex}`,'-vn',
+        '-af',filters.join(','),'-ac','2','-ar','48000','-f','f32le',temporary],workSignal,source.handle.fd));
       workSignal.throwIfAborted();
       const size=(await stat(temporary)).size;
       if(!Number.isSafeInteger(size)||size%8!==0)throw new Error('準備した音声PCMの長さが不正です');
@@ -132,7 +133,7 @@ export async function prepareSequenceSourceWindowAudio(projectDirectory:string,a
       await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});
     }
     }finally{await source.close();}
-  },signal);
+  },signal,'preview');
   // Shared work must not share mutable caller metadata.
   await caller.verify();signal?.throwIfAborted();return structuredClone(result);
   }finally{await caller.close();}

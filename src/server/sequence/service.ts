@@ -23,6 +23,9 @@ export interface SequenceSessionState {
   historyError?: string;
   externalChange?: { savedRevision: number; contentHash: string; summary: string };
 }
+/** 画面がいま見ている状態。これが同じなら /session/status は文書を省く（設計 §2-4）。 */
+export interface SequenceStatusKnown {revision:number;savedRevision:number;savedContentHash:string;canUndo:boolean;canRedo:boolean;historyError:string|null}
+export type SequenceStatusResponse = SequenceSessionState | { unchanged: true; sessionId: string };
 
 /** One editing authority per project. Human and AI requests use the same revision/undo history. */
 export class SequenceService {
@@ -38,9 +41,10 @@ export class SequenceService {
     for (const listener of this.listeners.get(realpathSync(directory)) ?? []) listener();
   }
   private state(open: OpenSession): SequenceSessionState {
-    return { sessionId: open.session.id, document: open.session.document, savedRevision: open.saved.savedRevision,
+    const document = open.session.document;
+    return { sessionId: open.session.id, document, savedRevision: open.saved.savedRevision,
       savedContentHash: open.saved.contentHash, canUndo: open.session.canUndo, canRedo: open.session.canRedo,
-      dirty: open.session.document.revision !== open.saved.savedRevision, ...(open.historyError?{historyError:open.historyError}:{}) };
+      dirty: document.revision !== open.saved.savedRevision, ...(open.historyError?{historyError:open.historyError}:{}) };
   }
   open(directory: string, preserveExternal = false): SequenceSessionState {
     const key = realpathSync(directory), saved = new SequenceStore(key).load();
@@ -59,7 +63,7 @@ export class SequenceService {
     current.historyError = historyError;
     return this.state(current);
   }
-  private observe(directory:string,saved:SavedSequence,own=false):string|undefined {
+  private observe(directory:string,saved:Pick<SavedSequence,'savedRevision'|'contentHash'>,own=false):string|undefined {
     try { observeExternalEdits(directory,saved,own); return undefined; }
     catch(error) { return `外部編集の履歴を記録できません: ${error instanceof Error?error.message:String(error)}`; }
   }
@@ -72,14 +76,31 @@ export class SequenceService {
     const key = realpathSync(directory), current = this.sessions.get(key);
     if (!current || (!followCurrent && current.session.id !== sessionId))
       throw new SequenceError('REVISION_CONFLICT', '編集セッションが変わりました。保存済みの内容を読み直してください');
-    const saved = new SequenceStore(key).load();
+    const saved = new SequenceStore(key).peek();
     if (!saved) throw new SequenceError('MISSING_TARGET', '保存済みの編集データが見つかりません');
     current.historyError = this.observe(key, saved);
     const state = this.state(current);
     if (saved.savedRevision !== current.saved.savedRevision || saved.contentHash !== current.saved.contentHash) {
       state.externalChange = { savedRevision: saved.savedRevision, contentHash: saved.contentHash,
-        summary: `保存版 ${current.saved.savedRevision} → ${saved.savedRevision}、クリップ ${current.saved.document.clips.length} → ${saved.document.clips.length} 件` };
+        summary: `保存版 ${current.saved.savedRevision} → ${saved.savedRevision}、クリップ ${current.saved.document.clips.length} → ${saved.clipCount} 件` };
     }
+    return state;
+  }
+  /** 定期の問い合わせ。編集版・保存版・内容ハッシュ・外部変更の有無・保存状態・セッション ID（と取り消し可否・履歴の警告）が手元と同じなら文書を省く。 */
+  status(directory: string, sessionId: string, known?: SequenceStatusKnown): SequenceStatusResponse {
+    const key = realpathSync(directory), current = this.sessions.get(key);
+    if (!current) throw new SequenceError('REVISION_CONFLICT', '編集セッションが変わりました。保存済みの内容を読み直してください');
+    const saved = new SequenceStore(key).peek();
+    if (!saved) throw new SequenceError('MISSING_TARGET', '保存済みの編集データが見つかりません');
+    current.historyError = this.observe(key, saved);
+    const external = saved.savedRevision !== current.saved.savedRevision || saved.contentHash !== current.saved.contentHash;
+    if (known && !external && current.session.id === sessionId && known.revision === current.session.revision
+      && known.savedRevision === current.saved.savedRevision && known.savedContentHash === current.saved.contentHash
+      && known.canUndo === current.session.canUndo && known.canRedo === current.session.canRedo && known.historyError === (current.historyError ?? null))
+      return { unchanged: true, sessionId };
+    const state = this.state(current);
+    if (external) state.externalChange = { savedRevision: saved.savedRevision, contentHash: saved.contentHash,
+      summary: `保存版 ${current.saved.savedRevision} → ${saved.savedRevision}、クリップ ${current.saved.document.clips.length} → ${saved.clipCount} 件` };
     return state;
   }
   reload(directory: string, sessionId: string, expectedRevision: number, savedRevision: number, contentHash: string, onlyIfClean = false): SequenceSessionState {
@@ -94,7 +115,7 @@ export class SequenceService {
   private current(directory: string, sessionId: string): OpenSession {
     const key = realpathSync(directory), open = this.sessions.get(key);
     if (!open || open.session.id !== sessionId) throw new SequenceError('REVISION_CONFLICT', '編集セッションが変わりました。保存済みの内容を読み直してください');
-    const saved = new SequenceStore(key).load();
+    const saved = new SequenceStore(key).peek();
     if (!saved || saved.savedRevision !== open.saved.savedRevision || saved.contentHash !== open.saved.contentHash)
       throw new SequenceError('REVISION_CONFLICT', '保存済みの内容が別の画面または外部で変更されています');
     return open;

@@ -28,6 +28,7 @@ import { previewNativeScriptEdit,inspectNativeSavedScriptEdit } from './scriptEd
 import { sequenceScriptEditCommand } from '../../core/sequence/scriptEdits';
 import { sequenceContentHash } from './store';
 import { planTransition, transitionJoins } from '../../core/sequence/transitions';
+import { rational } from '../../core/sequence/time';
 
 let mediaRoot: string, root: string, project: string, server: Server, origin: string;
 it('suggests the original project name with a ハーネス prefix for downloaded movies',()=>{
@@ -238,6 +239,48 @@ describe('native sequence HTTP boundary', () => {
       command:{type:'replace-text-style-asset',fromAssetId:'missing-a',toAssetId:'missing-b'}});
     expect(accepted.status,await accepted.clone().text()).not.toBe(400);
   });
+  it('update-archived-clip は HTTP では受け付けない（単独でも batch の中でも 400）。core の部品としてだけ使う',async()=>{
+    await migrate();const initial=await open();
+    const cut=await post('/command',{sessionId:initial.sessionId,expectedRevision:initial.document.revision,executionId:'cut',command:{type:'ripple-delete',startFrame:10,endFrame:20}});
+    expect(cut.status,await cut.clone().text()).toBe(200);const state:SequenceSessionState=await cut.json();
+    const entry=state.document.cutArchive!.entries[0]!,saved=entry.clips[0]!,leaf={type:'update-archived-clip',entryId:entry.id,clipId:saved.id,patch:{name:'x',content:saved.content}};
+    for(const [index,command] of [leaf,{type:'batch',commands:[leaf]}].entries()){
+      const response=await post('/command',{sessionId:state.sessionId,expectedRevision:state.document.revision,executionId:`archived-over-http-${index}`,command});
+      expect(response.status).toBe(400);expect((await response.json()).error).toBe('未対応の編集操作です');
+    }
+  },60000);
+  it('swap-usage-content: 形の不正と batch の中は 400、50件を超える BGM の使用箇所でも編集操作1件として受け付け、Undo 1回で戻る',async()=>{
+    await migrate();const initial=await open();
+    // 素材の音声を BGM として1本置き、29 か所を1フレームずつカットして live 30 片＋退避 29 片に分ける（batch の葉は 31 件で予算内）。
+    const media=initial.document.assets.find(a=>a.kind==='media'&&a.streams.some(s=>s.kind==='audio'))!,stream=media.streams.find(s=>s.kind==='audio')!;
+    const bgm={id:'bgm-test',name:'BGM',trackId:'bgm-track',startFrame:0,durationFrames:60,clock:{offset:rational(0),rate:rational(1),duration:rational(60)},
+      content:{kind:'audio',assetId:media.id,streamIndex:stream.index,sourceIn:rational(0),rate:rational(1),role:'music',loop:false,settings:{gainDb:-12,muted:false,fadeInFrames:0,fadeOutFrames:0}}};
+    const cuts=Array.from({length:29},(_,i)=>({type:'ripple-delete',startFrame:2*(28-i)+1,endFrame:2*(28-i)+2}));
+    const cut=await post('/command',{sessionId:initial.sessionId,expectedRevision:initial.document.revision,executionId:'cuts',
+      command:{type:'batch',commands:[{type:'add-track',track:{id:'bgm-track',kind:'audio',name:'BGM',enabled:true}},{type:'insert',clips:[bgm]},...cuts]}});
+    expect(cut.status,await cut.clone().text()).toBe(200);const state:SequenceSessionState=await cut.json();
+    const live=state.document.clips.filter(c=>c.trackId==='bgm-track').sort((a,b)=>a.startFrame-b.startFrame);
+    const archived=state.document.cutArchive!.entries.flatMap(e=>e.clips.filter(c=>c.trackId==='bgm-track').map(c=>({entryId:e.id,clip:c})));
+    expect(live.length+archived.length).toBeGreaterThan(50);
+    const swap={type:'swap-usage-content',live:live.map(c=>({clipId:c.id,patch:{name:`${c.name}・替`,content:c.content}})),archived:archived.map(x=>({entryId:x.entryId,clipId:x.clip.id,patch:{name:`${x.clip.name}・替`,content:x.clip.content}}))};
+    const item=swap.live[0]!,bad=(over:Record<string,unknown>)=>({...swap,...over});
+    for(const [index,command] of [bad({live:'x'}),bad({archived:undefined}),bad({live:[null]}),bad({live:[{...item,clipId:'../x'}]}),bad({archived:[{entryId:5,clipId:'a',patch:item.patch}]}),
+      bad({live:[{...item,patch:{...item.patch,visual:{}}}]}),bad({live:[{...item,patch:{name:3,content:item.patch.content}}]}),bad({live:[{...item,patch:{name:'x'}}]}),bad({live:[{...item,extra:1}]}),
+      bad({live:Array.from({length:5001},()=>item),archived:[]}),{type:'batch',commands:[swap]}].entries()){
+      const response=await post('/command',{sessionId:state.sessionId,expectedRevision:state.document.revision,executionId:`bad-swap-usage-${index}`,command});
+      expect(response.status,`${index}`).toBe(400);expect((await response.json()).code,`${index}`).toBeUndefined(); // transport の拒否（文書側の SequenceError ではない）
+    }
+    // 形は正しいが使用箇所の一部だけ: 文書側が拒否する。
+    const partial=await post('/command',{sessionId:state.sessionId,expectedRevision:state.document.revision,executionId:'swap-usage-partial',command:bad({live:swap.live.slice(0,1)})});
+    expect(partial.status).toBe(400);expect(await partial.json()).toMatchObject({code:'INVALID_RANGE',error:'使用箇所の全体を差し替えてください'});
+    const adopted=await post('/command',{sessionId:state.sessionId,expectedRevision:state.document.revision,executionId:'swap-usage',command:swap});
+    expect(adopted.status,await adopted.clone().text()).toBe(200);const after:SequenceSessionState=await adopted.json();
+    expect(after.document.revision).toBe(state.document.revision+1);
+    for(const c of live)expect(after.document.clips.find(x=>x.id===c.id)!.name).toBe(`${c.name}・替`);
+    for(const x of archived)expect(after.document.cutArchive!.entries.find(e=>e.id===x.entryId)!.clips.find(c=>c.id===x.clip.id)!.name).toBe(`${x.clip.name}・替`);
+    const undone=await post('/command',{sessionId:state.sessionId,expectedRevision:after.document.revision,executionId:'undo-swap-usage',command:{type:'undo'}});
+    expect(undone.status).toBe(200);expect(sequenceContentBytes((await undone.json()).document)).toBe(sequenceContentBytes(state.document));
+  },60000);
   it('registers native styles while preserving frozen project styles, rejects stale requests, and persists the catalog',async()=>{
     await migrate();const initial=await open(),original=initial.document.rendering!.telopComponentAssetId!;
     const path=join(project,'src/テロップテンプレート/Telop.tsx'),source=await readFile(path,'utf8');
@@ -429,8 +472,14 @@ describe('native sequence HTTP boundary', () => {
   it('serves bounded source waveform bins from verified managed PCM with rate, source offset and silence',async()=>{
     await migrate();const saved=new SequenceStore(project).load()!,asset=saved.document.assets.find(a=>a.kind==='media')!;
     const query=new URLSearchParams({id:'case',asset:asset.id,stream:'1',rateNum:'2',rateDen:'1',sourceInNum:'1',sourceInDen:'2',fpsNum:'30',fpsDen:'1',startFrame:'-1',frameCount:'5',clipFrames:'3',bins:'5',loop:'0'});
-    const response=await fetch(`${origin}/api/sequence/waveform?${query}`),result=await response.json();expect(response.status).toBe(200);
-    expect(result.precision).toBe('prepared-pcm-sample-floor');expect(result.sampleRate).toBe(48000);expect(result.bins).toHaveLength(5);
+    // 波形は「準備中／完了／失敗」で答える（設計 §2-2）。音声の準備が猶予（150ms）を越えたら準備IDの完了を待って取り直す。
+    let response=await fetch(`${origin}/api/sequence/waveform?${query}`),result=await response.json();expect(response.status).toBe(200);
+    if(result.state==='preparing'){
+      let state='preparing';for(let i=0;i<100&&state==='preparing';i++){await new Promise(resolve=>setTimeout(resolve,50));
+        state=(await (await fetch(`${origin}/api/sequence/waveform/status?id=case&preparation=${result.preparationId}`)).json()).preparations[result.preparationId].state;}
+      response=await fetch(`${origin}/api/sequence/waveform?${query}`);result=await response.json();expect(response.status).toBe(200);
+    }
+    expect(result.state).toBe('ready');expect(result.precision).toBe('prepared-pcm-sample-floor');expect(result.sampleRate).toBe(48000);expect(result.bins).toHaveLength(5);
     expect(result.bins[0]).toEqual({peak:0,rms:0,samples:1600});expect(result.bins[4]).toEqual({peak:0,rms:0,samples:1600});
     expect(result.bins[1].peak).toBeGreaterThan(.01);expect(result.bins[1].rms).toBeGreaterThan(.005);
     expect(JSON.stringify(result)).not.toContain(project);expect(result.request.rate).toEqual({num:2,den:1});

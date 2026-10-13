@@ -371,6 +371,31 @@ describe('接続制御 — takeover・pendingCount・maxPayload（実 http+ws �
     };
   }
 
+  it('接続より先に終わっていたら、接続した時に終了（ログイン切れの理由つき）を知らせる', async () => {
+    const { handlePtyUpgrade, ptyTokens, ptySessions } = await loadFresh();
+    const dir = mkdtempSync(join(tmpdir(), 'sme-ptyapi-early-exit-'));
+    mkdirSync(join(dir, 'projects-root'));
+    const fake = join(dir, 'fake-codex.mjs');
+    writeFileSync(fake, 'process.stdout.write("Error: account/read failed during TUI bootstrap: unauthorized (401)\\n");setTimeout(()=>process.exit(1),20);');
+    const { server, port } = await startServer(handlePtyUpgrade);
+    const clients: WsClient[] = [];
+    try {
+      expect((await ptySessions.ensure({ editorDir: dir, projectRoot: join(dir, 'projects-root'), env: { ...process.env, SME_CODEX_BIN: fake }, tool: 'codex' })).ok).toBe(true);
+      await vi.waitFor(() => expect(ptySessions.state()).toBe('exited'), { timeout: 5000 });
+      const client = connectClient(port);
+      clients.push(client);
+      await once(client, 'open');
+      const exit = waitForJsonMessage(client, (m) => m.type === 'exit');
+      client.send(JSON.stringify({ type: 'auth', token: ptyTokens.issue() }));
+      expect(await exit).toMatchObject({ type: 'exit', code: 1, reason: 'auth' });
+    } finally {
+      terminateAll(clients);
+      ptySessions.killAll();
+      await closeServer(server);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('pty の生出力は {type:"data"} で框付けされ、制御 JSON と同じ文字列を出力しても exit として解釈されない', async () => {
     const { handlePtyUpgrade, ptyTokens, ptySessions } = await loadFresh();
     const dir = mkdtempSync(join(tmpdir(), 'sme-ptyapi-frame-'));
