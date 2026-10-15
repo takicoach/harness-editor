@@ -1,10 +1,15 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { basename, join, sep } from 'node:path';
+import { SequenceStore } from './sequence/store';
+import { buildEmptyDocument } from './sequence/createDocuments';
+import { publishThumbnail } from './thumbnail/exports';
+import { THUMBNAIL_EXPORT_FOLDER, thumbnailFileBase } from './thumbnail/cover';
 import {
   projectIdFromWatchedPath,
   serializeStatusForCompare,
+  type ProjectStatusEvent,
   startupMissedEvents,
   watchAllProjectsStatus,
 } from './projectsWatch';
@@ -276,4 +281,49 @@ describe('startupMissedEvents', () => {
     const baseline = new Map<string, string>([['gone', JSON.stringify({ id: 'gone', status: 'idle' })]]);
     expect(startupMissedEvents(['gone'], baseline, () => null)).toEqual([]);
   });
+});
+
+describe('サーバー自身のサムネの書き出しは、ファイルの監視を待たずに一覧へ知らせる', () => {
+  // 2026-10-15: 試験全件を流した時に、書き出した直後のカードの画像が変わらないことがあった（7 回中 2 回）。
+  // 監視が最初に全部の案件を見回っている途中に サムネ フォルダと画像ができると、その変化を知らせ損ねる
+  // （案件 150 件・監視の直後に書き出すと 10 回中 5 回取りこぼした）。サーバー自身の書き込みはその場で知らせる。
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  let root = '';
+  afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }); root = ''; });
+  function sequenceProject(name: string): string {
+    const dir = join(root, name); mkdirSync(dir);
+    new SequenceStore(dir).save({ document: buildEmptyDocument(name, () => 'doc'), expectedSavedRevision: null, executionId: 'seed' });
+    return dir;
+  }
+  async function exportCover(dir: string): Promise<void> {
+    await publishThumbnail(join(dir, THUMBNAIL_EXPORT_FOLDER), thumbnailFileBase(basename(dir), '', true), '.png', PNG);
+  }
+  const coverEvent = (events: ProjectStatusEvent[], id: string) => events.find(event => event.id === id && event.thumbnailCover);
+
+  it('監視を始めた後に作った案件（ファイルの監視の外）でも、書き出すとカードの画像つきの知らせが届く', async () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'sme-cover-notify-')));
+    sequenceProject('before');
+    const events: ProjectStatusEvent[] = [];
+    const stop = watchAllProjectsStatus(root, event => events.push(event), { debounceMs: 20 });
+    try {
+      const later = sequenceProject('later');
+      await exportCover(later);
+      await expect.poll(() => coverEvent(events, 'later'), { timeout: 3000 }).toBeTruthy();
+      expect(coverEvent(events, 'later')!.thumbnailCover!.file).toBe(`${THUMBNAIL_EXPORT_FOLDER}/${thumbnailFileBase('later', '', true)}.png`);
+    } finally { stop(); }
+  });
+
+  it('案件が多く、監視の最初の見回りの途中に書き出しても、毎回知らせが届く', async () => {
+    for (let round = 0; round < 5; round++) {
+      root = realpathSync(mkdtempSync(join(tmpdir(), 'sme-cover-scan-')));
+      for (let i = 0; i < 150; i++) sequenceProject(`p${i}`);
+      const target = sequenceProject('target');
+      const events: ProjectStatusEvent[] = [];
+      const stop = watchAllProjectsStatus(root, event => events.push(event), { debounceMs: 20 });
+      try {
+        await exportCover(target);
+        await expect.poll(() => coverEvent(events, 'target'), { timeout: 3000, message: `${round + 1} 回目` }).toBeTruthy();
+      } finally { stop(); rmSync(root, { recursive: true, force: true }); root = ''; }
+    }
+  }, 60_000);
 });

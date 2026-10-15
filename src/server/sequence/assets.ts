@@ -9,7 +9,7 @@ import type { MediaStream, SequenceAsset } from '../../core/sequence/model';
 import { probeSequenceAsset, managedAssetPath } from './media';
 import type { ImageInspection } from './imageProbe';
 import { validateSequenceDocument } from '../../core/sequence/validate';
-import {isSequenceReferenceFile,openSequenceReference,registeredSequenceReferences} from './references';
+import {isSequenceReferenceFile,openSequenceReference,recordSequenceReferenceOrigin,registeredSequenceReferences} from './references';
 import {assertStillResolved,SOURCE_MOVED_MESSAGE,type ImportSourceOptions} from './sourceCheck';
 import {FileChangedError,fileIdentity,sharedFileDigest,sharedFileDigestUntilStalled} from './sharedDigest';
 import {watchedFs,type ReadLimit} from './fsWatch';
@@ -128,6 +128,8 @@ export async function registerAssetOrigin(
   const root = await realpath(projectDirectory);
   const asset = (await registeredSequenceAssets(root)).find(item => item.id === assetId);
   if (!asset) throw new Error('由来を記録する素材が見つかりません');
+  // リンク素材の登録情報は参照台帳にある。下の書き方（管理素材の台帳の形）で書くと参照台帳を上書きして壊す。
+  if (isSequenceReferenceFile(asset.file)) return recordSequenceReferenceOrigin(root, asset.file, origin);
   const metadata = join(root, asset.file) + '.json', temporary = `${metadata}.${randomUUID()}`;
   const handle = await open(temporary, 'wx', 0o600);
   try {

@@ -1,9 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { ThumbnailCommand, ThumbnailHistoryCommand } from '../../../core/thumbnail/commands';
 import type { ThumbnailContent, ThumbnailDocument, ThumbnailLayer, ThumbnailPage, ThumbnailVisual } from '../../../core/thumbnail/model';
 import type { RenderedSceneGeometry } from '../../../preview/native/renderGeometry';
 import { applyOverrides, layerBoxes, type LayerBox, type LayerOverride } from './canvasMath';
-import type { ThumbnailSessionHook } from './useThumbnailSession';
+import type { ThumbnailCommandInput, ThumbnailSessionHook } from './useThumbnailSession';
 
 export interface LayerPatch { name?: string; visual?: ThumbnailVisual; content?: ThumbnailContent }
 export interface ThumbnailEditor {
@@ -16,7 +15,7 @@ export interface ThumbnailEditor {
   unavailableAssetIds: ReadonlySet<string>;
   scale: number; setScale(scale: number): void; zoom: number | 'fit'; setZoom(zoom: number | 'fit'): void;
   disabled: boolean;
-  execute(command: ThumbnailCommand | ThumbnailHistoryCommand): Promise<boolean>;
+  execute(command: ThumbnailCommandInput): Promise<boolean>;
   updateLayers(changes: ReadonlyArray<{ layerId: string; patch: LayerPatch }>): Promise<boolean>;
   addLayer(layer: ThumbnailLayer, index?: number): Promise<boolean>;
   newLayerId(): string;

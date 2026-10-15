@@ -21,6 +21,14 @@ const videoDocument = (): SequenceDocument => ({ schemaVersion: 2, id: 'video', 
 const renamed = (revision: number, name: string) => { const document = thumbnailFixture(); document.revision = revision; document.pages[0]!.name = name; return document; };
 
 describe('ThumbnailStore', () => {
+  it('案件フォルダが消えた後の退避と保存は、フォルダを作り直さずに失敗する（消した案件の名前で中身の無いフォルダが残らない）', () => {
+    const directory = project(), store = new ThumbnailStore(directory);
+    rmSync(directory, { recursive: true, force: true });
+    expect(() => store.evacuate(thumbnailFixture())).toThrow();
+    expect(existsSync(directory)).toBe(false);
+    expect(() => store.save({ expectedSavedRevision: null, executionId: 'after-delete', document: thumbnailFixture() })).toThrow();
+    expect(existsSync(directory)).toBe(false);
+  });
   it('同じ実行 ID の再送は二重に書かない（受け入れ 10）', () => {
     const store = new ThumbnailStore(project()), document = thumbnailFixture();
     expect(store.save({ expectedSavedRevision: null, executionId: 'save-1', document })).toMatchObject({ replayed: false, savedRevision: 0 });

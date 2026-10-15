@@ -5,6 +5,11 @@ import { SequenceError } from '../../core/sequence/errors';
 import type { ThumbnailDocument } from '../../core/thumbnail/model';
 import { parseThumbnail, serializeThumbnail, thumbnailContentBytes } from '../../core/thumbnail/validate';
 
+// 保存先の .harness だけを作る。案件フォルダそのものは作らない（消えた案件の名前で中身の無いフォルダを残さない・2026-10-15）。
+function ensureHarnessDirectory(directory: string): void {
+  try { mkdirSync(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+}
+
 export const THUMBNAIL_FILE = 'thumbnail.v1.json';
 export const THUMBNAIL_BACKUP_FILE = 'thumbnail.v1.bak.json';
 export const THUMBNAIL_LOCK_FILE = 'thumbnail.save.lock';
@@ -91,7 +96,7 @@ export class ThumbnailStore {
     if (typeof request.executionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(request.executionId)
       || (request.expectedSavedRevision !== null && (!Number.isSafeInteger(request.expectedSavedRevision) || request.expectedSavedRevision < 0))) conflict('保存要求の版または実行IDが不正です');
     const contentHash = thumbnailContentHash(document), requestHash = hash(JSON.stringify([request.expectedSavedRevision, document.revision, contentHash]));
-    this.assertDirectory(); mkdirSync(this.directory, { recursive: true });
+    this.assertDirectory(); ensureHarnessDirectory(this.directory);
     const lock = this.acquireLock();
     let temporary: string | undefined;
     try {
@@ -130,7 +135,7 @@ export class ThumbnailStore {
   }
   /** 衝突時に未保存の内容を退避する。既存のファイルは上書きしない。 */
   evacuate(document: ThumbnailDocument): string {
-    mkdirSync(this.directory, { recursive: true });
+    ensureHarnessDirectory(this.directory);
     const name = `thumbnail.v1.unsaved-${stamp()}-${randomUUID().slice(0, 8)}.json`, fd = openSync(join(this.directory, name), 'wx', 0o600);
     try { writeFileSync(fd, JSON.stringify({ format: 'harness-thumbnail', version: 1, document, receipts: [] }) + '\n'); fsyncSync(fd); } finally { closeSync(fd); }
     return name;

@@ -44,6 +44,15 @@ it('bottomAuto の無い旧データに保存済みの bottom があれば手動
   sessionStorage.setItem('harness-native-view:p-legacy-bad',JSON.stringify({mode:'edit',bottom:'300'}));
   expect(readNativeView('p-legacy-bad').bottomAuto).toBe(true);
 });
+// 保存は自動の時も bottom（直前の手動値）を一緒に書く。旧データの救済（上の M-1）を bottomAuto:true の保存にまで当てると、
+// 開き直すたびに自動が手動に化け、タイムラインが直前の手動値（初回は既定の 280）に戻っていた（2026-10-15）。
+it('保存した bottomAuto:true は、一緒に保存した bottom があっても自動のまま読む',()=>{
+  writeNativeView('p-bottom-auto-saved',{...readNativeView('p-bottom-auto-saved'),bottom:420,bottomAuto:true});
+  expect(readNativeView('p-bottom-auto-saved').bottomAuto).toBe(true);
+  expect(readNativeView('p-bottom-auto-saved').bottom).toBe(420);
+  sessionStorage.setItem('harness-native-view:p-bottom-auto-true',JSON.stringify({mode:'edit',bottom:280,bottomAuto:true}));
+  expect(readNativeView('p-bottom-auto-true').bottomAuto).toBe(true);
+});
 it('調整タブの群の開閉（inspectorOpen）を往復し、不正な値は捨てる',()=>{
   expect(readNativeView('p-insp').inspectorOpen).toEqual({});
   writeNativeView('p-insp',{...readNativeView('p-insp'),inspectorOpen:{'telop:look':true,'video:place':false}});

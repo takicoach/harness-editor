@@ -84,6 +84,17 @@ describe('useThumbnailSession', () => {
     await act(async () => { await Promise.all([result.current.execute({ type: 'undo' }), result.current.execute({ type: 'redo' })]); });
     expect(calls.filter(call => call.route === '/command').map(call => (call.body as { expectedRevision: number }).expectedRevision)).toEqual([0, 1]);
   });
+  it('コマンドを文書から作る形で渡すと、送る直前の最新の文書で作る（続けて押した「案を追加」が同じ名前にならない）', async () => {
+    let pages = 1;
+    const doc = (count: number) => ({ ...thumbnailFixture(), pages: Array.from({ length: count }, (_, index) => ({ id: `page-${index}`, name: `案${'ABC'[index]}`, hueShift: 0, layers: [] })) });
+    const calls = respond({ '': () => ({ json: { status: 'saved', savedRevision: 0, contentHash: 'h' } }), '/session': () => ({ json: { ...state(0), document: { ...doc(1), revision: 0 } } }),
+      '/command': () => { pages++; return { json: { ...state(pages - 1, 0), document: { ...doc(pages), revision: pages - 1 } } }; } });
+    const { result } = renderHook(() => useThumbnailSession('p', true, true));
+    await waitFor(() => expect(result.current.phase).toBe('ready'));
+    const add = (id: string) => (document: { pages: { name: string }[] }) => ({ type: 'add-page' as const, pageId: id, name: `案${'ABC'[document.pages.length]}` });
+    await act(async () => { await Promise.all([result.current.execute(add('page-x')), result.current.execute(add('page-y'))]); });
+    expect(calls.filter(call => call.route === '/command').map(call => (call.body as { command: { name: string } }).command.name)).toEqual(['案B', '案C']);
+  });
   it('変更の通知が続けて届いて状態の取得が重なっても、最後の版まで追い付く（先に返った取得で後の取得を捨てない）', async () => {
     const gate = () => { let resolve!: (reply: Reply) => void; const promise = new Promise<Reply>(done => { resolve = done; }); return { promise, resolve }; };
     const gates = [gate(), gate()];

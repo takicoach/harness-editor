@@ -77,8 +77,10 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
       // The refreshed list can replace our still-running entry with one that already
       // completed between the accept and this refresh, tearing down the poller before
       // it gets a chance to notify. Catch that transition here too.
+      // 受付から取り直しまでの間に失敗・完了した時も、表示中の書き出しを一覧の状態へ合わせる。
+      // 合わせないと、実行中ではないので状態の取得も始まらず、受付時の「素材を確認中」のまま止まる。
       const refreshed=result.jobs.find(item=>item.id===value.id);
-      if(refreshed)notifyComplete(refreshed);
+      if(refreshed){setJob(previous=>previous?.id===refreshed.id?refreshed:previous);notifyComplete(refreshed);}
     }).catch(error=>{if(generation===historyRefresh.current)setError(message(error));});
   };
   useEffect(()=>{

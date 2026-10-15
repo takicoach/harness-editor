@@ -43,6 +43,16 @@ describe('DesignDocumentStore', () => {
     expect(() => store.evacuate({ revision: 1, text: '未保存' })).toThrow('保存先が通常のフォルダーではありません');
     expect(readdirSync(elsewhere)).toEqual([]);
   });
+  it('案件フォルダが消えた後の退避と保存は、フォルダを作り直さずに失敗する（消した案件の名前で中身の無いフォルダが残らない）', () => {
+    // 2026-10-15: 試験の後片付けで案件を消した直後に、スライドの画面の退避が .harness を親ごと作り直し、
+    // 消したはずの案件の名前で .harness/slides.v1.unsaved-….json だけのフォルダが保存先に残った。
+    const { project, store } = setup();
+    rmSync(project, { recursive: true, force: true });
+    expect(() => store.evacuate({ revision: 1, text: '未保存' })).toThrow();
+    expect(existsSync(project)).toBe(false);
+    expect(() => store.save({ expectedSavedRevision: null, executionId: 'after-delete', document: { revision: 1, text: '保存' } })).toThrow();
+    expect(existsSync(project)).toBe(false);
+  });
   it('退避は通常のフォルダーなら書ける', () => {
     const { project, store } = setup();
     const name = store.evacuate({ revision: 1, text: '未保存' });

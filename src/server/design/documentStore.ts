@@ -3,6 +3,11 @@ import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openS
 import { join } from 'node:path';
 import { SequenceError } from '../../core/sequence/errors';
 
+// 保存先の .harness だけを作る。案件フォルダそのものは作らない（消えた案件の名前で中身の無いフォルダを残さない・2026-10-15）。
+function ensureHarnessDirectory(directory: string): void {
+  try { mkdirSync(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+}
+
 /** 文書の種類ごとの違い。保存の流儀（版・受領記録・ロック・控え・破損保全・退避）は共通（サムネの ThumbnailStore と同じ作り）。 */
 export interface DesignStoreFormat<D extends { revision: number }> {
   /** 保存形式の名前（例 'harness-slides'）。 */
@@ -102,7 +107,7 @@ export class DesignDocumentStore<D extends { revision: number }> {
     if (typeof request.executionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(request.executionId)
       || (request.expectedSavedRevision !== null && (!Number.isSafeInteger(request.expectedSavedRevision) || request.expectedSavedRevision < 0))) conflict('保存要求の版または実行IDが不正です');
     const contentHash = this.contentHash(document), requestHash = hash(JSON.stringify([request.expectedSavedRevision, document.revision, contentHash]));
-    this.assertDirectory(); mkdirSync(this.directory, { recursive: true });
+    this.assertDirectory(); ensureHarnessDirectory(this.directory);
     const lock = this.acquireLock();
     let temporary: string | undefined;
     try {
@@ -142,7 +147,7 @@ export class DesignDocumentStore<D extends { revision: number }> {
   /** 衝突時に未保存の内容を退避する。既存のファイルは上書きしない。 */
   evacuate(document: D): string {
     // 保存と同じく、保存先がシンボリックリンク等の通常でないフォルダーなら書かない。
-    this.assertDirectory(); mkdirSync(this.directory, { recursive: true }); this.assertDirectory();
+    this.assertDirectory(); ensureHarnessDirectory(this.directory); this.assertDirectory();
     const name = `${this.format.fileBase}.unsaved-${stamp()}-${randomUUID().slice(0, 8)}.json`, fd = openSync(join(this.directory, name), 'wx', 0o600);
     try { writeFileSync(fd, JSON.stringify({ format: this.format.format, version: 1, document, receipts: [] }) + '\n'); fsyncSync(fd); } finally { closeSync(fd); }
     return name;

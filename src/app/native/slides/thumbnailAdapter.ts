@@ -3,7 +3,7 @@ import type { SlideCommand, SlideHistoryCommand } from '../../../core/slides/com
 import { slidePageAsThumbnail } from '../../../core/slides/pageView';
 import type { ThumbnailCommand, ThumbnailHistoryCommand } from '../../../core/thumbnail/commands';
 import type { ThumbnailSessionState } from '../thumbnail/thumbnailApi';
-import type { ThumbnailSessionHook } from '../thumbnail/useThumbnailSession';
+import type { ThumbnailCommandInput, ThumbnailSessionHook } from '../thumbnail/useThumbnailSession';
 import type { SlidesSessionState } from './slidesApi';
 import type { SlidesSessionHook } from './useSlidesSession';
 
@@ -29,8 +29,11 @@ export function useThumbnailSessionView(slides: SlidesSessionHook, pageId: strin
     return {
       state: view(slides.state), phase: slides.phase, broken: null, busy: slides.busy, error: slides.error, notice: slides.notice,
       saveProgress: null, previewTick: slides.previewTick, exportTick: slides.exportTick,
-      execute: async (command: ThumbnailCommand | ThumbnailHistoryCommand) => {
-        const mapped = toSlideCommand(command);
+      execute: async (input: ThumbnailCommandInput) => {
+        // 文書から作る形のコマンドは、今のページの最新の見え方から作る（サムネの「案を追加」と同じ約束。スライドでは案の操作は使えない）。
+        const current = typeof input === 'function' ? view(slides.readCurrent()) : null;
+        const command = typeof input === 'function' ? (current ? input(current.document) : null) : input;
+        const mapped = command ? toSlideCommand(command) : null;
         if (!mapped) { onUnsupported('この操作はスライドでは使えません'); return false; }
         return slides.execute(mapped);
       },

@@ -605,6 +605,29 @@ export async function registerSequenceReferenceDetailed(project:string,source:st
  }
 }
 
+/**
+ * リンク素材の由来（「BGM として取り込んだ」など）を参照台帳の asset に書き足す。台帳の形・接続先・世代・大きさは変えない。
+ * 管理素材は素材の台帳（.harness/assets/…json）に由来を持つが、リンク素材の登録情報はこの参照台帳だけにある。
+ * 管理素材の台帳の形で同じ場所へ書くと参照台帳が壊れ、以後の登録・再生が読めなくなっていた（2026-10-15）。
+ * 同じ由来なら書かない（読み取り中の素材の台帳を無駄に差し替えない）。差し替えは書き終えた一時ファイルの rename で、読んだ台帳から変わっていない時だけ行う。
+ */
+export async function recordSequenceReferenceOrigin(project:string,file:string,origin:NonNullable<SequenceAsset['origin']>):Promise<SequenceAsset>{
+ if(!isSequenceReferenceFile(file))throw error('参照素材の保存先が不正です');
+ return settledMutation(project,async dir=>{
+  const old=await readRecord(dir,file);
+  if(isDeepStrictEqual(old.record.asset.origin,origin))return old.record.asset;
+  const asset:SequenceAsset={...old.record.asset,origin};validateAsset(asset);
+  const metadata=join(dir,basename(file)+'.json'),temporary=join(dir,`.origin-${randomUUID()}`);
+  const handle=await open(temporary,'wx',0o600);
+  try{await handle.writeFile(JSON.stringify({...old.record,asset})+'\n');await handle.sync();}finally{await handle.close();}
+  try{
+   const current=await lstat(metadata);if(!sameInode(current,old.info))throw error('由来を記録する間に参照台帳が変更されました');
+   await rename(temporary,metadata);
+  }catch(e){await unlink(temporary).catch(()=>undefined);throw e;}
+  return asset;
+ });
+}
+
 /** Same bytes, size and kind; saved exact streams remain authoritative. Backups are private leaves, never recursive deletion. */
 export async function reconnectSequenceReference(project:string,asset:SequenceAsset,source:string,signal?:AbortSignal):Promise<SequenceAsset>{
  validateAsset(asset);const inspected=await inspectSource(source,asset.file,asset.name,signal);

@@ -5,6 +5,8 @@ import { parseSequence, serializeSequence } from './validate';
 import { rational as r } from './time';
 import type { SequenceAsset, SequenceDocument } from './model';
 import { fixture } from './fixtures';
+import { SequenceSession } from './session';
+import { SequenceError } from './errors';
 
 /** 補正後の音声（原本とは別の不変 asset）。fingerprint は原本と必ず違う。 */
 function fixedAudio(): SequenceAsset {
@@ -121,5 +123,68 @@ describe('origin メタ', () => {
     const doc = withFixed();
     (doc.assets[1] as { origin: unknown }).origin = { kind: 'audio-fix', from: 'source', fix: 'sharpen' };
     expect(() => parseSequence(serializeSequence(doc))).toThrow('由来');
+  });
+});
+
+/**
+ * 旧形式から移行した文書は、旧素材の名前の対応表（rendering.staticFiles）にすべての旧素材を載せる。
+ * 使い手は旧テロップ・画像の部品の staticFile('se/beep.mp3') の解決と、旧カットの履歴の取り込み（名前が無ければ中身で探す退避路あり）。
+ * 文書の検証は対応表の素材が assets にあることを求めるので、外す時は項目も一緒に外す。部品がその名前を読んでいれば外さない。
+ */
+describe('remove-asset（移行した文書の旧素材の名前の対応表）', () => {
+  const effect: SequenceAsset = { id: 'se-beep', kind: 'media', file: '.harness/assets/' + 'b'.repeat(64) + '.mp3', name: 'beep.mp3', fingerprint: 'b'.repeat(64),
+    streams: [{ index: 0, kind: 'audio', codec: 'mp3', duration: r(1), sampleRate: 48000, channels: 2 }] };
+  const logo: SequenceAsset = { id: 'img-logo', kind: 'image', file: '.harness/assets/' + 'c'.repeat(64) + '.png', name: 'logo.png', fingerprint: 'c'.repeat(64), streams: [] };
+  function migrated(): SequenceDocument {
+    const doc = fixture();
+    doc.assets.push(structuredClone(effect), structuredClone(logo));
+    doc.rendering = { telopBottomOffset: null, telopFontSize: null, staticFiles: { 'main.mp4': 'source', 'se/beep.mp3': 'se-beep', 'images/logo.png': 'img-logo' } };
+    doc.legacy = { sourceFingerprint: 'legacy', primaryAssetId: 'source', originalEndFrame: 300 };
+    return doc;
+  }
+  const telopReading = (doc: SequenceDocument, value: string): SequenceDocument => {
+    const telop = doc.clips.find(clip => clip.id === 'telop')!;
+    if (telop.content.kind === 'telop') telop.content.data = { ...telop.content.data, image: value } as never;
+    return doc;
+  };
+
+  it('使っていない旧素材は外せて、その素材を指す対応表の項目も一緒に消え、Undo で項目も戻る', () => {
+    const session = new SequenceSession('s', migrated());
+    session.execute({ sessionId: 's', executionId: 'remove', expectedRevision: session.document.revision, command: { type: 'remove-asset', assetId: 'se-beep' } });
+    expect(session.document.assets.some(asset => asset.id === 'se-beep')).toBe(false);
+    expect(session.document.rendering?.staticFiles).toEqual({ 'main.mp4': 'source', 'images/logo.png': 'img-logo' });
+    expect(() => parseSequence(serializeSequence(session.document))).not.toThrow();
+    session.execute({ sessionId: 's', executionId: 'undo', expectedRevision: session.document.revision, command: { type: 'undo' } });
+    expect(session.document.rendering?.staticFiles).toEqual(migrated().rendering!.staticFiles);
+    expect(session.document.assets.some(asset => asset.id === 'se-beep')).toBe(true);
+  });
+
+  it.each([['images/logo.png'], ['logo.png'], ['/static/images/logo.png?v=2']])('旧テロップ・画像の部品の props がその名前（%s）を持てば、外さずに使用中として止める', value => {
+    const doc = telopReading(migrated(), value);
+    const used = sequenceAssetReferences(doc, 'img-logo');
+    expect(used).toEqual([expect.objectContaining({ place: 'legacy-static-file', clipId: 'telop', detail: expect.stringContaining('旧テロップ・画像の部品') })]);
+    expect(() => applySequenceCommand(doc, { type: 'remove-asset', assetId: 'img-logo' })).toThrow(SequenceError);
+    try { applySequenceCommand(doc, { type: 'remove-asset', assetId: 'img-logo' }); } catch (error) {
+      expect(error).toMatchObject({ code: 'BROKEN_REFERENCE', message: expect.stringContaining('旧テロップ・画像の部品が「images/logo.png」を名前で読んでいます') });
+    }
+  });
+
+  it('カットで退避したクリップの props が名前を持つ時も使用中として止める（戻すと部品が読むため）', () => {
+    const doc = migrated();
+    const telop = structuredClone(doc.clips.find(clip => clip.id === 'telop')!);
+    if (telop.content.kind === 'telop') telop.content.data = { ...telop.content.data, sound: 'beep.mp3' } as never;
+    doc.clips = doc.clips.filter(clip => clip.id !== 'telop');
+    doc.cutArchive = { version: 1, entries: [{ id: 'e1', durationFrames: 1, completionFloorFrames: 1, origin: { cutId: 'cut', startFrame: 0, endFrame: 1 },
+      boundary: { references: [], hintFrame: 0, ambiguous: false }, clips: [telop], tracks: [] }], groups: [] } as never;
+    expect(sequenceAssetReferences(doc, 'se-beep').map(item => item.place)).toContain('legacy-static-file');
+  });
+
+  it('移行元の主映像は、クリップが無くても外さずに使用中として止める（対応表の項目も残る）', () => {
+    const doc = migrated();
+    doc.clips = doc.clips.filter(clip => !(clip.content.kind === 'video' || clip.content.kind === 'audio') || clip.content.assetId !== 'source');
+    doc.clips = doc.clips.filter(clip => clip.anchor?.kind !== 'source');
+    doc.transcripts = [];
+    expect(sequenceAssetReferences(doc, 'source')).toEqual([expect.objectContaining({ place: 'legacy-primary' })]);
+    expect(() => applySequenceCommand(doc, { type: 'remove-asset', assetId: 'source' })).toThrow(expect.objectContaining({ code: 'BROKEN_REFERENCE' }));
   });
 });

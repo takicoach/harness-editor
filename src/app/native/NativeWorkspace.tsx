@@ -714,7 +714,11 @@ export function NativeWorkspace({ projectId, navigation, onReload }: { projectId
     if (!doc) return;
     if (trial) { setNotice(TRIAL_LOCKED); return; }
     const asset = doc.assets.find(a => a.id === assetId); if (!asset || asset.kind === 'lut' || asset.kind === 'component') return;
-    const placed = buildMediaPlacement(doc, asset, at, targetTrackId, role ? { role } : {}, newId);
+    // 「再生位置に置く」・ダブルクリック・ドラッグは役割を渡さない。効果音タブの素材は効果音として置く（渡さないと
+    // 音声だけの素材は BGM〔music・繰り返し〕になり、効果音の一覧から消えて BGM として扱われていた。2026-10-15）。
+    // BGM タブの素材は従来どおり（役割を渡すと音量の初期値が -18dB に変わるため、ここでは足さない）。
+    const placedRole = role ?? (materialTabOf(doc, asset) === 'se' ? 'effect' : undefined);
+    const placed = buildMediaPlacement(doc, asset, at, targetTrackId, placedRole ? { role: placedRole } : {}, newId);
     if ('error' in placed) { setToast(placed.error); return; }
     void command({ type: 'batch', commands: placed.commands }).then(ok => { if (ok) selectLiveClips([placed.selectId]); });
   };

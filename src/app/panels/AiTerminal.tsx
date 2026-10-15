@@ -596,13 +596,16 @@ export function AiTerminal({ focus = null }: { focus?: AiFocusHandle | null } = 
           >
             <div
               className="clt-term"
-              ref={hostRef}
               data-testid="claude-terminal"
               /* 枠の地色は端末の配色と同じ出所から取る。CSS 側に色を書くと light/dark の
                  2 値が styles.css と shared/terminalColors.ts に二重定義になり、
                  ライトテーマで白い端末のまわりに黒い額縁が出る（G-4 実測）。 */
               style={{ background: terminalColorsFor(theme).background }}
-            />
+            >
+              {/* xterm は余白の内側のこの箱へ開く。FitAddon は親の高さ・幅（box-sizing:border-box では余白込み）から
+                  行数・桁数を出し、親の余白は引かないので、余白のある .clt-term へ直接開くと最下行が下端で切れていた。 */}
+              <div className="clt-term-host" ref={hostRef} />
+            </div>
             {dropHover && <div className="clt-drop-hint" aria-hidden="true">ここで離すと、ファイルを AI に渡します</div>}
           </div>
           {attaching && <p className="hint">ファイルを AI に渡しています…</p>}

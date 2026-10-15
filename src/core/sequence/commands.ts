@@ -20,7 +20,7 @@ import {textComponentId} from './textStyle';
 import {assetAnimationSupport,supportsAnimation} from './telopAnimationSupport';
 import type {TelopAnimationId} from '../telopAnimation';
 import { SequenceError } from './errors';
-import { sequenceAssetReferences } from './assetReferences';
+import { legacyStaticFileNames, sequenceAssetReferences } from './assetReferences';
 import { clipEnd, effectFrameAt, isMediaContent, sourceTimeAt, type SequenceAsset, type SequenceClip, type SequenceDocument, type SequenceTrack, type SequenceTransition, type SourceTranscript } from './model';
 import { sequenceContentBytes, validateSequenceDocument } from './validate';
 import { addTime, compareTime, isRational, multiplyTime, rational, type Rational } from './time';
@@ -705,6 +705,10 @@ function applySequenceCommandInternal(document: SequenceDocument, command: Seque
           used.flatMap(u => u.clipId ? [u.clipId] : []));
       next = structuredClone(document);
       next.assets = next.assets.filter(a => a.id !== command.assetId);
+      // 移行した文書の旧素材の名前の対応表から、この素材を指す項目も外す（部品が名前で読んでいないことは上で確かめた）。
+      // 残すと文書の検証が「描画部品の素材参照が不正です」で落ちる。旧カットの履歴の取り込みは、名前が無ければ中身で素材を探す。
+      if (next.rendering?.staticFiles)
+        for (const name of legacyStaticFileNames(next, command.assetId)) delete next.rendering.staticFiles[name];
       break;
     }
     case 'replace-audio-source': {

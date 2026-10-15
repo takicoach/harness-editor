@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ThumbnailCommand, ThumbnailHistoryCommand } from '../../../core/thumbnail/commands';
+import type { ThumbnailDocument } from '../../../core/thumbnail/model';
+
+/** 送るコマンド。文書から作る形なら、送る直前の最新の文書で作る（前の操作の結果を見てから決めたい値のため）。 */
+export type ThumbnailCommandInput = ThumbnailCommand | ThumbnailHistoryCommand | ((document: ThumbnailDocument) => ThumbnailCommand | ThumbnailHistoryCommand);
 import { useEventChannel } from '../../eventBus';
 import { ThumbnailApiError, thumbnailRequest, uploadThumbnailImage, type ThumbnailFileStatus, type ThumbnailSessionState } from './thumbnailApi';
 
@@ -74,10 +78,12 @@ export function useThumbnailSession(projectId: string, open: boolean, videoReady
     void task.finally(() => { if (generation !== epoch.current) return; pending.current--; if (!pending.current) { busyRef.current = false; setBusy(false); } });
     return task;
   }, [accept, load, showBroken]);
-  /** 文書は送る直前の最新の版を使う（続けて押した操作が 409 にならない）。応答が届かなかった時だけ同じ実行 ID で 1 回再送する。 */
-  const execute = useCallback((command: ThumbnailCommand | ThumbnailHistoryCommand) => run(async () => {
+  /** 文書は送る直前の最新の版を使う（続けて押した操作が 409 にならない）。応答が届かなかった時だけ同じ実行 ID で 1 回再送する。
+   * コマンドを文書から作る形で渡すと、その最新の文書で作る（続けて押した「案を追加」が、前の結果を見ずに同じ名前を送って断られていた）。 */
+  const execute = useCallback((input: ThumbnailCommandInput) => run(async () => {
     const current = latest.current;
     if (!current) throw new Error('サムネの編集データがありません');
+    const command = typeof input === 'function' ? input(current.document) : input;
     const body = { sessionId: current.sessionId, expectedRevision: current.document.revision, executionId: crypto.randomUUID(), command };
     try { return await thumbnailRequest<ThumbnailSessionState>(projectId, '/command', body); }
     catch (cause) { if (cause instanceof ThumbnailApiError) throw cause; return thumbnailRequest<ThumbnailSessionState>(projectId, '/command', body); }

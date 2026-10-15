@@ -281,6 +281,27 @@ it('reports completion found in the list refreshed right after accepting a job t
   await waitFor(()=>expect(onComplete).toHaveBeenCalledTimes(1),{timeout:3000});
   expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({id:'job',phase:'complete'}));
 });
+it('受付の直後に失敗した書き出しは、一覧の取り直しで失敗と理由を表示し、「素材を確認中」のまま止まらない',async()=>{
+  const {props}=setup(),normal=request.getMockImplementation()!;
+  const preparing={...status,phase:'preparing',completedFrames:0};
+  const failed={...status,phase:'failed',completedFrames:0,error:'素材が書き換えられたため書き出しを中止しました'};
+  let listCalls=0;
+  request.mockImplementation(async(...args)=>{
+    if(args[1]==='/export')return preparing;
+    if(args[1]==='/export/list'){listCalls++;return listCalls===1?{jobs:[],total:0,nextOffset:null}:{jobs:[failed],total:1,nextOffset:null};}
+    // 失敗した書き出しは実行中ではないので、状態の取得（poller）は始まらない。
+    if(args[1]==='/export/status')throw new Error('poller must not run');
+    return normal(...args);
+  });
+  const view=render(<NativeExportControl {...props}/>);
+  await waitFor(()=>expect((view.getByText('書き出し') as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(view.getByText('書き出し'));
+  await act(async()=>fireEvent.click(view.getByRole('button',{name:'書き出し開始'})));
+  await waitFor(()=>expect(listCalls).toBe(2));
+  await waitFor(()=>expect(view.getByRole('alert').textContent).toContain('素材が書き換えられたため書き出しを中止しました'));
+  expect(view.queryByText('素材を確認中')).toBeNull();
+  expect(view.queryByRole('button',{name:'中止'})).toBeNull();
+});
 it('routes a throwing onComplete to the notification history, not the export panel error',async()=>{
   const {props}=setup(),onComplete=vi.fn(()=>{throw new Error('listener boom');});
   const spy=vi.spyOn(notificationHistory,'reportEditorError').mockImplementation(()=>{});

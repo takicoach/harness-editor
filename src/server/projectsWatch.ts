@@ -1,6 +1,6 @@
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
-import { readdirSync, statSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join, sep } from 'node:path';
 import { resolveProjectStatus } from './projectStatus';
 import { resolveProjectSteps } from './projectSteps';
 import { isSuperMovieProject } from './scanProjects';
@@ -112,6 +112,21 @@ export function startupMissedEvents(
 }
 
 /**
+ * サーバー自身が案件に書いた変化（サムネの書き出しなど）を、ファイルの監視を待たずに一覧へ知らせるための登録先。
+ * ファイルの監視は、最初の見回りの途中にできたフォルダ・ファイルの変化を知らせ損ねることがある（案件 150 件・監視の直後に書き出すと
+ * 10 回中 5 回取りこぼした・2026-10-15）。監視の開始後に作った案件も、ファイルの監視の対象外なので知らせが届かなかった。
+ */
+const directTriggers = new Set<{ root: string; trigger: (id: string) => void }>();
+
+/** 案件フォルダの状態が変わったことを、その保存先を監視している全部の接続へ知らせる（少し待ってから今のディスクの状態を流す）。 */
+export function notifyProjectStatusChanged(directory: string): void {
+  let real: string;
+  try { real = realpathSync(directory); } catch { return; }
+  const root = dirname(real), id = basename(real);
+  for (const entry of directTriggers) if (entry.root === root) entry.trigger(id);
+}
+
+/**
  * root 配下の全プロジェクトの `.sme/status.json` と `out/video.mp4` を監視し、
  * 変化したプロジェクトの解決済みステータスを onEvent へ渡す。
  * 監視対象は接続時点の既存プロジェクト一覧のみ（プロジェクトの増減までは追わない）。
@@ -129,25 +144,6 @@ export function watchAllProjectsStatus(
   const now = options.now ?? Date.now;
   const ids = listProjectIds(root);
   const patterns = ids.map((id) => join(root, id));
-  if (patterns.length === 0) {
-    // 監視対象が無い（プロジェクト0件）。無害な no-op watcher を返す。
-    return () => {};
-  }
-  const watcher: FSWatcher = chokidarWatch(patterns, {
-    ignoreInitial: true,
-    persistent: true,
-    // .sme と .harness の直下メタデータ（depth 1 のファイル）を拾う。
-    // public/ の動画や src/ の編集ファイルは projectIdFromWatchedPath が弾く。
-    depth: 1,
-    // 大きい動画や node_modules を監視ツリーから除外して負荷を抑える。
-    ignored: (path) => {
-      const rel = path.startsWith(root + sep) ? path.slice(root.length + 1) : path;
-      const parts = rel.split(sep);
-      const sub = parts[1];
-      if (sub === '.harness') return parts.length > 2 && !['project.v2.json', 'last-export.json'].includes(parts[2]!);
-      return sub !== undefined && sub !== '.sme' && sub !== 'out' && sub !== THUMBNAIL_EXPORT_FOLDER;
-    },
-  });
   const timers = new Map<string, NodeJS.Timeout>();
   /** 現在のディスク状態から解決済みステータスを組み立てる（読めなければ null）。 */
   const resolveNow = (id: string): ProjectStatusEvent | null => {
@@ -168,12 +164,8 @@ export function watchAllProjectsStatus(
     const event = resolveNow(id);
     if (event !== null) onEvent(event);
   };
-  // 監視開始時点のスナップショット（下の 'ready' 参照）。watcher 生成より前に取る。
-  const baseline = new Map<string, string>();
-  for (const id of ids) baseline.set(id, serializeStatusForCompare(resolveNow(id)));
-  const trigger = (path: string): void => {
-    const id = projectIdFromWatchedPath(root, path);
-    if (id === null) return;
+  /** 案件ごとに少し待ってから（続けて届いた変化をまとめて）今の状態を流す。 */
+  const triggerId = (id: string): void => {
     const existing = timers.get(id);
     if (existing !== undefined) clearTimeout(existing);
     timers.set(
@@ -183,6 +175,42 @@ export function watchAllProjectsStatus(
         emitNow(id);
       }, debounceMs),
     );
+  };
+  // サーバー自身の書き込みの知らせ（notifyProjectStatusChanged）は、ファイルの監視の有無・対象に関係なく受ける。
+  let realRoot = root;
+  try { realRoot = realpathSync(root); } catch { /* 保存先が無い時は字面のまま */ }
+  const direct = { root: realRoot, trigger: triggerId };
+  directTriggers.add(direct);
+  const stopDirect = (): void => {
+    directTriggers.delete(direct);
+    for (const timer of timers.values()) clearTimeout(timer);
+    timers.clear();
+  };
+  if (patterns.length === 0) {
+    // ファイルの監視の対象が無い（プロジェクト0件）。サーバー自身の書き込みの知らせだけを受ける。
+    return stopDirect;
+  }
+  const watcher: FSWatcher = chokidarWatch(patterns, {
+    ignoreInitial: true,
+    persistent: true,
+    // .sme と .harness の直下メタデータ（depth 1 のファイル）を拾う。
+    // public/ の動画や src/ の編集ファイルは projectIdFromWatchedPath が弾く。
+    depth: 1,
+    // 大きい動画や node_modules を監視ツリーから除外して負荷を抑える。
+    ignored: (path) => {
+      const rel = path.startsWith(root + sep) ? path.slice(root.length + 1) : path;
+      const parts = rel.split(sep);
+      const sub = parts[1];
+      if (sub === '.harness') return parts.length > 2 && !['project.v2.json', 'last-export.json'].includes(parts[2]!);
+      return sub !== undefined && sub !== '.sme' && sub !== 'out' && sub !== THUMBNAIL_EXPORT_FOLDER;
+    },
+  });
+  // 監視開始時点のスナップショット（下の 'ready' 参照）。watcher 生成より前に取る。
+  const baseline = new Map<string, string>();
+  for (const id of ids) baseline.set(id, serializeStatusForCompare(resolveNow(id)));
+  const trigger = (path: string): void => {
+    const id = projectIdFromWatchedPath(root, path);
+    if (id !== null) triggerId(id);
   };
   // 初回スキャン完了時に「スキャン中に変わっていたもの」だけを流す。
   // chokidar は ignoreInitial のため、スキャン中に起きた変更をイベントとして出さない。
@@ -201,8 +229,7 @@ export function watchAllProjectsStatus(
     console.warn('[sme] watchAllProjectsStatus の chokidar エラー:', err);
   });
   return () => {
-    for (const timer of timers.values()) clearTimeout(timer);
-    timers.clear();
+    stopDirect();
     watcher.close().catch((err) => {
       console.warn('[sme] watchAllProjectsStatus の close に失敗:', err);
     });

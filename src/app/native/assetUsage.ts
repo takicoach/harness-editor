@@ -27,6 +27,8 @@ function label(doc:SequenceDocument,ref:AssetReference):string{
     // どの素材を先に外せばいいのか分からない。detail（`${補正後の素材名}（音声補正の元）`）
     // をそのまま出す。
     case 'audio-fix-origin': return ref.detail;
+    case 'legacy-static-file': return `旧テロップ・画像の部品（${named().name}）`;
+    case 'legacy-primary': return '移行元の主映像';
     default: return ref.detail;
   }
 }
@@ -38,6 +40,7 @@ function label(doc:SequenceDocument,ref:AssetReference):string{
  * 素材を戻す・外す方を案内する。
  */
 function actionFor(refs:readonly AssetReference[]):string{
+  if(refs.length>0&&refs.every(ref=>ref.place==='legacy-primary'))return '移行元の主映像は案件から外せません。';
   const fixOrigins=refs.filter(ref=>ref.place==='audio-fix-origin');
   if(refs.length>0&&fixOrigins.length===refs.length){
     const holders=[...new Set(fixOrigins.map(ref=>ref.detail.replace(/（音声補正の元）$/,'')))];

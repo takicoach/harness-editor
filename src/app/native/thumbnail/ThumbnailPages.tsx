@@ -26,8 +26,9 @@ export function ThumbnailPages({ editor, exporter, previews, phoneOpen, onPhone 
 }) {
   const { document } = editor, full = document.pages.length >= THUMBNAIL_MAX_PAGES, [dragged, setDragged] = useState<string | null>(null), mainId = thumbnailMainPageId(document);
   const add = async (duplicate: boolean) => {
-    const pageId = `page-${crypto.randomUUID()}`;
-    if (await editor.execute({ type: 'add-page', pageId, name: nextPageName(document), ...(duplicate ? { duplicateOf: editor.pageId } : {}) })) editor.selectPage(pageId);
+    const pageId = `page-${crypto.randomUUID()}`, source = editor.pageId;
+    // 名前は送る直前の最新の文書で決める。押した時点の文書で決めると、続けて押した 2 回目が 1 回目と同じ名前になり断られていた。
+    if (await editor.execute(latest => ({ type: 'add-page', pageId, name: nextPageName(latest), ...(duplicate ? { duplicateOf: source } : {}) }))) editor.selectPage(pageId);
   };
   return <footer className="native-thumbnail-bottom">
     <ol className="native-thumbnail-pages" aria-label="案">

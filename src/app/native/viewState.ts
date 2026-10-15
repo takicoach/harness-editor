@@ -25,9 +25,11 @@ export function readNativeView(project: string): NativeViewState {
       activeCutId:typeof value.activeCutId==='string'&&value.activeCutId.length<=256?value.activeCutId:null,
       left:number('left',190,420),right:number('right',240,460),bottom:number('bottom',170,Math.max(170,window.innerHeight*.6)),
       ripple: value.ripple === false ? false : true,   // 未保存・不正値は ON（設計の既定）
+      // 保存した bottomAuto（true／false）はそのまま使う。保存は自動の時も bottom（直前の手動値）を一緒に書くので、
+      // bottom の有無で決めると自動が開き直すたびに手動へ化ける（2026-10-15）。
       // 旧データ（bottomAuto を持たない）に保存済みの bottom があるなら、ユーザーがドラッグで決めた高さ。
       // 既定 true のままだと、その高さを 1 回だけ自動（窓の 34%）で上書きして捨てる（M-1）。
-      bottomAuto: value.bottomAuto === false ? false : typeof value.bottom === 'number' && Number.isFinite(value.bottom) ? false : true,
+      bottomAuto: typeof value.bottomAuto === 'boolean' ? value.bottomAuto : typeof value.bottom === 'number' && Number.isFinite(value.bottom) ? false : true,
       inspectorOpen: value.inspectorOpen && typeof value.inspectorOpen === 'object' ? Object.fromEntries(Object.entries(value.inspectorOpen).filter(([k, v]) => k.length <= 48 && typeof v === 'boolean').slice(0, 64)) as Record<string, boolean> : {},
       leftHidden:value.leftHidden === true,rightHidden:value.rightHidden === true,selected:Array.isArray(value.selected) ? value.selected.filter((id:unknown) => typeof id === 'string').slice(0,128) : []};
   } catch { return fallback; }

@@ -75,8 +75,11 @@
 .native-ducking-settings .tb-duck-strength{display:flex;gap:5px}
 .native-ducking-settings button{min-height:32px;min-width:40px}
 .native-ducking-settings button[aria-pressed=true]{background:var(--accent);color:var(--bg-0)}
+/* カラーホイールの数値の列は、輪（104px）の右の残りしかない（既定の右パネルで約 144px）。この列を container にして
+   F17 の 2 行（native-studio.css の @container: ラベルを上、スライダーと数値を下）に切り替え、数値は他の数値欄と同じ 52px の列に入れる。
+   以前は数値を 80px に固定していて 52px の列からはみ出し、設定欄が横にスクロールしてスライダーが幅 0 に潰れていた（2026-10-15）。 */
+.native-inspector .color-wheel-values{container-type:inline-size}
 .native-inspector .color-wheel-values input[type=range]{max-width:none;width:100%}
-.native-inspector .color-wheel-values input[type=number]{max-width:80px;width:80px;flex-shrink:0}
 .native-clip-video .native-clip-name{position:relative;line-height:14px;z-index:1;width:fit-content;max-width:100%;background:color-mix(in srgb,var(--bg-1) 85%,transparent);border-radius:3px;padding:2px 5px;margin:3px}
 /* タイムラインのドラッグ中は、プレビュー側の当たり判定を全部止める。
    実測（T6）: iframe は previewBridge.ts:23 で常時 pointer-events:none なので、

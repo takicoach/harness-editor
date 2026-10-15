@@ -69,4 +69,15 @@ describe('assetUsage',()=>{
         sources:[{assetId:'a1',streamIndex:0,start:{num:0,den:1},end:{num:1,den:1}}]}}],groups:[]}});
     expect(assetUsage(doc,'a1')).toMatchObject({count:1,places:['カットした部分']});
   });
+  it('移行した文書で、旧テロップ・画像の部品が素材を名前で読んでいれば「旧テロップ・画像の部品」として数える',()=>{
+    const telop={kind:'telop',data:{text:'字幕',image:'images/logo.png'}} as never;
+    const doc=documentWith({assets:[{id:'img',kind:'image',file:'.harness/assets/x.png',name:'logo.png',fingerprint:'x',streams:[]}],clips:[{id:'c1',name:'見出し',content:telop}],
+      rendering:{telopBottomOffset:null,telopFontSize:null,staticFiles:{'images/logo.png':'img'}}});
+    expect(assetUsage(doc,'img')).toMatchObject({count:1,places:['旧テロップ・画像の部品（見出し）']});
+  });
+  it('移行元の主映像はクリップが無くても「移行元の主映像」として数え、外せないと案内する',()=>{
+    const doc={...documentWith({assets:[{id:'main',kind:'media',file:'.harness/assets/m.mp4',name:'main.mp4',fingerprint:'m',streams:[]}]}),
+      legacy:{sourceFingerprint:'legacy',primaryAssetId:'main',originalEndFrame:1}};
+    expect(assetUsage(doc,'main')).toMatchObject({count:1,places:['移行元の主映像'],action:'移行元の主映像は案件から外せません。'});
+  });
 });

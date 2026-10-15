@@ -3489,7 +3489,9 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 /* 余白なしだと border-radius の角丸が 1 行目の先頭文字を削る（G-4 実測: "FAKE-CLAUDE" の F）。
    地色は AiTerminal が shared/terminalColors.ts の値をインラインで当てる（ここは未マウント時の
    フォールバック。ハードコードを 2 箇所に増やさないため dark 側だけ置く）。 */
-.clt-term { flex: 1; min-height: 220px; padding: 6px 8px; background: #101418; border-radius: var(--radius-md); overflow: hidden; }
+.clt-term { flex: 1; min-height: 220px; padding: 6px 8px; background: #101418; border-radius: var(--radius-md); overflow: hidden; display: flex; flex-direction: column; }
+/* xterm を開く箱。余白を持たないので、FitAddon が読む高さ・幅がそのまま行と桁に使える面積になる。 */
+.clt-term-host { flex: 1; min-height: 0; min-width: 0; }
 /* ドロップを受ける枠。端末の縦伸び・最低の高さは .clt-term と同じ値をこの枠が引き継ぐ
    （枠だけが縮むと中の端末がはみ出し、下の「再起動する」等のボタンに覆いかぶさる）。 */
 .clt-term-frame { position: relative; flex: 1; min-height: 220px; display: flex; flex-direction: column; border-radius: var(--radius-md); }

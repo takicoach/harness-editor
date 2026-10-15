@@ -10,6 +10,7 @@ import { HttpError } from '../http';
 import { verifiedSequenceAssetPath } from '../sequence/assets';
 import { captureThumbnail, type ThumbnailCapture } from './capture';
 import { THUMBNAIL_EXPORT_FOLDER, thumbnailFileBase } from './cover';
+import { notifyProjectStatusChanged } from '../projectsWatch';
 import { thumbnailRenderInputs, type ThumbnailRenderInputs } from './renderInputs';
 import { thumbnailService, type ThumbnailEvent, type ThumbnailSessionState } from './service';
 
@@ -50,6 +51,8 @@ export async function publishThumbnail(folder: string, base: string, extension: 
     });
   } finally { await unlink(temporary).catch(() => undefined); }
   await unlink(join(folder, stale)).catch(() => undefined);
+  // 一覧のカードの画像を、ファイルの監視を待たずに変える（監視は見回りの途中の変化を取りこぼすことがある）。
+  notifyProjectStatusChanged(dirname(folder));
   return name;
 }
 
