@@ -18,6 +18,7 @@ vi.mock('../../preview/native/previewBridge',()=>({NativePreviewBridge:class {
 }}));
 vi.mock('../../preview/native/audioTransport',()=>({NativeAudioTransport:class {
   sample=0;constructor(readonly context:{sampleRate:number}){}
+  async prime(){}
   seek(sample:number){this.sample=sample;}currentSample(){return this.sample;}
   presentationSample(){return this.sample;}
   get isPlaying(){return draws.playing;}async play(){draws.playing=true;}pause(){draws.playing=false;}dispose(){this.pause();}

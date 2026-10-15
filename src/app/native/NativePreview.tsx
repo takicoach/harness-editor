@@ -5,12 +5,13 @@ import { Icon } from '../Icon';
 import { playbackRateLabel } from '../preview/transport';
 import type { ClipVisual, SequenceDocument } from '../../core/sequence/model';
 import { ScenePlan, scenePlanFor } from '../../core/sequence/scenePlan';
-import { timeNumber } from '../../core/sequence/time';
+import { timeNumber, type Rational } from '../../core/sequence/time';
 import { NativePreviewBridge } from '../../preview/native/previewBridge';
 import { NativeAudioTransport } from '../../preview/native/audioTransport';
 import { audioPlaybackPlan, validatePlaybackRate } from '../../preview/native/audioPlaybackPlan';
 import { audioPlanIdentity } from '../../preview/native/audioPlanIdentity';
-import { pcmKey, type PreparedPcm } from '../../preview/native/audioMixer';
+import { pcmKey, type PcmSource } from '../../preview/native/audioMixer';
+import { RemotePcm } from '../../preview/native/remotePcm';
 import type {RenderedSceneGeometry} from '../../preview/native/renderGeometry';
 import { PreviewResourceError, previewFailure, type NativePreviewFailure } from '../../preview/native/previewError';
 import type { LegacyMeasurementReader } from '../../preview/native/legacyMeasurement';
@@ -80,7 +81,8 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
   // M-1: legacy（panels/Preview.tsx）は playbackRate を prop で制御する。自然終了で内部だけ 1 に戻すと
   //       App 側の値と食い違い、以後「再生」ボタンが表示 4×・実際 1× になる。native 経路（prop 無し）だけ戻す。
   const controlledRate = useRef(playbackRate); controlledRate.current = playbackRate;
-  const version = useRef(0), planRef = useRef<ScenePlan | null>(null), pcm = useRef(new Map<string, PreparedPcm>());
+  const version = useRef(0), planRef = useRef<ScenePlan | null>(null), pcm = useRef(new Map<string, PcmSource>());
+  const prewarming = useRef<AbortController | null>(null);
   const planSession = useRef(sessionId);
   const bypass = useRef(bypassLut); bypass.current = bypassLut;
   const drawing = useRef(0),failureVersion=useRef(0);
@@ -238,6 +240,36 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
     // painter 一致条件を付けると、途中で projectId が変わった時にボタンが押せないまま残る。
     }finally{setReloading(false);}
   };
+  interface AudioSourceKey { assetId: string; streamIndex: number; rate: Rational }
+  /** 素材（速度つき）の再生用 PCM をサーバに準備させ、その情報から窓読みの PcmSource を作る。PCM 本体はまだ取らない。 */
+  const describeAudio = async (source: AudioSourceKey, signal: AbortSignal): Promise<RemotePcm> => {
+    const params = new URLSearchParams({ id: projectId, asset: source.assetId, stream: String(source.streamIndex), rateNum: String(source.rate.num), rateDen: String(source.rate.den), ...(legacyContext ? { context: legacyContext } : {}) });
+    const response = await fetch(`${legacyContext ? '/api/legacy-preview/audio/info' : '/api/sequence/audio'}?${params}`, { signal });
+    if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw new PreviewResourceError('音声を準備できません', response.status, 'pcm', !!legacyContext); }
+    const prepared = await response.json() as { url: string; sampleCount: number; sampleRate: number };
+    return new RemotePcm({ url: prepared.url, sampleCount: prepared.sampleCount, sampleRate: prepared.sampleRate, assetId: source.assetId, streamIndex: source.streamIndex, rate: source.rate, legacy: !!legacyContext });
+  };
+  /** 再生計画の中で、まだ PcmSource を持っていない素材（速度つき）。 */
+  const missingAudio = (plan: ScenePlan, rate: number): Map<string, AudioSourceKey> => {
+    const missing = new Map<string, AudioSourceKey>();
+    for (const clip of audioPlaybackPlan(plan, rate).audibleClips) {
+      const content = clip.content; if (content.kind !== 'audio') continue;
+      const key = pcmKey(content.assetId, content.streamIndex, content.rate);
+      if (!pcm.current.has(key) && !missing.has(key)) missing.set(key, { assetId: content.assetId, streamIndex: content.streamIndex, rate: content.rate });
+    }
+    return missing;
+  };
+  /** 等速で鳴り始めたら、次の段（2倍）の音声をサーバに裏で作らせておく（L を押した時の待ちを消す）。1 本ずつ・待たない・失敗は表に出さない。 */
+  const prewarm = (plan: ScenePlan, rate: number) => {
+    prewarming.current?.abort(); const controller = new AbortController(); prewarming.current = controller;
+    void (async () => {
+      for (const [key, source] of missingAudio(plan, rate)) {
+        if (controller.signal.aborted) return;
+        try { const prepared = await describeAudio(source, controller.signal); if (!controller.signal.aborted && !pcm.current.has(key)) pcm.current.set(key, prepared); else prepared.dispose(); }
+        catch { return; }
+      }
+    })();
+  };
   const play = async () => {
     if (playingRef.current || preparation.current || !planRef.current || (!readyRef.current&&!recoveryAvailableRef.current)) return;
     const pendingSeek=seekIntent.current?latestDrawing.current:null;
@@ -270,41 +302,35 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
     onPlay?.();
     if(!isCurrent())return;
     const plan = planRef.current, playbackRate=playbackRateRef.current;
-    const audioPlan=audioPlaybackPlan(plan,playbackRate);
     const audio = context.current ?? new AudioContext({ sampleRate: 48000 }); context.current = audio;
     await audio.resume();
     if (!isCurrent()) return;
-    for (const clip of audioPlan.audibleClips) {
-      const content = clip.content; if (content.kind !== 'audio') continue;
-      const key = pcmKey(content.assetId, content.streamIndex, content.rate); if (pcm.current.has(key)) continue;
+    // 足りない素材（速度つき）の情報だけを並列に取る（サーバ側はここで PCM を用意する）。
+    // PCM 本体は丸ごと持たず、RemotePcm が再生位置の窓だけを Range で取り寄せる。
+    const missing = missingAudio(plan, playbackRate);
+    if (missing.size) {
       setPreparing('音声を準備しています…');
-      const params = new URLSearchParams({ id: projectId, asset: content.assetId, stream: String(content.streamIndex), rateNum: String(content.rate.num), rateDen: String(content.rate.den), ...(legacyContext ? { context: legacyContext } : {}) });
-      const response = await fetch(`${legacyContext ? '/api/legacy-preview/audio/info' : '/api/sequence/audio'}?${params}`, { signal: request.signal });
+      await Promise.all([...missing].map(async ([key, source]) => {
+        const prepared = await describeAudio(source, request.signal);
+        if (isCurrent() && !pcm.current.has(key)) pcm.current.set(key, prepared); else prepared.dispose();
+      }));
       if (!isCurrent()) return;
-      if (!response.ok) throw new PreviewResourceError('音声を準備できません', response.status, 'pcm', !!legacyContext);
-      const prepared = await response.json();
-      if (!isCurrent()) return;
-      setPreparing('音声を読み込んでいます…');
-      const raw = await fetch(prepared.url, { signal: request.signal }); if (!isCurrent()) return;
-      if (!raw.ok) throw new PreviewResourceError('準備した音声を読み込めません', raw.status, 'pcm', !!legacyContext);
-      const samples = new Float32Array(await raw.arrayBuffer());
-      if (!isCurrent()) return;
-      if (samples.length !== prepared.sampleCount * 2) throw new Error('音声の長さが一致しません');
-      const left = new Float32Array(prepared.sampleCount), right = new Float32Array(prepared.sampleCount);
-      for (let i = 0; i < left.length; i++) { left[i] = samples[i * 2]!; right[i] = samples[i * 2 + 1]!; }
-      pcm.current.set(key, { assetId: content.assetId, streamIndex: content.streamIndex, rate: content.rate, sampleRate: prepared.sampleRate, channels: [left, right] });
     }
-    if (!isCurrent()) return;
-    setPreparing('再生を準備しています…');
+    setPreparing('音声を読み込んでいます…');
     const startFrame=playbackRate>0&&current.current>=plan.document.sequenceEndFrame-1?0:
       playbackRate<0&&current.current<=0?plan.document.sequenceEndFrame-1:current.current;
     if(startFrame!==current.current){await show(startFrame);if(!isCurrent())return;}
     transport.current?.dispose(); transport.current = new NativeAudioTransport(audio, plan, pcm.current, error => { if (isCurrent()) fail(error); },playbackRate);
     transport.current.seek(Math.round(current.current / timeNumber(plan.document.fps) * audio.sampleRate));
     const active = transport.current;
+    // 再生位置の初期窓だけ待つ。残りは transport が先読みで追いかける。
+    await active.prime(request.signal);
+    if (!isCurrent()) return;
+    setPreparing('再生を準備しています…');
     await active.play();
     if (!isCurrent()) { active.pause(); return; }
     playingRef.current = true; setPlaying(true); notifications.current.onPlaybackChanged?.(true);
+    if (playbackRate === 1) prewarm(plan, 2);
     } catch (error) { if (isCurrent()) { fail(error); throw error; } }
     finally { if (preparation.current === request) {preparation.current = null;setPreparing(null);} }
   };
@@ -336,7 +362,10 @@ export const NativePreview = forwardRef<NativePreviewHandle, NativePreviewProps>
     const painter = new NativePreviewBridge(stage.current, projectId, legacyContext); renderer.current = painter;
     return () => { seekIntent.current=null; version.current++; preparation.current?.abort(); preparation.current = null; playingRef.current = false; renderer.current?.dispose(); renderer.current = null;planRef.current=null;latestDrawing.current=null;playbackDrawing.current=null;
       readyRef.current=false;recoveryAvailableRef.current=false;
-      transport.current?.dispose(); void context.current?.close(); context.current = null; pcm.current.clear(); };
+      transport.current?.dispose(); void context.current?.close(); context.current = null;
+      prewarming.current?.abort(); prewarming.current = null;
+      for (const source of pcm.current.values()) if (source instanceof RemotePcm) source.dispose();
+      pcm.current.clear(); };
   }, [projectId, legacyContext]);
   useEffect(() => {
     // Revisions are immutable within a session. A disk reload starts a new session

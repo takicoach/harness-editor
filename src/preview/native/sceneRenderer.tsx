@@ -24,6 +24,7 @@ import {titleGeometryIssue} from './titleGeometry';
 import { previewResourceError } from './previewError';
 import { measureLegacyVisuals, type LegacyMeasurementRequest, type LegacyMeasurementSnapshot } from './legacyMeasurement';
 import { applyLegacyCaptionFont } from '../legacyCaptionFont';
+import { pinGenericFonts } from '../genericFontPinning';
 import {expandBounds,textInkInsets} from '../../core/textDecoration';
 
 export function sequenceAssetUrl(projectId: string, assetId: string, component = false): string {
@@ -315,6 +316,9 @@ export class NativeSceneRenderer {
       lap('reactMs');
       const fontCleanups = Array.from(this.drawingRoot.querySelectorAll('[data-native-clip]'))
         .filter(element => legacyTextIds.has(element.getAttribute('data-native-clip')!)).map(applyLegacyCaptionFont);
+      // 総称フォント（sans-serif 等）は Chromium のプロセスごとに別の OS フォントへ解決されるので、同梱の具体名へ固定してから
+      // fonts.ready を待つ（並列書き出しでワーカーごとに字の太さが変わらないように。プレビューも同じ字形になる）。
+      fontCleanups.push(pinGenericFonts(this.drawingRoot));
       this.restoreCaptionFonts = () => fontCleanups.forEach(cleanup => cleanup());
       await document.fonts.ready;
       await Promise.all(Array.from(this.drawingRoot.querySelectorAll('img')).map(async img => {

@@ -2,6 +2,8 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { resolveNativeChromiumBin } from '../resolveNativeChromium';
 import { resolveFfmpegBin } from '../resolveFfmpeg';
@@ -11,11 +13,17 @@ import { isExportFailure, renderExportFrames, type ExportParallel } from './expo
 const chromiumBin = resolveNativeChromiumBin(), ffmpeg = resolveFfmpegBin(), available = chromiumBin.ok && ffmpeg.ok;
 if (!available && process.env.HARNESS_REQUIRE_CAPTURE_E2E === '1') throw new Error('並列書き出しの検証に通常Chrome/FFmpegが必要です');
 // Stands in for native-render.html: a canvas, a translucent blurred caption and text that change with the frame number.
-const page = `<style>html,body{margin:0;overflow:hidden}#stage{width:320px;height:180px;background:linear-gradient(35deg,#027b96,#f87329)}canvas{position:absolute}#text{position:absolute;left:20px;top:50px;font:20px sans-serif;color:white;padding:8px;background:#1239;backdrop-filter:blur(7px);border-radius:8px;text-shadow:2px 3px 4px #000;transform:rotate(-3deg)}</style><div id="stage"><canvas width="320" height="180"></canvas><div id="text"></div></div><script>window.harnessNativeFrame=async n=>{const ctx=document.querySelector('canvas').getContext('2d');ctx.clearRect(0,0,320,180);ctx.fillStyle='hsl('+(n*67)+',80%,45%)';ctx.fillRect((n*13)%200,10,140,140);document.querySelector('#text').textContent='字幕 Frame '+n;await document.fonts.ready;};window.harnessNativeReady=true</script>`;
+// The caption uses the bundled Noto Sans JP like the product (genericFontPinning): a bare `sans-serif` resolves to a
+// different OS font per Chromium process (2026-10-15), so N=1 and N=2 drew different glyphs and failed about 4 runs in 5.
+const page = `<style>@font-face{font-family:'Noto Sans JP';src:url('/noto-sans-jp-400.woff2') format('woff2');font-weight:400;font-display:block}html,body{margin:0;overflow:hidden}#stage{width:320px;height:180px;background:linear-gradient(35deg,#027b96,#f87329)}canvas{position:absolute}#text{position:absolute;left:20px;top:50px;font:20px 'Noto Sans JP',sans-serif;color:white;padding:8px;background:#1239;backdrop-filter:blur(7px);border-radius:8px;text-shadow:2px 3px 4px #000;transform:rotate(-3deg)}</style><div id="stage"><canvas width="320" height="180"></canvas><div id="text"></div></div><script>window.harnessNativeFrame=async n=>{const ctx=document.querySelector('canvas').getContext('2d');ctx.clearRect(0,0,320,180);ctx.fillStyle='hsl('+(n*67)+',80%,45%)';ctx.fillRect((n*13)%200,10,140,140);document.querySelector('#text').textContent='字幕 Frame '+n;await document.fonts.ready;};window.harnessNativeReady=true</script>`;
 let server: Server, origin = '';
 beforeAll(async () => {
   if (!available) return;
-  server = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }).end(page); }).listen(0, '127.0.0.1');
+  const font = readFileSync(resolve(import.meta.dirname, '../../../public/fonts/noto-sans-jp-400.woff2'));
+  server = createServer((req, res) => {
+    if (req.url === '/noto-sans-jp-400.woff2') { res.writeHead(200, { 'content-type': 'font/woff2' }).end(font); return; }
+    res.writeHead(200, { 'content-type': 'text/html' }).end(page);
+  }).listen(0, '127.0.0.1');
   await once(server, 'listening'); origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(() => { server?.close(); });

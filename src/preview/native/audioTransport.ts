@@ -1,6 +1,19 @@
 import type { ScenePlan } from '../../core/sequence/scenePlan';
-import { mixAudioBlock, sequenceSampleCount, type PreparedPcm } from './audioMixer';
+import { mixAudioBlock, pcmReadRanges, sequenceSampleCount, type PcmRange, type PcmSource } from './audioMixer';
 import { audioPlaybackPlan } from './audioPlaybackPlan';
+
+/** 窓読みの PCM（RemotePcm）。揃っているかを `has` で確かめ、足りない区画を `ensure` で取り寄せる。 */
+export interface StreamedPcm {
+  has(ranges: readonly PcmRange[]): boolean;
+  ensure(ranges: readonly PcmRange[], signal?: AbortSignal): Promise<void>;
+}
+const streamed = (source: PcmSource | undefined): source is PcmSource & StreamedPcm =>
+  !!source && typeof (source as Partial<StreamedPcm>).has === 'function' && typeof (source as Partial<StreamedPcm>).ensure === 'function';
+
+/** 再生位置の先、この秒数ぶん（出力時間）の区画を先に取り寄せる。 */
+export const LOOK_AHEAD_SECONDS = 4;
+/** 再生を始める前に揃えておく窓（出力時間）。これだけ揃えば鳴らし始め、残りは先読みが追いかける。 */
+export const PRIME_SECONDS = 1;
 
 /** The AudioContext clock drives both audible and silent timelines. */
 export class NativeAudioTransport {
@@ -12,13 +25,16 @@ export class NativeAudioTransport {
   private playing = false;
   private epoch = 0;
   private disposed = false;
+  /** 直前の schedule が区画待ちで止まった。次に届いたら、過ぎた分は無音のまま飛ばす。 */
+  private stalled = false;
+  private prefetchFailure: Error | undefined;
   private lastPresentationSample?: number;
   private readonly endSample: number;
   private readonly mixingPlan: ReturnType<typeof audioPlaybackPlan>;
   private readonly mixingEndSample: number;
 
   constructor(readonly context: AudioContext, plan: ScenePlan,
-    private readonly sources: ReadonlyMap<string, PreparedPcm>, private readonly onError: (error: Error) => void,
+    private readonly sources: ReadonlyMap<string, PcmSource>, private readonly onError: (error: Error) => void,
     readonly playbackRate = 1) {
     this.endSample = sequenceSampleCount(plan, context.sampleRate);
     this.mixingPlan = audioPlaybackPlan(plan, playbackRate);
@@ -53,13 +69,50 @@ export class NativeAudioTransport {
       return Math.max(0, Math.min(this.endSample, this.anchorSample + Math.floor(elapsed * this.context.sampleRate * this.playbackRate)));
     } catch { return this.currentSample(); }
   }
+  /** 出力 sample 位置 start から count ぶんの混合に要る、素材ごとの PCM 範囲。 */
+  private needed(start: number, count: number): Map<string, PcmRange[]> {
+    const length = Math.max(0, Math.min(count, this.mixingEndSample - start));
+    return pcmReadRanges(this.mixingPlan, this.sources, start, length, this.context.sampleRate);
+  }
+  /** 窓読みの素材がその範囲を持っているか（持っていれば「最近使った」側へ寄せる）。配列で持つ素材は常に揃っている。 */
+  private available(start: number, count: number): boolean {
+    for (const [key, ranges] of this.needed(start, count)) {
+      const source = this.sources.get(key);
+      if (streamed(source) && !source.has(ranges)) return false;
+    }
+    return true;
+  }
+  /** 再生位置の先 LOOK_AHEAD_SECONDS ぶんを取り寄せる（待たない）。失敗は次の schedule で再生の失敗として表に出す。 */
+  private prefetch(start: number): void {
+    for (const [key, ranges] of this.needed(start, Math.ceil(LOOK_AHEAD_SECONDS * this.context.sampleRate))) {
+      const source = this.sources.get(key);
+      if (!streamed(source) || source.has(ranges)) continue;
+      void source.ensure(ranges).catch(error => { if (!this.disposed) this.prefetchFailure ??= error instanceof Error ? error : new Error(String(error)); });
+    }
+  }
+  /** 今の位置から PRIME_SECONDS ぶんの窓を揃える。揃ったら先読みを始める。逆再生は無音なので何も待たない。 */
+  async prime(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (this.disposed || this.playbackRate < 0) return;
+    const start = Math.min(this.mixingEndSample, Math.ceil(this.anchorSample / this.playbackRate));
+    const waits: Promise<void>[] = [];
+    for (const [key, ranges] of this.needed(start, Math.ceil(PRIME_SECONDS * this.context.sampleRate))) {
+      const source = this.sources.get(key);
+      if (streamed(source) && !source.has(ranges)) waits.push(source.ensure(ranges, signal));
+    }
+    if (waits.length) await Promise.all(waits);
+    signal?.throwIfAborted();
+    if (!this.disposed) this.prefetch(start);
+  }
   async play(): Promise<void> {
     if (this.disposed || this.playing || (this.playbackRate > 0 ? this.anchorSample >= this.endSample : this.anchorSample <= 0)) return;
     const epoch = ++this.epoch;
     await this.context.resume();
     if (epoch !== this.epoch || this.disposed) return;
     this.lastPresentationSample = undefined;
-    this.playing = true; this.anchorTime = this.context.currentTime + .05;
+    // 停止中に届いた古い先読みの失敗は次の再生に持ち越さない（問題が続いていれば prime / 先読みで改めて表に出る）。
+    this.prefetchFailure = undefined;
+    this.playing = true; this.anchorTime = this.context.currentTime + .05; this.stalled = false;
     // Never schedule PCM preceding a seek; the sub-sample remainder becomes at
     // most one output sample of silence, not audio from the previous position.
     this.nextSample = Math.ceil(this.anchorSample / Math.abs(this.playbackRate));
@@ -76,7 +129,7 @@ export class NativeAudioTransport {
   pause(): void {
     ++this.epoch;
     this.lastPresentationSample = undefined;
-    this.anchorSample = this.currentSample(); this.playing = false;
+    this.anchorSample = this.currentSample(); this.playing = false; this.stalled = false;
     if (this.timer) clearInterval(this.timer); this.timer = undefined;
     for (const node of this.nodes) { node.onended = null; node.stop(); node.disconnect(); }
     this.nodes.clear();
@@ -87,12 +140,21 @@ export class NativeAudioTransport {
   }
   private schedule(): void {
     if (this.playbackRate < 0) return;
-    const rate = this.context.sampleRate, lookAhead = this.context.currentTime + .3;
+    if (this.prefetchFailure) { const failure = this.prefetchFailure; this.prefetchFailure = undefined; throw failure; }
+    const rate = this.context.sampleRate, now = this.context.currentTime, lookAhead = now + .3;
+    if (this.stalled) {
+      // 区画待ちの間も時計は進む。過ぎた分は無音のまま飛ばし、少し先から続ける（過去の時刻に予約しない）。
+      const live = Math.ceil((now + .02 - this.anchorTime) * rate + this.anchorSample / this.playbackRate);
+      if (this.nextSample < live) this.nextSample = live;
+      this.stalled = false;
+    }
+    this.prefetch(this.nextSample);
     while (this.nextSample < this.mixingEndSample) {
       const at = this.anchorTime + (this.nextSample - this.anchorSample / this.playbackRate) / rate;
       if (at > lookAhead) break;
-      if (at < this.context.currentTime - .005) throw new Error('音声の準備が再生に追いつきません。再生を停止しました');
       const count = Math.min(4096, this.mixingEndSample - this.nextSample);
+      if (!this.available(this.nextSample, count)) { this.stalled = true; break; }
+      if (at < now - .005) throw new Error('音声の準備が再生に追いつきません。再生を停止しました');
       const pcm = mixAudioBlock(this.mixingPlan, this.sources, this.nextSample, count, rate);
       const buffer = this.context.createBuffer(2, count, rate);
       buffer.copyToChannel(pcm[0], 0); buffer.copyToChannel(pcm[1], 1);

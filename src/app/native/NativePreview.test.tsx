@@ -48,9 +48,11 @@ it('notifies a current renderer failure without treating ordinary native 404 as 
   expect(onError).toHaveBeenLastCalledWith({kind:'resource',message:'missing asset',status:404,resource:'asset'});
 });
 vi.mock('../../preview/native/audioTransport',()=>({NativeAudioTransport:class {
-  constructor(readonly context:{sampleRate:number},_plan:unknown,_pcm:unknown,onError:(error:Error)=>void){lifecycle.audioError(onError);}
+  constructor(readonly context:{sampleRate:number},_plan:unknown,readonly pcm:Map<string,{ensure?:(ranges:{from:number;to:number}[],signal?:AbortSignal)=>Promise<void>}>,onError:(error:Error)=>void){lifecycle.audioError(onError);}
   currentSample(){return playback.sample;}get isPlaying(){return true;}
   presentationSample(){return playback.sample;}
+  /** 実物と同じく、再生位置の窓を各 PCM（RemotePcm）に取り寄せさせる。窓読みの失敗が再生の失敗として届くことを検査するため。 */
+  async prime(signal?:AbortSignal){for(const source of this.pcm.values())if(typeof source.ensure==='function')await source.ensure([{from:0,to:1}],signal);}
   seek(){}async play(){}pause(){}dispose(){}
 }}));
 vi.mock('./NativePreviewManipulation',async()=>{
@@ -72,11 +74,12 @@ it('does not refill a new context cache when an old, already-read PCM body compl
   const infoContexts:string[]=[],signals:AbortSignal[]=[];let bodies=0;
   vi.stubGlobal('fetch',vi.fn(async(url:string,options:{signal:AbortSignal})=>{
     if(url.includes('/audio/info')){
-      infoContexts.push(new URL(url,'http://localhost').searchParams.get('context')!);signals.push(options.signal);
+      const params=new URL(url,'http://localhost').searchParams;infoContexts.push(`${params.get('context')}:${params.get('rateNum')}`);signals.push(options.signal);
       return {ok:true,json:async()=>({sampleCount:2,sampleRate:48000,url:'/private-pcm',rate:r(1)})};
     }
     const bytes=new Float32Array([.25,.25,.5,.5]).buffer,first=++bodies===1;
-    return {ok:true,arrayBuffer:async()=>{if(first){reading();await waiting;}return bytes;}};
+    // 窓読み（RemotePcm）は Range の 206 と content-range を確かめてから本文を読む。sampleCount 2 ＝ 16 bytes。
+    return {ok:true,status:206,headers:new Headers({'content-range':'bytes 0-15/16'}),arrayBuffer:async()=>{if(first){reading();await waiting;}return bytes;}};
   }));
   const ref=createRef<NativePreviewHandle>(),view=render(<NativePreview ref={ref} projectId="same" document={document} legacyContext="token-A" onFrame={()=>{}} bypassLut={false}/>);
   await waitFor(()=>expect((view.getByLabelText('再生') as HTMLButtonElement).disabled).toBe(false));
@@ -84,7 +87,8 @@ it('does not refill a new context cache when an old, already-read PCM body compl
   view.rerender(<NativePreview ref={ref} projectId="same" document={document} legacyContext="token-B" onFrame={()=>{}} bypassLut={false}/>);
   await waitFor(()=>expect((view.getByLabelText('再生') as HTMLButtonElement).disabled).toBe(false));expect(signals[0]!.aborted).toBe(true);
   await act(async()=>{finish();await oldPlay;});await act(async()=>ref.current!.play());
-  expect(infoContexts).toEqual(['token-A','token-B']);
+  // 古い貸与の情報は再利用しない。等速で鳴り始めた後の「token-B:2」は 2 倍の裏準備（prewarm）。
+  expect(infoContexts).toEqual(['token-A:1','token-B:1','token-B:2']);
 });
 
 it('does not erase a newer audio failure when an earlier frame finishes drawing',async()=>{
