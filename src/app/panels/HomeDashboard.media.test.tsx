@@ -12,9 +12,9 @@ const { HomeDashboard } = await import('./HomeDashboard');
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
 
-function renderHome() {
+function renderHome(managedMedia = true) {
   const onCreate = vi.fn().mockResolvedValue(undefined);
-  const { container } = render(<HomeDashboard managedMedia projects={[]} error={null} onPick={vi.fn()} onSetStage={vi.fn()} onCreate={onCreate}
+  const { container } = render(<HomeDashboard managedMedia={managedMedia} projects={[]} error={null} onPick={vi.fn()} onSetStage={vi.fn()} onCreate={onCreate}
     onProjectsChanged={vi.fn()} now={Date.parse('2026-09-26T00:00:00Z')} />);
   return { onCreate, home: container.querySelector('.home')! };
 }
@@ -76,8 +76,9 @@ describe('ドロップ（設計 M1・M3・M6）', () => {
     expect(notice()).toBe('動画・音声・画像のどれか1種類を選んでください');
     expect(document.querySelector('.home-create-dialog')).toBeNull();
   });
-  it('音声・動画の複数は1件目だけ（通知を出す）', () => {
-    const { home } = renderHome();
+  it('旧画面では音声・動画の複数は1件目だけ（通知を出す）', () => {
+    // 新しい編集画面はファイルの数だけ作品にする（HomeDashboard.drop.test.tsx）。
+    const { home } = renderHome(false);
     drop(home, [file('a.mp3'), file('b.mp3')]);
     expect(notice()).toBe('2 件ドロップされました。1件目のみ取り込みます: a.mp3');
     expect(screen.getByText('素材: a.mp3')).toBeTruthy();

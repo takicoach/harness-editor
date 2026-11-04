@@ -14,6 +14,9 @@ import { loadHomeView, saveHomeView, type HomeView } from './homeViewPref';
 import { largeUploadNotice } from '../../shared/uploadNotice';
 import { CREATE_MEDIA_ACCEPT, classifyCreateSelection, imageLimitMessage } from '../../shared/createMedia';
 import { orderByName } from '../../shared/importOrder';
+import { importSummary, planHomeDrop, uniqueProjectName } from './homeDropPlan';
+import { desktopFilePath } from '../native/fileReference';
+import { createNativeProject } from '../native/api';
 import { MAX_IMPORT_BATCH_ITEMS } from '../../shared/importBatches';
 import { deleteProjectRequest } from '../trashApi';
 import { moveProjectsToTrash, formatBulkTrashResult } from '../trashBulk';
@@ -92,6 +95,9 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
   // 外付け等から選ぶファイラを開いているか。
   const [pickerOpen, setPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // フォルダ選択用の hidden input と、まとめて作っている最中かどうか。
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   // ホームの明示的ドロップ領域（Finder からの動画ドロップ → 作成モーダル）。
   // App.tsx のウィンドウ全域 drop 抑止（誤ドロップでページが飛ぶ事故の防止）は維持したまま、
@@ -256,7 +262,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
    * — 受理しない場所で受理できるように見せない（バッチE レビュー指摘③）。
    */
   const dropBlocked = (e: React.DragEvent): boolean =>
-    overExcluded(e) || createSource !== null || pickerOpen;
+    overExcluded(e) || createSource !== null || pickerOpen || importBusy;
 
   /**
    * 選んだ・ドロップしたファイルから作成の素材を決める（設計 M1・M3b・M6b）。
@@ -295,13 +301,150 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
     setCreateSource({ kind: 'upload', file: first });
   };
 
+  /** 素材フォルダ1つを作品1つとして取り込む。中身（サブフォルダ込み）は全部その作品の素材になる。 */
+  const importOneFolder = async (folderPath: string): Promise<string> => {
+    const res = await fetch('/api/import-media-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folderPath }),
+    });
+    const data = (await res.json()) as { id?: string; error?: string };
+    if (!res.ok || typeof data.id !== 'string') {
+      throw new Error(typeof data.error === 'string' ? data.error : 'フォルダを取り込めませんでした');
+    }
+    return data.id;
+  };
+
+  /**
+   * フォルダは1つにつき作品1つ。複数ドロップされたらフォルダごとに順に作る
+   * （1つ失敗しても残りは作り、結果は最後にまとめて知らせる）。
+   * フォルダに見えて実体がファイルだったものは、通常の作成に回すため呼び出し側へ返す。
+   */
+  const importFolders = async (folders: ReadonlyArray<{ name: string; path: string; file: File }>): Promise<File[]> => {
+    const made: string[] = [];
+    const failed: string[] = [];
+    const notFolders: File[] = [];
+    setImportBusy(true);
+    try {
+      for (const [index, folder] of folders.entries()) {
+        if (folder.path === '') {
+          failed.push(`${folder.name}: フォルダの場所を特定できませんでした`);
+          continue;
+        }
+        setDropNotice(
+          folders.length > 1
+            ? `フォルダを取り込み中… ${index + 1}/${folders.length}（${folder.name}）`
+            : `「${folder.name}」を取り込み中…`,
+        );
+        try {
+          made.push(await importOneFolder(folder.path));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message === 'not-a-directory') {
+            notFolders.push(folder.file);
+            continue;
+          }
+          failed.push(`${folder.name}: ${message}`);
+        }
+      }
+    } finally {
+      setImportBusy(false);
+    }
+    if (made.length === 0 && failed.length === 0) return notFolders;
+    onProjectsChanged();
+    setDropNotice(
+      made.length > 0
+        ? `${importSummary('フォルダ', made, failed)}。素材は作品の中の「素材」から辿れます`
+        : importSummary('フォルダ', made, failed),
+    );
+    return notFolders;
+  };
+
+  /** ファイルは1件につき作品1つ（元ファイルはコピーせず、その場所を読む）。 */
+  const createProjectsPerFile = async (files: readonly File[]): Promise<void> => {
+    if (files.length > MAX_IMPORT_BATCH_ITEMS) {
+      setDropNotice(`一度に作れるのは${MAX_IMPORT_BATCH_ITEMS}件までです（渡された数: ${files.length} 件）`);
+      return;
+    }
+    const resolved = orderByName(files, (file) => file.name).map((file) => ({ file, path: desktopFilePath(file) }));
+    const taken = new Set(projects.map((project) => project.id));
+    const made: string[] = [];
+    const failed: string[] = [];
+    setImportBusy(true);
+    try {
+      for (const [index, item] of resolved.entries()) {
+        if (item.path === '') {
+          failed.push(`${item.file.name}: 場所を特定できませんでした`);
+          continue;
+        }
+        setDropNotice(`ファイルから作成中… ${index + 1}/${resolved.length}（${item.file.name}）`);
+        try {
+          const created = await createNativeProject(uniqueProjectName(defaultProjectName(item.file.name), taken), item.path);
+          made.push(created.id);
+        } catch (error) {
+          failed.push(`${item.file.name}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } finally {
+      setImportBusy(false);
+    }
+    onProjectsChanged();
+    setDropNotice(importSummary('ファイル', made, failed));
+  };
+
+  /**
+   * ドロップされた複数のファイル。
+   * - 画像は今までどおり1つの作品（選んだ順に並べるスライド。設計 M3b）
+   * - 動画・音声はファイルの数だけ作品を作る（新しい編集画面のみ。旧画面は今までどおり1件目だけ）
+   * - 種類が混ざっていたら今までどおり断る
+   */
+  const startDroppedFiles = async (files: File[]): Promise<void> => {
+    const selection = classifyCreateSelection(files.map((file) => file.name));
+    if (!selection.ok) {
+      setDropNotice(selection.message);
+      return;
+    }
+    if (!managedMedia || selection.kind === 'image') {
+      startCreate(files, 'drop');
+      return;
+    }
+    await createProjectsPerFile(files);
+  };
+
+  /**
+   * ホームへのドロップの振り分け。
+   * - フォルダ: 1つにつき作品1つ（中身はサブフォルダ込みで全部素材）
+   * - ファイル: 1件なら作成ダイアログ、2件以上は startDroppedFiles で種類ごとに振り分ける
+   * - 混ざっていたらフォルダを先に作ってからファイルぶんを作る
+   */
   const handleHomeDrop = (e: React.DragEvent): void => {
     if (!isFileDrag(e)) return;
     e.preventDefault();
     setHomeDragDepth(0);
     setBlockedOver(false);
     if (dropBlocked(e)) return;
-    startCreate(Array.from(e.dataTransfer.files), 'drop');
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    // webkitGetAsEntry() はこの drop の同期中だけ有効（items と files は同じ順）。
+    // items を持たない環境（古い WebView・テスト）では名前と MIME からの推定に落とす。
+    const entries = Array.from(e.dataTransfer.items ?? [], (item) => item.webkitGetAsEntry?.()?.isDirectory ?? null);
+    const plan = planHomeDrop(files.map((file, index) => ({ name: file.name, type: file.type, isDirectory: entries[index] ?? null, file })));
+    if (plan.folders.length === 0 && plan.files.length === 1) {
+      startCreate(plan.files.map((entry) => entry.file), 'drop');
+      return;
+    }
+    void (async () => {
+      const notFolders = plan.folders.length > 0
+        ? await importFolders(plan.folders.map((entry) => ({ name: entry.name, path: desktopFilePath(entry.file), file: entry.file })))
+        : [];
+      const asFiles = [...notFolders, ...plan.files.map((entry) => entry.file)];
+      // フォルダに見えて実体がファイルだった1件（拡張子の無い動画など）は作成ダイアログへ。
+      if (asFiles.length === 1) {
+        startCreate(asFiles, 'drop');
+        return;
+      }
+      if (asFiles.length > 0) await startDroppedFiles(asFiles);
+    })().catch((error: unknown) => setDropNotice(error instanceof Error ? error.message : String(error)));
   };
 
   const pickImages = (files: PickedFile[]): void => {
@@ -341,7 +484,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
     <>
       {homeDragDepth > 0 && !blockedOver && (
         <div className="home-drop-hint" data-testid="home-drop-hint">
-          ここにドロップして作成（動画・音声・画像）
+          ここにドロップして作成（ファイルは1件ずつ作品に／フォルダは中身をまるごと素材に）
         </div>
       )}
       {dropNotice !== null && (
@@ -368,6 +511,18 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
           空のプロジェクトを作成
         </button>
       )}
+      {managedMedia && (
+        <button
+          type="button"
+          className="home-create-link-btn"
+          data-testid="home-create-media-folder"
+          title="フォルダごと渡します。中身（サブフォルダ込み）を全部素材にした作品を1つ作ります"
+          disabled={importBusy}
+          onClick={() => folderInputRef.current?.click()}
+        >
+          {importBusy ? '取り込み中…' : '素材フォルダから作成'}
+        </button>
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -378,6 +533,34 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
         onChange={(e) => {
           startCreate(Array.from(e.target.files ?? []), 'select');
           e.target.value = ''; // 同じファイルを選び直しても change が発火するように
+        }}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        style={{ display: 'none' }}
+        data-testid="home-create-folder"
+        {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+        onChange={(e) => {
+          const list = Array.from(e.target.files ?? []);
+          e.target.value = '';
+          const first = list[0];
+          if (first === undefined) {
+            setDropNotice('空のフォルダは取り込めません。素材の入ったフォルダを選んでください');
+            return;
+          }
+          // webkitdirectory はフォルダ内の各ファイルを返す。先頭ファイルの絶対パスから
+          // 相対パス（フォルダ名/…）ぶんを取り除いてフォルダの絶対パスを得る。
+          const abs = desktopFilePath(first);
+          const rel = (first as File & { webkitRelativePath?: string }).webkitRelativePath ?? '';
+          if (abs === '' || rel === '' || !abs.endsWith(rel)) {
+            setDropNotice('フォルダの場所を特定できませんでした。フォルダをこの画面へドロップしてください');
+            return;
+          }
+          const folderPath = abs.slice(0, abs.length - rel.length) + rel.split('/')[0]!;
+          void importFolders([{ name: rel.split('/')[0]!, path: folderPath, file: first }]).catch((error: unknown) =>
+            setDropNotice(error instanceof Error ? error.message : String(error)),
+          );
         }}
       />
       {pickerOpen && (

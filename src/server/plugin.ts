@@ -6,6 +6,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { HttpError, sendApiError, sendJson, sendText } from './http';
 import { getProjectRoot, resolveProjectDir, resolvePublicAsset } from './projectRoot';
 import { isSuperMovieProject, scanProjects } from './scanProjects';
+import { importMediaFolder } from './importMediaFolder';
 import { sweepCaptureTmpDirs } from './captureTmpSweep';
 import { parseVideoConfigStatic } from '../core';
 import { loadProjectFromDir } from './loadProjectFiles';
@@ -459,6 +460,25 @@ export async function handleApi(
     }
     const real = assertBrowsablePath(path, roots);
     sendJson(res, 200, listDirectory(real, roots,url.searchParams.get('media')==='all'?{extensions:BROWSE_MEDIA_EXTENSIONS}:{}));
+    return;
+  }
+  // 素材フォルダの取り込み: フォルダ1つにつき作品を1つ作り、中身（サブフォルダ込み）を全部素材にする。
+  if (url.pathname === '/api/import-media-folder') {
+    if (method !== 'POST') {
+      throw new HttpError(405, 'このエンドポイントは POST のみ対応します');
+    }
+    const body = await readJsonBody(req);
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      throw new HttpError(400, 'JSON の形式が不正です');
+    }
+    const { folderPath, name } = body as { folderPath?: unknown; name?: unknown };
+    if (typeof folderPath !== 'string' || folderPath === '') {
+      throw new HttpError(400, 'folderPath を指定してください');
+    }
+    const folder = assertBrowsablePath(folderPath, browseRoots());
+    const projectName = typeof name === 'string' && name !== '' ? name : undefined;
+    const result = await importMediaFolder(root, { folderPath: folder, ...(projectName ? { name: projectName } : {}) });
+    sendJson(res, 200, { ...result, projects: scanProjects(root) });
     return;
   }
   if (url.pathname === '/api/create-project-link') {
