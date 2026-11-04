@@ -20,6 +20,12 @@ function writeMedia(path: string, bytes = 8): void {
   writeFileSync(path, Buffer.alloc(bytes));
 }
 
+/** 書類はフォルダを用意してから置く（素材フォルダと同じく入れ子に置かれる）。 */
+function writeDocument(path: string, text: string): void {
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, text, 'utf8');
+}
+
 /** 撮影日ごとにサブフォルダへ分かれた、よくある素材フォルダ。 */
 function materialsFolder(): string {
   const folder = tempDir('sme-materials-');
@@ -28,7 +34,11 @@ function materialsFolder(): string {
   writeMedia(join(folder, '撮影日1121', 'sub', 'clip3.mp4'));
   writeMedia(join(folder, 'bgm.mp3'));
   writeMedia(join(folder, 'images', 'thumb.png'));
-  writeFileSync(join(folder, 'メモ.txt'), 'media ではないので拾わない');
+  // 台本は Word・PDF・テキスト・Markdown・字幕の5形式を拾う（中身は読まない）。
+  writeFileSync(join(folder, '台本.docx'), 'word');
+  writeDocument(join(folder, '資料', '構成.md'), 'markdown');
+  writeFileSync(join(folder, 'テロップ.srt'), '1\n00:00:00,000 --> 00:00:01,000\nこんにちは\n');
+  writeFileSync(join(folder, '請求書.xlsx'), '書類だが台本の形式ではないので拾わない');
   return folder;
 }
 
@@ -74,7 +84,7 @@ describe('importMediaFolder', () => {
     const folder = materialsFolder();
     const result = await importMediaFolder(root, { folderPath: folder, name: '撮影素材' });
 
-    expect(result.counts).toEqual({ videos: 3, audio: 1, images: 1 });
+    expect(result.counts).toEqual({ videos: 3, audio: 1, images: 1, documents: 3 });
     const directory = join(root, result.id);
     // 素材はコピーせず、フォルダ本体へのリンクで参照する。
     expect(readlinkSync(join(directory, '素材'))).toBe(folder);
@@ -90,7 +100,11 @@ describe('importMediaFolder', () => {
     ]);
     expect(record.materials.audio).toEqual(['bgm.mp3']);
     expect(record.materials.images).toEqual(['images/thumb.png']);
-    expect(readFileSync(join(directory, 'CLAUDE.md'), 'utf8')).toContain('素材/<relativePath>');
+    // 台本・構成・字幕も素材として記録する（拾うのは docx / pdf / txt / md / srt）。
+    expect(record.materials.documents.sort()).toEqual(['テロップ.srt', '台本.docx', '資料/構成.md']);
+    const guide = readFileSync(join(directory, 'CLAUDE.md'), 'utf8');
+    expect(guide).toContain('素材/<relativePath>');
+    expect(guide).toContain('`素材/台本.docx`');
   });
 
   it('作品名を省いたらフォルダ名を使う', async () => {

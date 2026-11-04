@@ -12,6 +12,12 @@ import { createEmptySequenceProject } from './sequence/create';
  * 見つけたメディアの一覧を `.sme/materials.json` に残す。
  */
 
+/**
+ * 台本の形式（Word・PDF・テキスト・Markdown・字幕）。素材フォルダに一緒に入ってくる書類。
+ * 中身は読まず（docx/pdf は解析しない）、在りかを一覧に残して編集者と AI が開けるようにする。
+ */
+export const DOCUMENT_EXTENSIONS = ['.docx', '.pdf', '.txt', '.md', '.srt'];
+
 /** 走査の上限。深い共有フォルダ・外付けを渡されても固まらないための保険。 */
 export const MAX_SCAN_DEPTH = 5;
 export const MAX_SCAN_FILES = 20000;
@@ -90,6 +96,7 @@ function materialsGuide(v: {
   videoCount: number;
   audioCount: number;
   imageCount: number;
+  documents: string[];
 }): string {
   return [
     '# この作品について（素材フォルダから作成）',
@@ -100,13 +107,18 @@ function materialsGuide(v: {
     '| --- | --- |',
     `| 素材フォルダ | \`${v.materialsDir}\`（作品直下の \`素材\` でも開ける） |`,
     `| 素材 | 動画 ${v.videoCount} 本 / 音声 ${v.audioCount} 本 / 画像 ${v.imageCount} 枚 |`,
-    '| 素材の一覧 | `.sme/materials.json` の `materials.videos` / `audio` / `images` |',
+    ...(v.documents.length > 0
+      ? [`| 台本・書類 | ${v.documents.map((item) => `\`素材/${item}\``).join(' / ')} |`]
+      : []),
+    '| 素材の一覧 | `.sme/materials.json` の `materials.videos` / `audio` / `images` / `documents` |',
     '',
     '## 注意',
     '',
     '- 素材フォルダは**サブフォルダに入れ子**。直下の glob では拾えないので再帰で列挙する。',
     '- 相対パスは素材フォルダ基準。`素材/<relativePath>` でそのまま開ける。',
     '- 素材は元の場所を参照しているだけ（コピーしていない）。元を消すと開けなくなる。',
+    '- 台本・構成の書類があれば先に読む（`materials.documents`）。構成・文言・並び順は',
+    '  そこに書かれている指示を正とし、無い部分だけ自分で決める。',
     '',
   ].join('\n');
 }
@@ -121,7 +133,7 @@ export interface ImportMediaFolderInput {
 export interface ImportMediaFolderResult {
   id: string;
   materialsDir: string;
-  counts: { videos: number; audio: number; images: number };
+  counts: { videos: number; audio: number; images: number; documents: number };
 }
 
 /**
@@ -148,6 +160,8 @@ export async function importMediaFolder(
   const videos = scanMediaFiles(folder, VIDEO_EXTENSIONS);
   const audio = scanMediaFiles(folder, AUDIO_EXTENSIONS);
   const images = scanMediaFiles(folder, IMAGE_EXTENSIONS);
+  // 台本・構成などの書類も素材として一覧に残す（中身は読まない）。
+  const documents = scanMediaFiles(folder, DOCUMENT_EXTENSIONS);
   if (videos.length === 0 && audio.length === 0 && images.length === 0) {
     throw new HttpError(
       400,
@@ -175,9 +189,11 @@ export async function importMediaFolder(
             videoCount: videos.length,
             audioCount: audio.length,
             imageCount: images.length,
+            documentCount: documents.length,
             videos: videos.map((item) => item.relativePath),
             audio: audio.map((item) => item.relativePath),
             images: images.map((item) => item.relativePath),
+            documents: documents.map((item) => item.relativePath),
           },
           createdAt: new Date().toISOString(),
         },
@@ -193,6 +209,7 @@ export async function importMediaFolder(
         videoCount: videos.length,
         audioCount: audio.length,
         imageCount: images.length,
+        documents: documents.map((item) => item.relativePath),
       }),
       'utf8',
     );
@@ -204,6 +221,6 @@ export async function importMediaFolder(
   return {
     id: created.id,
     materialsDir: folder,
-    counts: { videos: videos.length, audio: audio.length, images: images.length },
+    counts: { videos: videos.length, audio: audio.length, images: images.length, documents: documents.length },
   };
 }
