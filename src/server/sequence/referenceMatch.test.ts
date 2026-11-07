@@ -30,16 +30,32 @@ it.each(['.mp4','.wav','.png','.flac','.webp'])('matches a unique %s by full byt
 });
 it('keeps legacy video-only matching by default and opts into media explicitly',async()=>{
  const f=await fixture();await writeFile(join(f.media,'a.wav'),'a');
- expect(findSizeMatches(f.roots,{name:'a.wav',sizeBytes:1}).candidates).toEqual([]);
- expect(findSizeMatches(f.roots,{name:'a.wav',sizeBytes:1},{extensions:['.wav']}).candidates).toHaveLength(1);
+ expect((await findSizeMatches(f.roots,{name:'a.wav',sizeBytes:1})).candidates).toEqual([]);
+ expect((await findSizeMatches(f.roots,{name:'a.wav',sizeBytes:1},{extensions:['.wav']})).candidates).toHaveLength(1);
 });
 it('rejects ambiguity before using a hash to choose a preferred occurrence',async()=>{
  const f=await fixture();await mkdir(join(f.media,'other'));await writeFile(join(f.media,'a.wav'),'a');await writeFile(join(f.media,'other/a.wav'),'b');
  expect(await matchSequenceReference(request('a.wav','a'),f.roots,f.project)).toEqual({matched:false,reason:'ambiguous'});
 });
-it('refuses an incomplete scan even when its first candidate is exact',async()=>{
- const f=await fixture();await writeFile(join(f.media,'a.wav'),'a');await mkdir(join(f.media,'z'));await mkdir(join(f.media,'z/deeper'));
- expect(await matchSequenceReference(request('a.wav','a'),f.roots,f.project,undefined,{limits:{maxDepth:1,maxEntries:100,maxMillis:1000}})).toEqual({matched:false,reason:'search-truncated'});
+// 実機の ~/Downloads は 6 階層より深いことが多く、探し切れないと 1 本ごとに保存場所を聞いていた。
+// 全体の照合値が一致すれば中身は同じなので、未走査の場所に同じコピーがあっても取り違えにならない。
+const shallow={limits:{maxDepth:1,maxEntries:100,maxMillis:1000}};
+const deeper=async(media:string)=>{await mkdir(join(media,'z'));await mkdir(join(media,'z/deeper'));};
+it('accepts the only candidate of an incomplete scan when its full bytes match',async()=>{
+ const f=await fixture(),source=join(f.media,'a.wav');await writeFile(source,'a');await deeper(f.media);
+ expect(await matchSequenceReference(request('a.wav','a'),f.roots,f.project,undefined,shallow)).toEqual({matched:true,path:source,fingerprint:hash('a')});
+});
+it('still refuses the only candidate of an incomplete scan when its bytes differ',async()=>{
+ const f=await fixture();await writeFile(join(f.media,'a.wav'),'b');await deeper(f.media);
+ expect(await matchSequenceReference(request('a.wav','a'),f.roots,f.project,undefined,shallow)).toEqual({matched:false,reason:'content-mismatch'});
+});
+it('still reports an incomplete scan that found nothing, not that the media does not exist',async()=>{
+ const f=await fixture();await deeper(f.media);
+ expect(await matchSequenceReference(request('a.wav','a'),f.roots,f.project,undefined,shallow)).toEqual({matched:false,reason:'search-truncated'});
+});
+it('still refuses to choose between two candidates of an incomplete scan',async()=>{
+ const f=await fixture();await writeFile(join(f.media,'a.wav'),'a');await mkdir(join(f.media,'other'));await writeFile(join(f.media,'other/a.wav'),'a');await mkdir(join(f.media,'other/deeper'));await mkdir(join(f.media,'other/deeper/more'));
+ expect(await matchSequenceReference(request('a.wav','a'),f.roots,f.project,undefined,{limits:{maxDepth:2,maxEntries:100,maxMillis:1000}})).toEqual({matched:false,reason:'ambiguous'});
 });
 it('rejects equal size but different middle bytes using the full fingerprint',async()=>{
  const f=await fixture(),a=Buffer.alloc(10*1024*1024,1),b=Buffer.from(a);b[5*1024*1024]=2;await writeFile(join(f.media,'a.mov'),b);

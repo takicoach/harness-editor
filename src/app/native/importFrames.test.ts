@@ -64,3 +64,7 @@ it('keeps a batch waiting for a decision on the timeline: held, judged and copyi
   expect(importFrames(doc(),[deciding,copying],()=>undefined).map(f=>[f.batchId,f.phase])).toEqual([[deciding.batchId,'awaiting-decision'],[deciding.batchId,'ready'],[copying.batchId,'copying'],[copying.batchId,'judging']]);
   expect((['judging','awaiting-decision','copying'] as const).map(importPhaseLabel)).toEqual(['読み取りの速さを確認中','コピーするか確認待ち','速いドライブへコピー中']);
 });
+it('shows no main-track frames for a batch that only goes into the materials',()=>{
+  const materials={...batch('imp-mmmmmmmmmmmmmmmmmmmm','preparing',[{durationSeconds:2},{phase:'waiting'}]),placement:'materials' as const};
+  expect(importFrames(doc(),[materials],()=>undefined)).toEqual([]);
+});

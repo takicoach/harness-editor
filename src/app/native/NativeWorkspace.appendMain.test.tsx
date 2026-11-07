@@ -3,7 +3,7 @@ import {forwardRef,useImperativeHandle} from 'react';
 import {act,cleanup,fireEvent,render,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {NativeWorkspace} from './NativeWorkspace';
-const h=vi.hoisted(()=>({append:vi.fn(),upload:vi.fn(),execute:vi.fn(),busy:false,timeline:null as null|{onDrop(assetId:string,frame:number,trackId:string):void;onRange(range:unknown):void;range:unknown}}));
+const h=vi.hoisted(()=>({append:vi.fn(),upload:vi.fn(),execute:vi.fn(),busy:false,blank:false,timeline:null as null|{onDrop(assetId:string,frame:number,trackId:string):void;onRange(range:unknown):void;range:unknown}}));
 vi.mock('./NativePreview',()=>({NativePreview:forwardRef((_p,ref)=>{useImperativeHandle(ref,()=>({pause(){},flushManipulation:async()=>true}));return null;})}));
 vi.mock('./NativeInspector',()=>({NativeInspector:forwardRef((_p,ref)=>{useImperativeHandle(ref,()=>({flush:async()=>true}));return null;})}));
 vi.mock('./NativeTimeline',()=>({NativeTimeline:forwardRef((props:{onDrop(assetId:string,frame:number,trackId:string):void;onRange(range:unknown):void;range:unknown},_ref)=>{h.timeline=props;return null;})}));
@@ -21,10 +21,11 @@ vi.mock('./useNativeSession',()=>{
     streams:kinds.map((kind,index)=>kind==='video'?{index,kind,codec:'h264',duration:r(1),frameRate:r(30),width:160,height:90}:{index,kind,codec:'aac',duration:r(1),sampleRate:48000,channels:2})});
   const state={sessionId:'s',dirty:false,document:{schemaVersion:2,id:'p1',revision:0,name:'p1',fps:r(30),resolution:{width:320,height:180},sequenceEndFrame:300,background:'#000',
     assets:[media('movie',['video','audio']),media('song',['audio'])],tracks:[{id:'v-main',kind:'visual',name:'映像1',enabled:true}],clips:[],transitions:[],transcripts:[],ducking:{enabled:false,strength:'mid'}}};
-  return {useNativeSession:()=>({state,busy:h.busy,reference:vi.fn(),upload:h.upload,execute:h.execute,readCurrent:()=>state,accept:vi.fn(),appendToMain:h.append})};
+  const current=()=>h.blank?{...state,document:{...state.document,sequenceEndFrame:0}}:state;
+  return {useNativeSession:()=>({state:current(),busy:h.busy,reference:vi.fn(),upload:h.upload,execute:h.execute,readCurrent:current,accept:vi.fn(),appendToMain:h.append})};
 });
 beforeEach(()=>{
-  Reflect.deleteProperty(window,'harnessDesktop');sessionStorage.clear();localStorage.clear();h.busy=false;h.timeline=null;
+  Reflect.deleteProperty(window,'harnessDesktop');sessionStorage.clear();localStorage.clear();h.busy=false;h.blank=false;h.timeline=null;
   h.append.mockReset().mockResolvedValue({ok:true});h.execute.mockReset().mockResolvedValue(true);
   h.upload.mockReset().mockImplementation(async(file:File,_progress:unknown,onUploaded?:(id:string)=>void)=>{onUploaded?.(`id-${file.name}`);return true;});
   vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({status:'unchanged',autoSaveDefaultEnabled:false})})));
@@ -58,4 +59,16 @@ it('clears the range selection after appending to the main end, and keeps it whe
   await act(async()=>{});expect(h.timeline!.range).toEqual(range);
   fireEvent.click(await view.findByRole('button',{name:'movie.mp4をメインの末尾に追加'}));await waitFor(()=>expect(h.append).toHaveBeenCalledTimes(2));
   await waitFor(()=>expect(h.timeline!.range).toBeNull());
+});
+// フォルダから作った案件（素材だけで何も置いていない）: 最初の動画は書式まで決めるサーバの経路で置く。
+// 画面からの編集命令では書式を決められない（set-sequence-format は HTTP で受けない）ので、普通の配置だと 1920x1080 のままになる。
+it('places the first video of a project with nothing placed through the main append, so the project takes its format',async()=>{
+  h.blank=true;render(<NativeWorkspace projectId="p1"/>);await waitFor(()=>expect(h.timeline).not.toBeNull());
+  h.timeline!.onDrop('movie',120,'v-main');
+  await waitFor(()=>expect(h.append).toHaveBeenCalledWith(['movie']));expect(h.execute).not.toHaveBeenCalled();
+});
+it('keeps audio on the ordinary placement in a project with nothing placed',async()=>{
+  h.blank=true;render(<NativeWorkspace projectId="p1"/>);await waitFor(()=>expect(h.timeline).not.toBeNull());
+  h.timeline!.onDrop('song',0,'v-main');
+  await waitFor(()=>expect(h.execute).toHaveBeenCalled());expect(h.append).not.toHaveBeenCalled();
 });

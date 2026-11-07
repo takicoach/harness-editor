@@ -2789,6 +2789,11 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 .sme-center .home-create-link-btn { margin-top: 8px; }
 /* 空状態・エラー時のゴミ箱導線は「復元の唯一の入口」。中央寄せの縦並びで詰まらせない。 */
 .sme-center .home-trash-open { margin-top: 10px; }
+.home-create-names {
+  max-height: 150px; overflow: auto; margin: 0; padding: 6px 9px 6px 24px;
+  font-size: 11.5px; color: var(--fg-1); word-break: break-all;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
 .home-create-link-note {
   font-size: 11.5px; color: var(--fg-2); word-break: break-all;
   background: var(--bg-2); border: 1px solid var(--border);

@@ -263,7 +263,7 @@ set "CHROMIUM_STAGED=%CHROMIUM_DIR%.new"
 :: I-5: 配布物の platform 名も health スクリプトの出力に従う
 :: （PROCESSOR_ARCHITECTURE での CPU 判定をこのファイルに二重に書かない）
 set "CHROMIUM_PLATFORM="
-for /f "usebackq delims=" %%P in (`node --import tsx scripts\chromium-health.ts --print-download-platform 2^>>"%CHROMIUM_LOG%"`) do set "CHROMIUM_PLATFORM=%%P"
+for /f "usebackq delims=" %%P in (`node --import tsx scripts\chromium-health.ts --print-download-platform 2^>^>"%CHROMIUM_LOG%"`) do set "CHROMIUM_PLATFORM=%%P"
 if not defined CHROMIUM_PLATFORM (
   :: M-8: 空は「対応外の CPU」ではなく「platform を取得できなかった」。取るべき行動が違う
   echo [NG] 配布物の platform を取得できませんでした（部品の導入が未完了、または Node.js の版が古い可能性があります）。

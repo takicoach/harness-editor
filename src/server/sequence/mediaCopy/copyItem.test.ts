@@ -138,6 +138,14 @@ describe.each([['APFS',false],['exFAT-like empty inodes',true]] as const)('on %s
     expect(outcome).toBeInstanceOf(ReservationLostError);
     expect(await removeOwnedCopyFiles(world.io,folder.path,owned)).toEqual({removed:[owned.part!.name],kept:['clip.wav']});expect((await stat(final)).isFIFO()).toBe(true);
   });
+  it('does not sync the folder on Windows, where a read-only handle cannot be flushed (EPERM)',async()=>{
+    const path=await source('clip.wav',9),platform=Object.getOwnPropertyDescriptor(process,'platform')!;
+    world.faults.push({op:'sync',match:call=>call.path===folder.path,error:'EPERM'});
+    Object.defineProperty(process,'platform',{...platform,value:'win32'});
+    try{await copyOneItem(world.io,{path},{folder,name:'clip.wav'},hooks());}
+    finally{Object.defineProperty(process,'platform',platform);}
+    expect(await names()).toEqual(['clip.wav']);expect(owned.final).toBeDefined();expect(owned.part).toBeUndefined();
+  });
   it('records the name only after the folder is synced, so a lost rename still leaves its part and reservation on the record',async()=>{
     const path=await source('clip.wav',9);let atSync:OwnedCopyFiles|undefined;
     world.faults.push({op:'sync',match:call=>call.path===folder.path,before:()=>{atSync=structuredClone(owned);},error:'EIO'});

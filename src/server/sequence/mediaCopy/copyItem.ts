@@ -280,7 +280,8 @@ async function copyAndVerify(io:CopyIo,source:CopySource,target:{folder:CopyFold
   if(named.isSymbolicLink()||!named.isFile()||!sameInode(named,part)||named.size!==verified.size||named.mtimeMs!==verified.mtimeMs)throw new ReservationLostError('確定した名前のファイルを確かめられません');
   // 確定した名前をドライブに残す（フォルダーを fsync する。exFAT でも使えることを実測で確認済み）。記録から .part と予約を外すのは同期の後
   // （rename の直後に抜かれてディスク上は .part の名前のままでも、記録に .part と予約が残り、回収で見分けられる）
-  const dir=await io.open(folder.path,READ_ONLY);await closing(dir,()=>dir.sync());
+  // Windows は読み取り専用で開いたフォルダーを fsync できない（EPERM。SequenceStore と同じ扱いで省く）。
+  if(process.platform!=='win32'){const dir=await io.open(folder.path,READ_ONLY);await closing(dir,()=>dir.sync());}
   await hooks.phase('named',{final:{dev:named.dev,ino:named.ino,size:named.size,mtimeMs:named.mtimeMs},part:undefined,reserved:undefined});
   // 確定名で開き直し、照合した実体（dev・ino・大きさ・更新時刻）のままかを確かめて、受け渡す識別情報にする（rename で ctime は変わる）
   const file=await io.open(finalPath,READ_ONLY);

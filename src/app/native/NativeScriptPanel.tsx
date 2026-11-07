@@ -9,7 +9,9 @@ import { NativePreview, type NativePreviewHandle } from './NativePreview';
 import '../panels/ScriptPanel.css';
 import { NativeScriptEditReview,type NativeScriptEditReviewHandle } from './NativeScriptEditReview';
 import {TaskProgress} from '../components/TaskProgress';
-import {importScriptFile,SCRIPT_FILE_ACCEPT} from './scriptImport';
+import {importScriptFile,SCRIPT_FILE_ACCEPT,SCRIPT_FILE_BYTES} from './scriptImport';
+import {fetchProjectDocumentFile,fetchProjectDocuments} from './api';
+import type {ProjectDocument} from '../../shared/projectDocuments';
 import type { ScriptAdoptionAccess } from '../panels/ScriptAdoptionControls';
 
 export interface NativeScriptHandle { flush():Promise<boolean>;pauseSource():void }
@@ -20,6 +22,13 @@ const clock=(ms:number)=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%6
 
 export const NativeScriptPanel=forwardRef<NativeScriptHandle,Props>(function NativeScriptPanel(props,ref){
   const {state,projectId,occurrenceId}=props,script=state.document.scriptDocument;
+  const [documents,setDocuments]=useState<ProjectDocument[]>([]);
+  useEffect(()=>{
+    let live=true;setDocuments([]);
+    // 読めなくても台本欄は使える（一覧だけ出さない）。
+    void fetchProjectDocuments(projectId).then(list=>{if(live)setDocuments(list);},()=>undefined);
+    return ()=>{live=false;};
+  },[projectId]);
   const [text,setText]=useState(script?.text??''),[base,setBase]=useState(script?.text??''),[error,setError]=useState<string|null>(null);
   const [mode,setMode]=useState<'caption'|'structure'>('caption'),[working,setWorking]=useState(false),[visible,setVisible]=useState(20);
   const [result,setResult]=useState<{artifact:ScriptProposalArtifact;revision:number;occurrenceId:string;mode:typeof mode}|null>(null);
@@ -95,7 +104,8 @@ export const NativeScriptPanel=forwardRef<NativeScriptHandle,Props>(function Nat
     }catch(cause){if(token===generation.current && !controller.current?.signal.aborted)setError(cause instanceof Error?cause.message:String(cause));}
     finally{if(token===generation.current)setWorking(false);}
   }
-  async function upload(file:File){
+  /** source が関数なら保管した書類の取得。取得も同じ守りの中で行う（待っている間の編集や別の選択で、古い本文が上書きしないように）。 */
+  async function upload(source:File|(()=>Promise<File>)){
     importController.current?.abort();const abort=new AbortController();importController.current=abort;
     const token=++importGeneration.current,current=latest.current;
     const owner={projectId:current.props.projectId,sessionId:current.props.state.sessionId,edit:editGeneration.current};
@@ -108,6 +118,8 @@ export const NativeScriptPanel=forwardRef<NativeScriptHandle,Props>(function Nat
       if(!owns())return;
       if(editGeneration.current!==owner.edit)throw new Error('読み込み中に編集内容が変わりました。入力を残しました。もう一度ファイルを選んでください');
       const snapshot={text:latest.current.text,revision:latest.current.props.read()?.document.revision};
+      const file=typeof source==='function'?await source():source;
+      if(!owns())return;
       const imported=await importScriptFile(file,abort.signal);
       if(!owns())return;
       if(editGeneration.current!==owner.edit||latest.current.text!==snapshot.text||latest.current.props.read()?.document.revision!==snapshot.revision)
@@ -130,6 +142,15 @@ export const NativeScriptPanel=forwardRef<NativeScriptHandle,Props>(function Nat
       {importing&&<TaskProgress label="台本を読み込んでいます" compact detail="本文を取り出しています"/>}
       {importedName&&<p className="script-input-meta">{importedName}</p>}
     </div>
+    {documents.length>0&&<section className="script-documents" aria-label="資料">
+      <h3>資料</h3>
+      <p>素材フォルダから保管した書類です。読み込むと、確認してから台本にできます。</p>
+      <ul>{documents.map(document=>{const tooBig=document.sizeBytes>SCRIPT_FILE_BYTES;return <li key={document.path}>
+        <span className="script-document-name">{document.path}</span>
+        {tooBig&&<small>大きすぎるため読み込めません（保管のみ）</small>}
+        <button type="button" className="btn-secondary" aria-label={`${document.path} を台本に読み込む`} disabled={tooBig||props.busy||working} onClick={()=>void upload(()=>fetchProjectDocumentFile(projectId,document.path))}>台本に読み込む</button>
+      </li>;})}</ul>
+    </section>}
     <label className="script-input-label" htmlFor="native-shooting-script">台本の本文を確認・修正</label>
     <textarea id="native-shooting-script" value={text} maxLength={2000000} rows={6} placeholder="ここに直接貼り付けることもできます" onChange={event=>{editGeneration.current++;latest.current.text=event.target.value;setText(event.target.value);setImportedName('');}} onBlur={event=>{
       // These actions flush the draft themselves. Starting an edit on blur would

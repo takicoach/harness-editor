@@ -24,7 +24,7 @@ function select(files: File[]): void {
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   fireEvent.change(input);
 }
-const drop = (home: Element, files: File[]) => fireEvent.drop(home, { dataTransfer: { files, types: ['Files'] } });
+const drop = (home: Element, files: File[]) => fireEvent.drop(home, { dataTransfer: { files, items: [], types: ['Files'] } });
 const notice = () => document.querySelector('.home-drop-notice')?.textContent ?? null;
 
 describe('ファイル選択（設計 M5・M6b）', () => {

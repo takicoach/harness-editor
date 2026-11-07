@@ -21,7 +21,7 @@ import { createEmptySequenceProject, createSequenceImageProject, createSequenceP
 import { receiveImageUploads } from './sequence/imageUpload';
 import { IMAGE_UPLOAD_MANIFEST_MAX_BYTES } from '../shared/imageUploadFrame';
 import { MAX_CREATE_IMAGE_BYTES, MAX_CREATE_IMAGES } from '../shared/createMedia';
-import { assertBrowsablePath, browseRoots, listDirectory,BROWSE_MEDIA_EXTENSIONS } from './browsePaths';
+import { assertBrowsablePath, assertPathResponds, browseRoots, listDirectory,BROWSE_MEDIA_EXTENSIONS } from './browsePaths';
 import {
   assertSourceAvailable,
   assertVideoProcessingAllowed,
@@ -30,6 +30,7 @@ import {
 import { relinkVideo } from './relinkVideo';
 import { convertProjectToLink, describeLinkMissReason, findConvertCandidate } from './convertToLink';
 import { streamBodyToTempFile, assertContentLengthWithin, resolveMaxUploadBytes } from './streamUpload';
+import { handleProjectDocumentsApi } from './projectDocumentsApi';
 import { readJsonBody, readBodyText } from './readBody';
 import {expectedReferenceFingerprint} from './sequence/references';
 import { handlePreferenceApi } from './preferenceApi';
@@ -388,7 +389,7 @@ export async function handleApi(
       throw new HttpError(404, `プロジェクトが見つかりません: ${id}`);
     }
     if (url.pathname === '/api/project/link-candidate') {
-      const outcome = findConvertCandidate(root, dir);
+      const outcome = await findConvertCandidate(root, dir);
       // 見つからなかった理由は UI がそのまま出せる日本語で返す（クライアントで
       // reason を日本語へ翻訳し直すと、理由が増えたとき片側だけ古くなる）。
       sendJson(
@@ -405,7 +406,7 @@ export async function handleApi(
       sendJson(res, 409, { error: 'busy', jobs: busy });
       return;
     }
-    const result = convertProjectToLink(root, dir);
+    const result = await convertProjectToLink(root, dir);
     sendJson(res, 200, { ...result, projects: scanProjects(root) });
     return;
   }
@@ -457,8 +458,9 @@ export async function handleApi(
       sendJson(res, 200, { roots, path: null, parent: null, dirs: [], files: [], truncated: false });
       return;
     }
+    await assertPathResponds(path, roots);
     const real = assertBrowsablePath(path, roots);
-    sendJson(res, 200, listDirectory(real, roots,url.searchParams.get('media')==='all'?{extensions:BROWSE_MEDIA_EXTENSIONS}:{}));
+    sendJson(res, 200, await listDirectory(real, roots,url.searchParams.get('media')==='all'?{extensions:BROWSE_MEDIA_EXTENSIONS}:{}));
     return;
   }
   if (url.pathname === '/api/create-project-link') {
@@ -578,6 +580,7 @@ export async function handleApi(
     }
     return;
   }
+  if (await handleProjectDocumentsApi(req, res, url, root, uploadTmpDir(root))) return;
   if (url.pathname === '/api/upload-material') {
     if (method !== 'POST') {
       throw new HttpError(405, 'このエンドポイントは POST のみ対応します');

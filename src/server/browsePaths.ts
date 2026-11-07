@@ -1,7 +1,9 @@
-import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { readdir, realpath as realpathAsync, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { HttpError } from './http';
+import { UnresponsiveFileError, unresponsiveReadMessage, volumeStalled, watchedFs } from './sequence/fsWatch';
 import { VIDEO_EXTENSIONS } from '../shared/videoExtensions';
 import { CREATE_MEDIA_EXTENSIONS } from '../shared/createMedia';
 /** 「フォルダから選ぶ」（media=all）の拡張子。作成で受け付ける集合と同じ正本を使う（設計 M5）。 */
@@ -125,29 +127,56 @@ export function parentOf(dir: string, roots: BrowseRoot[], realpath: (p: string)
   return up === dir ? null : up;
 }
 
+/** 外付けの回転待ちより長く、利用者が固まったと感じる前に案内を返せる長さ。 */
+const BROWSE_UNRESPONSIVE_MS = 5000;
+type BrowseStat = { isDirectory(): boolean; isFile(): boolean; size: number };
+
+/**
+ * 同期で確かめる assertBrowsablePath の前に呼ぶ。応答しないドライブのパスで同期の呼び出しに入ると、サーバー全体が止まる（2026-11-04 実測）。
+ * 起点の外のパスには触れない（判定は assertBrowsablePath に任せる）。
+ */
+export async function assertPathResponds(
+  path: string,
+  roots: BrowseRoot[],
+  deps: { realpath?: (p: string) => Promise<string>; limitMs?: number } = {},
+): Promise<void> {
+  if (!isAbsolute(path)) return;
+  const target = resolve(path);
+  if (!roots.some((root) => isContained(target, root.path))) return;
+  const check = deps.realpath ?? ((p: string) => realpathAsync(p));
+  try {
+    await watchedFs('realpath', target, () => check(target), { limitMs: deps.limitMs ?? BROWSE_UNRESPONSIVE_MS });
+  } catch (error) {
+    if (error instanceof UnresponsiveFileError) throw new HttpError(503, unresponsiveReadMessage(target));
+  }
+}
+
 /**
  * フォルダの中身を返す。サブフォルダと動画ファイルのみ。
  * 隠しファイルは除外、個々の stat 失敗（権限・未マウント）はその項目だけ捨てる
  * （一覧全体を落とさない）。件数は MAX_BROWSE_ENTRIES で打ち切る。
  */
-export function listDirectory(
+export async function listDirectory(
   dir: string,
   roots: BrowseRoot[] = browseRoots(),
   deps: {
-    readdir?: (p: string) => string[];
-    stat?: (p: string) => { isDirectory(): boolean; isFile(): boolean; size: number };
+    readdir?: (p: string) => string[] | Promise<string[]>;
+    stat?: (p: string) => BrowseStat | Promise<BrowseStat>;
     realpath?: (p: string) => string;
     extensions?: readonly string[];
+    limitMs?: number;
   } = {},
-): BrowseListing {
-  const readdir = deps.readdir ?? ((p: string) => readdirSync(p));
-  const stat = deps.stat ?? ((p: string) => statSync(p));
+): Promise<BrowseListing> {
+  const read = deps.readdir ?? ((p: string) => readdir(p));
+  const info = deps.stat ?? ((p: string) => stat(p));
   const realpath = deps.realpath ?? resolveRealPath;
+  const limitMs = deps.limitMs ?? BROWSE_UNRESPONSIVE_MS;
 
   let entries: string[];
   try {
-    entries = readdir(dir);
-  } catch {
+    entries = await watchedFs('readdir', dir, async () => read(dir), { limitMs });
+  } catch (error) {
+    if (error instanceof UnresponsiveFileError) throw new HttpError(503, unresponsiveReadMessage(dir));
     throw new HttpError(404, `フォルダを開けませんでした（未接続か、権限がありません）: ${dir}`);
   }
   const dirs: BrowseListing['dirs'] = [];
@@ -160,11 +189,12 @@ export function listDirectory(
       break;
     }
     const full = join(dir, name);
-    let st: { isDirectory(): boolean; isFile(): boolean; size: number };
+    let st: BrowseStat;
     try {
-      st = stat(full);
+      if (volumeStalled(full, limitMs)) continue;
+      st = await watchedFs('stat', full, async () => info(full), { limitMs });
     } catch {
-      continue; // 切れたリンク・権限なし・未マウントは飛ばす
+      continue; // 切れたリンク・権限なし・未マウント・応答しないドライブは飛ばす
     }
     if (st.isDirectory()) {
       dirs.push({ name, path: full });

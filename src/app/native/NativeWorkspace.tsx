@@ -83,6 +83,7 @@ import { NativeCutPanel, type NativeCutHandle } from './NativeCutPanel';
 import type { NativeCommand, NativeSession } from './api';
 import { abandonImportItems,cancelImportBatch,NativeApiError,nativeRequest,retryOnce,uploadImportItem } from './api';
 import {IMPORT_REASON,type ImportBatchView} from '../../shared/importBatches';
+import {isUninitializedSequence,videoSequenceFormat} from '../../core/sequence/mainAppend';
 import { assetUsage } from './assetUsage';
 import { useAssetAudition } from './useAssetAudition';
 import { clipEnd, sourceTimeAt, DEFAULT_TEXT_APPEARANCE, type SequenceClip, type SequenceTrack } from '../../core/sequence/model';
@@ -447,6 +448,9 @@ export function NativeWorkspace({ projectId, navigation, onReload }: { projectId
   const trial=trialSwap.trial,editLocked=session.busy||!!trial;
   const imports=useImportBatches(projectId,{ready:!!doc&&!trial&&!switchingProject,confirm:(batchId,skipFailed)=>nativeSession.confirmImport(batchId,skipFailed),
     onPlaced:batch=>{const message=audioOnlyNotice(batch);if(message)setNotice(message);}});
+  // フォルダから作った案件などの「素材欄に入れる」取り込みは、素材の欄を開いて見せる（既定の欄のままだと取り込めていないように見える）。
+  const openMaterialBatches=imports.batches.filter(batch=>batch.placement==='materials').map(batch=>batch.batchId).join(',');
+  useEffect(()=>{if(openMaterialBatches)setLeftTab('materials');},[openMaterialBatches]);
   const importFramesNow=useMemo(()=>doc?imports.frames(doc):[],[doc,imports.frames]),importUnplaced=useMemo(()=>doc?imports.unplaced(doc):[],[doc,imports.unplaced]);
   const cancelImport=(batchId:string)=>{void imports.cancel(batchId).then(message=>{if(message)setNotice(message);});};
   // 開いた時に確定を促す（設計 §1）: 案件を開いて最初に一覧が届いた時、促す束（素材の欄に出す「準備済み・未配置」・失敗を含む束・確定の印があるのに文書に無い束）が
@@ -718,6 +722,9 @@ export function NativeWorkspace({ projectId, navigation, onReload }: { projectId
     // 音声だけの素材は BGM〔music・繰り返し〕になり、効果音の一覧から消えて BGM として扱われていた。2026-10-15）。
     // BGM タブの素材は従来どおり（役割を渡すと音量の初期値が -18dB に変わるため、ここでは足さない）。
     const placedRole = role ?? (materialTabOf(doc, asset) === 'se' ? 'effect' : undefined);
+    // まだ何も置いていない案件（フォルダから素材だけ入れた案件）の最初の動画は、案件の fps・大きさを決める必要がある。
+    // 書式の決定はサーバが組み立てる /main/append でしかできない（set-sequence-format は画面の編集命令で受けない）ので、そちらで置く（空なので位置は先頭）。
+    if (!placedRole && isUninitializedSequence(doc) && videoSequenceFormat(asset) && doc.tracks.find(track => track.id === targetTrackId)?.kind !== 'audio') { void appendMain([asset.id]); return; }
     const placed = buildMediaPlacement(doc, asset, at, targetTrackId, placedRole ? { role: placedRole } : {}, newId);
     if ('error' in placed) { setToast(placed.error); return; }
     void command({ type: 'batch', commands: placed.commands }).then(ok => { if (ok) selectLiveClips([placed.selectId]); });

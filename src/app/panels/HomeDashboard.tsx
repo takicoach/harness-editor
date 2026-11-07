@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ProjectSummary, ProjectSteps } from '../../shared/types';
-import { defaultProjectName } from '../createProjectApi';
+import { defaultProjectName, uniqueFolderProjectNames, uniqueProjectNames } from '../createProjectApi';
 import {TaskProgress,type TransferProgress} from '../components/TaskProgress';
 import { DISPLAY_STATUSES, STATUS_LABEL, type ProjectStage } from '../../shared/projectStage';
 import { VideoThumb } from './VideoThumb';
@@ -15,6 +15,8 @@ import { largeUploadNotice } from '../../shared/uploadNotice';
 import { CREATE_MEDIA_ACCEPT, classifyCreateSelection, imageLimitMessage } from '../../shared/createMedia';
 import { orderByName } from '../../shared/importOrder';
 import { MAX_IMPORT_BATCH_ITEMS } from '../../shared/importBatches';
+import { classifyDrop, readDroppedFolder, readDroppedFolders, scanFromInputFiles, type FolderDocument, type FolderScan } from './homeFolderDrop';
+import { desktopFilePath } from '../native/fileReference';
 import { deleteProjectRequest } from '../trashApi';
 import { moveProjectsToTrash, formatBulkTrashResult } from '../trashBulk';
 import { revealProjectRequest } from '../projectRevealApi';
@@ -48,8 +50,8 @@ interface HomeDashboardProps {
   onPick: (id: string) => void;
   /** バッジメニューで手動 stage を設定（null=自動判定に戻す）。App が楽観更新・巻き戻し・トーストを担う。 */
   onSetStage: (id: string, stage: ProjectStage) => void;
-  /** 「動画を作成する」。動画（コピー or 外部リンク）と名前を受け取り作成〜エディタで開くまで担う。 */
-  onCreate: (name: string, source: CreateSource, preferCopy: boolean,onProgress?:(progress:TransferProgress)=>void) => Promise<void>;
+  /** 「動画を作成する」。動画（コピー or 外部リンク）と名前を受け取り作成〜エディタで開くまで担う。複数の動画を別々のプロジェクトにする時は開かずに結果を返す。 */
+  onCreate: CreateHandler;
   /** プロジェクトの削除・復元後に一覧を再取得する（App の refreshProjects）。 */
   onProjectsChanged: () => void;
   /** 相対時刻の基準（テスト注入用）。 */
@@ -92,6 +94,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
   // 外付け等から選ぶファイラを開いているか。
   const [pickerOpen, setPickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // ホームの明示的ドロップ領域（Finder からの動画ドロップ → 作成モーダル）。
   // App.tsx のウィンドウ全域 drop 抑止（誤ドロップでページが飛ぶ事故の防止）は維持したまま、
@@ -100,6 +103,10 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
   // 直近のドラッグ位置が「受理しない領域・状態」か（ヒント表示の抑止に使う）。
   const [blockedOver, setBlockedOver] = useState(false);
   const [dropNotice, setDropNotice] = useState<string | null>(null);
+  // フォルダの読み取り中（別のドロップ・ファイル選択を受けない）。
+  const [scanning, setScanning] = useState(false);
+  // 複数の動画の作成で作れなかった分の報告。見落とさないよう「閉じる」まで残す。
+  const [createReport, setCreateReport] = useState<string | null>(null);
   // プロジェクト削除（ゴミ箱）とルートゴミ箱一覧。
   const [projTrashConfirm, setProjTrashConfirm] = useState<{ id: string; name: string } | null>(null);
   const [rootTrashOpen, setRootTrashOpen] = useState(false);
@@ -248,7 +255,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
   const isFileDrag = (e: React.DragEvent): boolean => e.dataTransfer.types.includes('Files');
   const overExcluded = (e: React.DragEvent): boolean =>
     e.target instanceof Element &&
-    e.target.closest('.home-card, .export-overlay, .dd-menu') !== null;
+    e.target.closest('.export-overlay, .dd-menu') !== null;
 
   /**
    * このドロップ位置・この状態では**受理しない**か。受理条件と 1 箇所で定義し、
@@ -256,11 +263,11 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
    * — 受理しない場所で受理できるように見せない（バッチE レビュー指摘③）。
    */
   const dropBlocked = (e: React.DragEvent): boolean =>
-    overExcluded(e) || createSource !== null || pickerOpen;
+    overExcluded(e) || createSource !== null || pickerOpen || scanning;
 
   /**
    * 選んだ・ドロップしたファイルから作成の素材を決める（設計 M1・M3b・M6b）。
-   * 1回の作成で1種類。画像は複数可（上限を超えたら理由だけ出す）。新しい編集画面では動画も複数可（設計 §1 ③）。それ以外の動画・音声は1件目だけ（複数なら通知）。
+   * 1回の作成で1種類。画像は複数可（上限を超えたら理由だけ出す）。新しい編集画面では動画も複数可（1 本ずつ別のプロジェクト）。それ以外の動画・音声は1件目だけ（複数なら通知）。
    */
   const startCreate = (files: File[], via: 'drop' | 'select'): void => {
     const first = files[0];
@@ -281,12 +288,14 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
       return;
     }
     if (managedMedia && selection.kind === 'video' && files.length > 1) {
-      // 設計 §1 ③: 複数の動画は1つの作品のメインへ、受付時に固定した自然順で並べる。束の上限を超える時は作る前に断る（空の作品だけが残らないように）。
+      // 複数の動画は 1 本ずつ別のプロジェクトにする（作り終えたらホームに留まる）。上限を超える時は作る前に断る。
       if (files.length > MAX_IMPORT_BATCH_ITEMS) {
         setDropNotice(`動画は1回に${MAX_IMPORT_BATCH_ITEMS}本まで作成できます（選んだ動画: ${files.length} 本）`);
         return;
       }
-      setCreateSource({ kind: 'videos', files: orderByName(files, (file) => file.name) });
+      // 1 本につき 1 プロジェクト。名前は既存と重ならないよう作る前に決める（設計 3-3）。
+      const ordered = orderByName(files, (file) => file.name);
+      setCreateSource({ kind: 'video-projects', files: ordered, names: uniqueProjectNames(ordered.map((file) => file.name), projects.flatMap((project) => [project.id, project.name])) });
       return;
     }
     if (files.length > 1) {
@@ -301,7 +310,26 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
     setHomeDragDepth(0);
     setBlockedOver(false);
     if (dropBlocked(e)) return;
-    startCreate(Array.from(e.dataTransfer.files), 'drop');
+    const kind = classifyDrop(e.dataTransfer.items);
+    if (kind.kind === 'refuse') { setDropNotice(kind.message); return; }
+    if (kind.kind === 'files') { startCreate(Array.from(e.dataTransfer.files), 'drop'); return; }
+    if (!managedMedia) { setDropNotice('この画面ではフォルダから作成できません。新しい編集画面から作成してください'); return; }
+    setScanning(true);
+    if (kind.kind === 'folders') {
+      void readDroppedFolders(kind.entries).then(({ folders, refused }) => {
+        if (!folders.length) { setDropNotice(refused.map((item) => item.reason).join(' / ')); return; }
+        const names = uniqueFolderProjectNames(folders.map((folder) => folder.folderName), projects.flatMap((project) => [project.id, project.name]));
+        setCreateSource({ kind: 'folders', folders, names, refused });
+      }).finally(() => setScanning(false));
+      return;
+    }
+    void readDroppedFolder(kind.entry).then(openFolderScan).finally(() => setScanning(false));
+  };
+
+  /** フォルダ 1 つの読み取り結果から作成ダイアログを開く（ドロップとフォルダ選択で共通）。 */
+  const openFolderScan = (scan: FolderScan | { refuse: string }): void => {
+    if ('refuse' in scan) setDropNotice(scan.refuse);
+    else setCreateSource({ kind: 'folder', ...scan });
   };
 
   const pickImages = (files: PickedFile[]): void => {
@@ -341,11 +369,20 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
     <>
       {homeDragDepth > 0 && !blockedOver && (
         <div className="home-drop-hint" data-testid="home-drop-hint">
-          ここにドロップして作成（動画・音声・画像）
+          ここにドロップして作成（動画・音声・画像・フォルダ。フォルダは複数でも可）
         </div>
       )}
-      {dropNotice !== null && (
+      {scanning && <div className="home-drop-notice" role="status">フォルダを読んでいます…</div>}
+      {!scanning && dropNotice !== null && (
         <div className="home-drop-notice" role="status">{dropNotice}</div>
+      )}
+      {createReport !== null && (
+        <p className="sme-error" role="alert" data-testid="home-create-report">
+          {createReport}
+          <button type="button" className="export-cancel" onClick={() => setCreateReport(null)}>
+            閉じる
+          </button>
+        </p>
       )}
     </>
   );
@@ -368,6 +405,26 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
           空のプロジェクトを作成
         </button>
       )}
+      {managedMedia && (
+        <button type="button" className="home-create-link-btn" data-testid="home-create-media-folder" disabled={scanning} onClick={() => folderInputRef.current?.click()}>
+          素材フォルダから作成
+        </button>
+      )}
+      {managedMedia && (
+        <input
+          ref={folderInputRef}
+          type="file"
+          style={{ display: 'none' }}
+          data-testid="home-create-folder-input"
+          aria-label="素材フォルダを選ぶ"
+          {...({ webkitdirectory: '' } as Record<string, string>)}
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            e.target.value = ''; // 同じフォルダを選び直しても change が発火するように
+            openFolderScan(scanFromInputFiles(files));
+          }}
+        />
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -376,7 +433,7 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
         style={{ display: 'none' }}
         data-testid="home-create-file"
         onChange={(e) => {
-          startCreate(Array.from(e.target.files ?? []), 'select');
+          if (!scanning) startCreate(Array.from(e.target.files ?? []), 'select');
           e.target.value = ''; // 同じファイルを選び直しても change が発火するように
         }}
       />
@@ -400,6 +457,13 @@ export function HomeDashboard({ projects, error, loading = false, notice = null,
           source={createSource}
           onCancel={() => setCreateSource(null)}
           onCreate={onCreate}
+          onFinished={(result) => {
+            setCreateSource(null);
+            onProjectsChanged();
+            const report = formatCreateManyResult(result);
+            if (result.failed.length || result.stopped.length || result.notes?.length) setCreateReport(report);
+            else setDropNotice(report);
+          }}
         />
       )}
     </>
@@ -728,13 +792,32 @@ export type CreateSource =
   | { kind: 'upload-images'; files: File[] }
   | { kind: 'link-images'; files: PickedFile[] }
   | { kind: 'empty' }
-  /** 新しい編集画面への複数の動画（設計 §1 ③）。自然順に並べ替え済み。空の作品に束で取り込み、メインの末尾に順に並べる。 */
-  | { kind: 'videos'; files: File[] };
+  /** 複数の動画を 1 本ずつ別のプロジェクトに。自然順に並べ替え済み。names は files と同じ順の確定した名前。作り終えたらホームに留まる。 */
+  | { kind: 'video-projects'; files: File[]; names: string[] }
+  /** フォルダの動画を 1 つのプロジェクトの素材欄へ（メインには並べない）。空の作品に束で取り込む。skipped は取り込まない動画以外の件数。 */
+  | { kind: 'folder'; folderName: string; files: File[]; documents: FolderDocument[]; skipped: number }
+  /** 複数のフォルダを 1 つずつ別のプロジェクトに。names は folders と同じ順の確定した名前。refused は作らないフォルダと理由。作り終えたらホームに留まる。 */
+  | { kind: 'folders'; folders: FolderScan[]; names: string[]; refused: Array<{ name: string; reason: string }> };
+
+/** 複数の動画の作成の結果。created は作れたプロジェクトの ID、failed は作れなかった名前と理由、stopped は取り消しで作らなかった名前。 */
+export interface CreateManyResult { created: string[]; failed: Array<{ name: string; reason: string }>; stopped: string[]; unit?: 'folder'; notes?: string[] }
+export type CreateHandler = (name: string, source: CreateSource, preferCopy: boolean, onProgress?: (progress: TransferProgress) => void, onStep?: (index: number, count: number) => void) => Promise<void | CreateManyResult>;
+
+export function formatCreateManyResult(result: CreateManyResult): string {
+  const folder = result.unit === 'folder', notes = result.notes?.length ? `${result.notes.join('。')}。` : '';
+  if (!result.failed.length && !result.stopped.length) return `${result.created.length} ${folder ? '件' : '本'}のプロジェクトを作りました${notes ? `。${notes}`.replace(/。$/, '') : ''}`;
+  const total = result.created.length + result.failed.length + result.stopped.length, target = folder ? 'フォルダ' : '動画';
+  return [folder ? `${total} 個のフォルダのうち ${result.created.length} 個から作りました。` : `${total} 本中 ${result.created.length} 本を作りました。`,
+    result.failed.length ? `作れなかった${target}: ${result.failed.map((item) => `${item.name}（${item.reason}）`).join('、')}。` : '',
+    result.stopped.length ? `取り消したため作らなかった${target}: ${result.stopped.join('、')}。` : '', notes].join('').replace(/。$/, '');
+}
 
 /** 作成ダイアログの「素材: …」（設計 M6）。 */
 export function createSourceLabel(source: CreateSource): string {
   if (source.kind === 'empty') return '素材なし（空のプロジェクト）';
-  if (source.kind === 'videos') return `動画 ${source.files.length} 本（${source.files[0]?.name ?? ''} ほか）`;
+  if (source.kind === 'video-projects') return `動画 ${source.files.length} 本（1 本ずつ別のプロジェクト）`;
+  if (source.kind === 'folder') return `フォルダ「${source.folderName}」の動画 ${source.files.length} 本`;
+  if (source.kind === 'folders') return `フォルダ ${source.folders.length} 個（1 つずつ別のプロジェクト）`;
   if (source.kind === 'upload') return source.file.name;
   if (source.kind === 'link') return source.name;
   return `画像 ${source.files.length} 枚（${source.files[0]?.name ?? ''} ほか）`;
@@ -748,39 +831,48 @@ interface CreateProjectModalProps {
   managedMedia?: boolean;
   source: CreateSource;
   onCancel: () => void;
-  onCreate: (name: string, source: CreateSource, preferCopy: boolean,onProgress?:(progress:TransferProgress)=>void) => Promise<void>;
+  onCreate: CreateHandler;
+  /** 複数の動画を作り終えた時（ホームに留まるので、親がダイアログを閉じて結果を出す）。 */
+  onFinished: (result: CreateManyResult) => void;
 }
 
 /**
  * 新規プロジェクトの名前確認モーダル。作成成功時は親がエディタへ遷移して
  * ホームごとアンマウントされるため、成功側のクローズ処理は持たない。
  */
-function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }: CreateProjectModalProps) {
+function CreateProjectModal({ source, onCancel, onCreate, onFinished, managedMedia = false }: CreateProjectModalProps) {
   const fileName = createSourceLabel(source);
   const images = source.kind === 'upload-images' || source.kind === 'link-images' ? source : null;
-  const [name, setName] = useState(() => defaultProjectName(source.kind === 'upload' ? source.file.name : source.kind === 'link' ? source.name : source.kind === 'empty' ? '空のプロジェクト' : source.files[0]!.name));
+  // 別々のプロジェクトの名前は作る前に決めてあるので入力欄を出さない。フォルダの既定はフォルダ名。
+  const many = source.kind === 'video-projects' || source.kind === 'folders' ? source : null;
+  const severalVideos = source.kind === 'folders' ? source.folders.flatMap((folder) => folder.files) : source.kind === 'video-projects' || source.kind === 'folder' ? source.files : null;
+  const [name, setName] = useState(() => source.kind === 'video-projects' || source.kind === 'folders' ? '' : source.kind === 'folder' ? source.folderName : defaultProjectName(source.kind === 'upload' ? source.file.name : source.kind === 'link' ? source.name : source.kind === 'empty' ? '空のプロジェクト' : source.files[0]!.name));
+  const [step, setStep] = useState<{ index: number; count: number } | null>(null);
   const [progress,setProgress]=useState<TransferProgress>({phase:'preparing'});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // アップロード経路の既定は「できる限りリンク化」。サーバが登録済みフォルダから
   // 同一実体を探し、確証が取れたときだけリンクにする。ここはその自動判定を切って
   // 必ずコピーさせるための逃げ道（外付けを外して持ち歩きたい場合など）。
-  const [preferCopy, setPreferCopy] = useState(false);
+  // 複数のフォルダでブラウザ版のリンクを選ぶと保存場所の選択が動画の数だけ開くので、ブラウザ版はコピーを既定にする。
+  const [preferCopy, setPreferCopy] = useState(() => source.kind === 'folders' && !desktopFilePath(source.folders[0]!.files[0]!));
   // リンク取り込みは実体を運ばないので、大容量の待ち時間案内は出さない。
   const sizeNotice = source.kind === 'upload' && (!managedMedia||preferCopy) ? largeUploadNotice(source.file.size)
-    : source.kind === 'videos' && preferCopy ? largeUploadNotice(source.files.reduce((sum, file) => sum + file.size, 0))
+    : severalVideos !== null && preferCopy ? largeUploadNotice(severalVideos.reduce((sum, file) => sum + file.size, 0))
     : source.kind === 'upload-images' ? largeUploadNotice(imagesTotalBytes(source)) : null;
 
   const submit = (): void => {
     if (busy) return;
     const trimmed = name.trim();
-    if (trimmed === '') {
+    if (trimmed === '' && many === null) {
       setError('プロジェクト名を入力してください');
       return;
     }
     setBusy(true);
     setError(null);
-    (managedMedia?onCreate(trimmed, source, preferCopy,setProgress):onCreate(trimmed,source,preferCopy)).catch((err: unknown) => {
+    (!managedMedia?onCreate(trimmed,source,preferCopy):many!==null?onCreate(trimmed,source,preferCopy,setProgress,(index,count)=>setStep({index,count})):onCreate(trimmed,source,preferCopy,setProgress)).then((result) => {
+      if (result) onFinished(result);
+    }).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'プロジェクトの作成に失敗しました');
       setBusy(false);
     });
@@ -797,7 +889,11 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
           </p>
         )}
         {source.kind === 'empty' && <p className="home-create-link-note" role="note">素材なしで作ります（1920x1080・30fps）。最初に足した動画の fps・解像度に合わせます。</p>}
-        {source.kind === 'videos' && <p className="home-create-link-note" role="note">動画 {source.files.length} 本を名前の順にメインへ並べます。読み込み中は仮の枠を出し、全部の準備が終わったら1回で並べます。</p>}
+        {source.kind === 'folder' && <p className="home-create-link-note" role="note">{`フォルダ「${source.folderName}」の動画 ${source.files.length} 本を素材欄に入れます（メインには並べません）。${source.documents.length > 0 ? `台本や書類 ${source.documents.length} 件は「資料」に保管します。` : ''}${source.skipped > 0 ? `そのほかの ${source.skipped} 件は取り込みません。` : ''}`}</p>}
+        {source.kind === 'video-projects' && <p className="home-create-link-note" role="note">動画 {source.files.length} 本を、それぞれ別のプロジェクトとして作ります。作り終えたらこの画面に戻ります。名前は作った後に変えられます。</p>}
+        {source.kind === 'folders' && <p className="home-create-link-note" role="note">フォルダ {source.folders.length} 個を、それぞれ別のプロジェクトとして作ります。動画は各プロジェクトの素材欄に入ります（メインには並べません）。台本や書類は「資料」に保管します。動画の準備が終わったらこの画面に戻ります。</p>}
+        {many !== null && <ul className="home-create-names" aria-label="作るプロジェクト">{many.names.map((projectName) => <li key={projectName}>{projectName}</li>)}</ul>}
+        {source.kind === 'folders' && source.refused.length > 0 && <p className="home-create-link-note" role="note">作らないフォルダ: {source.refused.map((item) => item.reason).join(' / ')}</p>}
         {managedMedia && source.kind==='upload' && <p className="home-create-link-note" role="note">{preferCopy?'元の動画を変更せず、編集用のコピーを保存します。動画の容量に応じた空き容量が必要です。':'元の動画をコピーせずに使います。外付けの動画は、編集するときにドライブを接続してください。'}</p>}
         {source.kind === 'link' && (
           <div className="home-create-link-note" role="note">
@@ -805,7 +901,7 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
           </div>
         )}
         {sizeNotice !== null && <div className="home-create-large-note" role="note">{sizeNotice}</div>}
-        <label className="home-create-label">
+        {many === null && <label className="home-create-label">
           プロジェクト名
           <input
             type="text"
@@ -819,8 +915,8 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
               if (e.key === 'Escape' && !busy) onCancel();
             }}
           />
-        </label>
-        {(source.kind === 'upload' || source.kind === 'videos') && (
+        </label>}
+        {(source.kind === 'upload' || severalVideos !== null) && (
           <label className="home-create-copy-label">
             <input
               type="checkbox"
@@ -832,14 +928,14 @@ function CreateProjectModal({ source, onCancel, onCreate, managedMedia = false }
             コピーして取り込む（外付けを外しても編集できるようにする）
           </label>
         )}
-        {(source.kind === 'upload' || source.kind === 'videos') && !preferCopy && (
+        {(source.kind === 'upload' || severalVideos !== null) && !preferCopy && (
           <p className="hint home-create-link-hint">
             {managedMedia?'元動画の保存場所を確認します。自動で見つからない場合は、保存場所を選んでください。':'同じ動画が登録済みのフォルダ（外付け・デスクトップ・ダウンロード・ムービー）にあれば、コピーせずリンクで取り込みます。'}
           </p>
         )}
         {error !== null && <p className="sme-error home-create-error">{error}</p>}
         {busy && (
-          <TaskProgress label={progress.phase==='uploading'?(images!==null?'画像をコピーしています':'素材をコピーしています'):progress.phase==='checking'?'元の動画を確認しています':'動画を確認して編集の準備をしています'} value={progress.total?progress.loaded!/progress.total:undefined} detail={progress.total?`${((progress.loaded??0)/1048576).toFixed(0)} / ${(progress.total/1048576).toFixed(0)} MB`:'素材の解析・音声の準備が終わると編集画面が開きます。'} />
+          <TaskProgress label={(step?`${step.index} / ${step.count} ${source.kind==='folders'?'フォルダ目':'本目'}: `:'')+(progress.phase==='uploading'?(images!==null?'画像をコピーしています':'素材をコピーしています'):progress.phase==='checking'?'元の動画を確認しています':'動画を確認して編集の準備をしています')} value={progress.total?progress.loaded!/progress.total:undefined} detail={progress.total?`${((progress.loaded??0)/1048576).toFixed(0)} / ${(progress.total/1048576).toFixed(0)} MB`:many!==null?'全部作り終えるとこの画面に戻ります。':'素材の解析・音声の準備が終わると編集画面が開きます。'} />
         )}
         <div className="export-actions">
           <button type="button" className="export-cancel" onClick={onCancel} disabled={busy}>

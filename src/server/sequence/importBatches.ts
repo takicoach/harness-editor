@@ -8,7 +8,7 @@ import {timeNumber} from '../../core/sequence/time';
 import {createMediaKind} from '../../shared/createMedia';
 import {orderByName} from '../../shared/importOrder';
 import {importBatchPhase,IMPORT_REASON,IMPORT_REFUSAL_CODES,MAX_IMPORT_BATCH_ITEMS,MAX_IMPORT_NAME_LENGTH,type ImportBatchOrigin,type ImportBatchState,type ImportBatchView,type ImportDecisionChoice,
-  type ImportItemPhase,type ImportRefusalCode} from '../../shared/importBatches';
+  type ImportItemPhase,type ImportPlacement,type ImportRefusalCode} from '../../shared/importBatches';
 import {HttpError} from '../http';
 import {importSequenceAssetDetailed,registeredSequenceAssets,verifiedSequenceAssetPath,type ImportHooks} from './assets';
 import {isSequenceReferenceFile,referenceTarget,registerSequenceReferenceDetailed} from './references';
@@ -22,7 +22,7 @@ import type {SequenceService} from './service';
 
 export type ImportItemSource={kind:'path';path:string}|{kind:'client'};
 /** requestKey: 再送の照合に使う鍵（省略時は項目から作る）。AI の取り込みは受け取った本文から作り、パスを解決し直さずに再送へ答える。 */
-export interface CreateImportBatchInput {requestId:string;projectId:string;origin:ImportBatchOrigin;mode:'link'|'copy';items:Array<{key:string;name:string;source:ImportItemSource}>;requestKey?:string}
+export interface CreateImportBatchInput {requestId:string;projectId:string;origin:ImportBatchOrigin;mode:'link'|'copy';items:Array<{key:string;name:string;source:ImportItemSource}>;requestKey?:string;placement?:ImportPlacement}
 /** resolvedSource: 受付時に実パスへ解決し許可を確かめた場所（パス指定・/imports/reference）。画面から受け取った一時ファイルは false。 */
 export type PrepareImportAsset=(input:{directory:string;mode:'link'|'copy';path:string;name:string;expectedFingerprint?:string;resolvedSource:boolean;signal:AbortSignal;hooks:ImportHooks})=>Promise<SequenceAsset>;
 export type ResolveImportAsset=(root:string,assetId:string)=>Promise<SequenceAsset|undefined>;
@@ -45,7 +45,7 @@ const defaultCopies:ImportCopies={startAdd:input=>mediaCopyJobs.startAdd(input),
  */
 interface ItemRecord {itemId:string;key:string;name:string;phase:ImportItemPhase;assetId?:string;durationSeconds?:number;error?:string;audioOnly?:true;
   source?:string;expected?:string;judged?:true;slow?:{sizeBytes:number;seconds:number;volume?:string;bytesPerSecond?:number};choice?:ImportDecisionChoice}
-interface BatchRecord {version:1;batchId:string;projectId:string;createdAt:string;requestId:string;requestKey:string;origin:ImportBatchOrigin;mode:'link'|'copy';placement:'append-main';
+interface BatchRecord {version:1;batchId:string;projectId:string;createdAt:string;requestId:string;requestKey:string;origin:ImportBatchOrigin;mode:'link'|'copy';placement:ImportPlacement;
   state:ImportBatchState;items:ItemRecord[];confirmed?:{executionId:string;revision:number};refusal?:{code:ImportRefusalCode;message:string}}
 type ConfirmResult=ReturnType<typeof executeAppendToMain>;
 /**
@@ -75,7 +75,7 @@ const itemSchema=z.object({itemId:z.string().regex(/^i\d{1,3}$/),key:z.string().
 const recordSchema=z.object({version:z.literal(1),batchId:z.string().regex(BATCH_ID),projectId:z.string().min(1).max(1024),createdAt:z.string().min(1).max(64),
   requestId:z.string().regex(REQUEST_ID),requestKey:z.string().regex(REQUEST_KEY),
   origin:z.discriminatedUnion('kind',[z.object({kind:z.literal('ui')}),z.object({kind:z.literal('home')}),z.object({kind:z.literal('agent'),operationId:z.string().min(1).max(256)})]),
-  mode:z.enum(['link','copy']),placement:z.literal('append-main'),state:z.enum(['open','confirming','confirmed','cancelled']),
+  mode:z.enum(['link','copy']),placement:z.enum(['append-main','materials']),state:z.enum(['open','confirming','confirmed','cancelled']),
   items:z.array(itemSchema).min(1).max(MAX_IMPORT_BATCH_ITEMS).refine(items=>new Set(items.map(item=>item.itemId)).size===items.length),
   confirmed:z.object({executionId:z.string().min(1).max(128),revision:z.number().int().nonnegative()}).optional(),
   refusal:z.object({code:z.enum(IMPORT_REFUSAL_CODES),message:z.string().min(1).max(MAX_STORED_ERROR+1)}).optional()}).refine(record=>record.state!=='confirmed'||record.confirmed!==undefined);
@@ -341,6 +341,8 @@ export class ImportBatches {
     const root=realpathSync(directory);
     if(!REQUEST_ID.test(input.requestId))throw new HttpError(400,'取り込みの要求IDが不正です');
     if(input.mode!=='link'&&input.mode!=='copy')throw new HttpError(400,'取り込み方が不正です');
+    const placement=input.placement??'append-main';
+    if(placement!=='append-main'&&placement!=='materials')throw new HttpError(400,'取り込みの配置先が不正です');
     if(!Array.isArray(input.items)||!input.items.length||input.items.length>MAX_IMPORT_BATCH_ITEMS)throw new HttpError(400,`動画は1〜${MAX_IMPORT_BATCH_ITEMS}本で指定してください`);
     const items=input.items.map(item=>{
       if(item.source?.kind!=='client'&&!(item.source?.kind==='path'&&typeof item.source.path==='string'&&item.source.path))throw new HttpError(400,'取り込みの項目指定が不正です');
@@ -352,13 +354,13 @@ export class ImportBatches {
       return {...item,name};
     });
     if(input.requestKey!==undefined&&!REQUEST_KEY.test(input.requestKey))throw new HttpError(400,'取り込みの要求の鍵が不正です');
-    const requestKey=input.requestKey??createHash('sha256').update(JSON.stringify([input.projectId,input.origin,input.mode,items.map(item=>[item.key,item.name,item.source])])).digest('hex');
+    const requestKey=input.requestKey??createHash('sha256').update(JSON.stringify([input.projectId,input.origin,input.mode,items.map(item=>[item.key,item.name,item.source]),...(placement==='materials'?['materials']:[])])).digest('hex');
     const existing=this.findBatchByRequest(root,input.requestId),durable=input.origin.kind==='agent';
     if(existing){if(existing.record.requestKey!==requestKey)throw new HttpError(409,'同じ要求IDに異なる取り込みがあります',{reason:IMPORT_REASON.requestConflict});return view(existing.record);}
     if(durable)assertNotIndexed(root,input.requestId,requestKey);
     const ordered=orderByName(items,item=>item.name),batchId=`imp-${randomUUID().replaceAll('-','').slice(0,20)}`;
     const record:BatchRecord={version:1,batchId,projectId:input.projectId,createdAt:new Date().toISOString(),requestId:input.requestId,requestKey,origin:structuredClone(input.origin),
-      mode:input.mode,placement:'append-main',state:'open',items:ordered.map((item,index)=>({itemId:`i${index}`,key:item.key,name:item.name,phase:'waiting'}))};
+      mode:input.mode,placement,state:'open',items:ordered.map((item,index)=>({itemId:`i${index}`,key:item.key,name:item.name,phase:'waiting'}))};
     // 読み直しで弾かれる記録は作らない（読む時と同じ形で確かめる）。
     if(!recordSchema.safeParse(record).success)throw new HttpError(400,'取り込みの指定が不正です');
     const batch:Batch={root,record,controller:new AbortController(),pending:new Set(),delivered:new Set()};
@@ -474,11 +476,11 @@ export class ImportBatches {
   private async place(directory:string,batch:Batch,request:{sessionId:string;executionId:string},sessions:SequenceService):Promise<ConfirmResult>{
     const record=batch.record,batchId=record.batchId;
     try{
-      // 並べる動画と、登録だけする映像の無い素材（audioOnly）。
+      // 並べる動画と、登録だけする素材（映像の無い素材 audioOnly・素材欄に入れるだけの束）。
       const assets:SequenceAsset[]=[],registerOnly:SequenceAsset[]=[];
       for(const item of record.items.filter(entry=>entry.phase==='ready')){
         const asset=await this.resolveAsset(batch.root,item.assetId!);
-        if(!asset)throw new HttpError(409,`「${item.name}」の取り込み記録が見つかりません。取り消して、もう一度追加してください`,{reason:IMPORT_REASON.assetMissing});(item.audioOnly?registerOnly:assets).push(asset);
+        if(!asset)throw new HttpError(409,`「${item.name}」の取り込み記録が見つかりません。取り消して、もう一度追加してください`,{reason:IMPORT_REASON.assetMissing});(item.audioOnly||record.placement==='materials'?registerOnly:assets).push(asset);
       }
       // 素材の確認（await）の後の最新の文書で組み立てる。ここから実行まで同期（素材行の追加と同じ流儀）。
       const current=sessions.open(directory);

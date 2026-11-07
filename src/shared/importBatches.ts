@@ -12,6 +12,8 @@ export type ImportItemPhase='waiting'|'judging'|'awaiting-decision'|'probing'|'f
 export type ImportBatchState='open'|'confirming'|'confirmed'|'cancelled';
 /** deciding: 準備はすべて終わり、判断待ちの素材が残っている（決めるまで確定しない）。 */
 export type ImportBatchPhase='preparing'|'deciding'|'ready'|'partial'|'failed'|'confirming'|'confirmed'|'cancelled';
+/** 確定で置く先: メインの末尾に並べる／素材欄に登録するだけ（ホームのフォルダのドロップ）。 */
+export type ImportPlacement='append-main'|'materials';
 export type ImportBatchOrigin={kind:'ui'}|{kind:'home'}|{kind:'agent';operationId:string};
 /** 判断待ちの素材の扱い: 速いドライブへコピー／今回はこのまま／この接続先では今後出さない。 */
 export type ImportDecisionChoice='copy'|'keep-once'|'keep-always';
@@ -29,7 +31,7 @@ export type ImportRefusalCode=typeof IMPORT_REFUSAL_CODES[number];
  * refusal: 未確定の束にだけ出す（最後に記録した、確定が断られた理由）。
  * decision: 未確定の束で、全項目の判定が終わり（受け渡し待ち・判定中が無い）判断待ちがある時だけ（対象と合計。案内を1回出す）。
  */
-export interface ImportBatchView {batchId:string;projectId:string;createdAt:string;origin:ImportBatchOrigin;placement:'append-main';mode:'link'|'copy';phase:ImportBatchPhase;items:ImportItemView[];
+export interface ImportBatchView {batchId:string;projectId:string;createdAt:string;origin:ImportBatchOrigin;placement:ImportPlacement;mode:'link'|'copy';phase:ImportBatchPhase;items:ImportItemView[];
   confirmed?:{executionId:string;revision:number};refusal?:{code:ImportRefusalCode;message:string};decision?:{itemIds:string[];totalBytes:number;totalSeconds:number}}
 export const IMPORT_REASON={confirmed:'IMPORT_CONFIRMED',cancelled:'IMPORT_CANCELLED',confirming:'IMPORT_CONFIRMING',notReady:'IMPORT_NOT_READY',partial:'IMPORT_PARTIAL',
   closed:'IMPORT_CLOSED',delivered:'IMPORT_DELIVERED',requestConflict:'IMPORT_REQUEST_CONFLICT',assetMissing:'IMPORT_ASSET_MISSING',pruned:'IMPORT_PRUNED',

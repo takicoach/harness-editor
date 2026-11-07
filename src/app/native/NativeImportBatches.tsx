@@ -11,7 +11,7 @@ function decidingHeadline(batch:ImportBatchView,ready:number,failed:number):stri
   return [`準備済み ${ready}本`,preparing?`準備中 ${preparing}本`:'',`判断待ち ${waiting}本`,failed?`準備できなかった ${failed}本`:''].filter(Boolean).join('・');
 }
 const headline=(batch:ImportBatchView,ready:number,failed:number)=>batch.decision||batch.phase==='deciding'?decidingHeadline(batch,ready,failed)
-  :batch.phase==='ready'?`準備済み・未配置（${ready}本）`:batch.phase==='partial'?`${failed}本を準備できませんでした（${ready}本は準備済み）`
+  :batch.phase==='ready'?(batch.placement==='materials'?`準備済み・素材欄に未登録（${ready}本）`:`準備済み・未配置（${ready}本）`):batch.phase==='partial'?`${failed}本を準備できませんでした（${ready}本は準備済み）`
   :batch.phase==='confirming'?`配置が止まっています（${ready}本）。エディタを終了して起動し直すと「準備済み・未配置」に戻り、もう一度並べられます。`
   :batch.phase==='preparing'?`準備中（${batch.items.length}本）`:'動画を準備できませんでした';
 /**
@@ -34,10 +34,11 @@ export function NativeImportBatches({batches,unplaced=[],disabled,onConfirm,onCa
     if(!onDecide||deciding.has(batchId))return;setDeciding(previous=>new Set([...previous,batchId]));
     void Promise.resolve(onDecide(batchId,choice)).catch(()=>setDeciding(previous=>{const next=new Set(previous);next.delete(batchId);return next;}));
   };
-  return <section className="native-import-batches" aria-label="メインに並べる取り込み">{unplaced.map(batch=>{
+  return <section className="native-import-batches" aria-label="取り込み中の動画">{unplaced.map(batch=>{
     const ready=batch.items.filter(item=>item.phase==='ready');
     return <div key={batch.batchId} className="native-import-batch" data-import-batch={batch.batchId} data-phase={batch.phase}>
-      <p>{`配置の記録がある取り込み（${ready.length}本）が、今の編集内容に並んでいません（並べた後、保存する前に終了した可能性があります）。並べるには、この動画をもう一度追加してください。`}</p>
+      <p>{batch.placement==='materials'?`取り込みの記録がある動画（${ready.length}本）が、今の素材欄に入っていません（入れた後、保存する前に終了した可能性があります）。入れるには、この動画をもう一度追加してください。`
+        :`配置の記録がある取り込み（${ready.length}本）が、今の編集内容に並んでいません（並べた後、保存する前に終了した可能性があります）。並べるには、この動画をもう一度追加してください。`}</p>
       <ul>{ready.map(item=><li key={item.itemId}>{item.name}</li>)}</ul>
     </div>;})}{batches.map(batch=>{
     const ready=batch.items.filter(item=>item.phase==='ready').length,failed=batch.items.filter(item=>item.phase==='failed'),decision=batch.decision;
@@ -60,8 +61,8 @@ export function NativeImportBatches({batches,unplaced=[],disabled,onConfirm,onCa
         </div>
       </div>}
       <div className="native-import-actions">
-        {batch.phase==='ready'&&<button type="button" className="btn-tonal" disabled={disabled} onClick={()=>onConfirm(batch.batchId,false)}>メインの末尾に並べる</button>}
-        {batch.phase==='partial'&&<button type="button" className="btn-tonal" disabled={disabled} onClick={()=>onConfirm(batch.batchId,true)}>失敗分を除いて並べる</button>}
+        {batch.phase==='ready'&&<button type="button" className="btn-tonal" disabled={disabled} onClick={()=>onConfirm(batch.batchId,false)}>{batch.placement==='materials'?'素材欄に入れる':'メインの末尾に並べる'}</button>}
+        {batch.phase==='partial'&&<button type="button" className="btn-tonal" disabled={disabled} onClick={()=>onConfirm(batch.batchId,true)}>{batch.placement==='materials'?'失敗分を除いて素材欄に入れる':'失敗分を除いて並べる'}</button>}
         {batch.phase!=='confirming'&&<button type="button" className="btn-ghost" disabled={disabled} onClick={()=>onCancel(batch.batchId)}>{batch.phase==='failed'?'閉じる':'束を取り消す'}</button>}
       </div>
     </div>;})}</section>;

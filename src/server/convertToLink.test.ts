@@ -52,9 +52,9 @@ function placeExternalCopy(name = 'take1.mp4'): string {
 const deps = () => ({ roots: roots(), chunkBytes: 16, symlinkOk: () => true });
 
 describe('findConvertCandidate', () => {
-  it('外付けに同一実体があれば候補を返す', () => {
+  it('外付けに同一実体があれば候補を返す', async () => {
     const target = placeExternalCopy();
-    const r = findConvertCandidate(root, dir, deps());
+    const r = await findConvertCandidate(root, dir, deps());
     expect(r).toEqual({
       matched: true,
       target,
@@ -63,30 +63,30 @@ describe('findConvertCandidate', () => {
     });
   });
 
-  it('無ければ matched:false（メニューは出ても実行時に理由を返す）', () => {
-    expect(findConvertCandidate(root, dir, deps())).toEqual({
+  it('無ければ matched:false（メニューは出ても実行時に理由を返す）', async () => {
+    expect(await findConvertCandidate(root, dir, deps())).toEqual({
       matched: false,
       reason: 'no-candidate',
     });
   });
 
-  it('すでにリンク型なら 409（二重変換しない）', () => {
+  it('すでにリンク型なら 409（二重変換しない）', async () => {
     placeExternalCopy();
     mkdirSync(join(dir, '.sme'), { recursive: true });
     writeFileSync(join(dir, '.sme', 'videoLink.json'), JSON.stringify({ target: '/x/y.mp4' }));
-    expect(() => findConvertCandidate(root, dir, deps())).toThrow(HttpError);
+    await expect((async () => findConvertCandidate(root, dir, deps()))()).rejects.toThrow(HttpError);
   });
 
-  it('メイン動画が symlink なら 409（実体コピーではない）', () => {
+  it('メイン動画が symlink なら 409（実体コピーではない）', async () => {
     const target = placeExternalCopy();
     rmSync(join(dir, 'public', 'main.mp4'));
     symlinkSync(target, join(dir, 'public', 'main.mp4'));
-    expect(() => findConvertCandidate(root, dir, deps())).toThrow(HttpError);
+    await expect((async () => findConvertCandidate(root, dir, deps()))()).rejects.toThrow(HttpError);
   });
 
-  it('プロジェクト置き場が起点配下でも、自分のコピーは候補にならない', () => {
+  it('プロジェクト置き場が起点配下でも、自分のコピーは候補にならない', async () => {
     // 起点にプロジェクト置き場そのものを含めても、自分自身を実体にしない。
-    const r = findConvertCandidate(root, dir, {
+    const r = await findConvertCandidate(root, dir, {
       ...deps(),
       roots: [{ key: root, label: 'projects', path: root }],
     });
@@ -118,11 +118,11 @@ function tombstones(target: string): string[] {
 }
 
 describe('convertProjectToLink', () => {
-  it('コピーを破棄して symlink を張り、記録を残す（回収した容量は実測どおり）', () => {
+  it('コピーを破棄して symlink を張り、記録を残す（回収した容量は実測どおり）', async () => {
     const target = placeExternalCopy();
     const before = statSync(join(dir, 'public', 'main.mp4')).size;
     const bytesBefore = realVideoBytes(dir);
-    const out = convertProjectToLink(root, dir, deps());
+    const out = await convertProjectToLink(root, dir, deps());
     expect(out).toEqual({ target, freedBytes: before });
 
     // 「N GB を回収しました」を真にする（I-1）。退避したままだと実バイトは減らない。
@@ -143,9 +143,9 @@ describe('convertProjectToLink', () => {
     expect(record.fps).toBe(60); // videoConfig.ts の値をそのまま使う（実体は同一バイト）
   });
 
-  it('退避の破棄に失敗したら「回収 0・コピーはゴミ箱に残った」と正直に返す', () => {
+  it('退避の破棄に失敗したら「回収 0・コピーはゴミ箱に残った」と正直に返す', async () => {
     placeExternalCopy();
-    const out = convertProjectToLink(root, dir, {
+    const out = await convertProjectToLink(root, dir, {
       ...deps(),
       discard: () => { throw new Error('discard boom'); },
     });
@@ -156,56 +156,56 @@ describe('convertProjectToLink', () => {
     expect(listTrash(dir).map((e) => e.originalPath)).toContain(join('public', 'main.mp4'));
   });
 
-  it('候補が無ければ 409 で、プロジェクトには一切触れない', () => {
+  it('候補が無ければ 409 で、プロジェクトには一切触れない', async () => {
     const before = readFileSync(join(dir, 'public', 'main.mp4'));
-    expect(() => convertProjectToLink(root, dir, deps())).toThrow(HttpError);
+    await expect((async () => convertProjectToLink(root, dir, deps()))()).rejects.toThrow(HttpError);
     expect(readFileSync(join(dir, 'public', 'main.mp4'))).toEqual(before);
     expect(listTrash(dir)).toEqual([]);
   });
 
-  it('symlink を作れない環境なら 400 で、コピーは元の場所に戻る', () => {
+  it('symlink を作れない環境なら 400 で、コピーは元の場所に戻る', async () => {
     placeExternalCopy();
     const before = readFileSync(join(dir, 'public', 'main.mp4'));
-    expect(() =>
+    await expect(
       convertProjectToLink(root, dir, { ...deps(), symlinkOk: () => false }),
-    ).toThrow(HttpError);
+    ).rejects.toThrow(HttpError);
     expect(readFileSync(join(dir, 'public', 'main.mp4'))).toEqual(before);
     expect(listTrash(dir)).toEqual([]);
   });
 
-  it('リンク作成に失敗したらコピーを復元して失敗させる（動画を失わない）', () => {
+  it('リンク作成に失敗したらコピーを復元して失敗させる（動画を失わない）', async () => {
     placeExternalCopy();
     const before = readFileSync(join(dir, 'public', 'main.mp4'));
-    expect(() =>
+    await expect(
       convertProjectToLink(root, dir, {
         ...deps(),
         link: () => { throw new Error('symlink boom'); },
       }),
-    ).toThrow(HttpError);
+    ).rejects.toThrow(HttpError);
     expect(lstatSync(join(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(dir, 'public', 'main.mp4'))).toEqual(before);
     // 巻き戻したので tombstone も残らない。
     expect(listTrash(dir)).toEqual([]);
   });
 
-  it('巻き戻しの後、ゴミ箱に残骸（tombstone ディレクトリ）を残さない（I-2）', () => {
+  it('巻き戻しの後、ゴミ箱に残骸（tombstone ディレクトリ）を残さない（I-2）', async () => {
     placeExternalCopy();
-    expect(() =>
+    await expect(
       convertProjectToLink(root, dir, {
         ...deps(),
         link: () => { throw new Error('symlink boom'); },
       }),
-    ).toThrow(HttpError);
+    ).rejects.toThrow(HttpError);
     // 一覧（manifest）だけでなく実体側も空。残ると「復元できる動画」が二重に見える。
     expect(listTrash(dir)).toEqual([]);
     expect(tombstones(dir)).toEqual([]);
   });
 
-  it('巻き戻しで symlink を消せなかったら、その状態を文言に出す（M-6）', () => {
+  it('巻き戻しで symlink を消せなかったら、その状態を文言に出す（M-6）', async () => {
     placeExternalCopy();
-    const err = (() => {
+    const err = await (async () => {
       try {
-        convertProjectToLink(root, dir, {
+        await convertProjectToLink(root, dir, {
           ...deps(),
           writeLink: () => { throw new Error('write boom'); },
           rm: () => { throw new Error('rm boom'); },
@@ -221,15 +221,15 @@ describe('convertProjectToLink', () => {
     expect(err?.message).toContain('.trash');
   });
 
-  it('記録の書き込みに失敗したら symlink を撤去してコピーを復元する', () => {
+  it('記録の書き込みに失敗したら symlink を撤去してコピーを復元する', async () => {
     placeExternalCopy();
     const before = readFileSync(join(dir, 'public', 'main.mp4'));
-    expect(() =>
+    await expect(
       convertProjectToLink(root, dir, {
         ...deps(),
         writeLink: () => { throw new Error('write boom'); },
       }),
-    ).toThrow(HttpError);
+    ).rejects.toThrow(HttpError);
     expect(lstatSync(join(dir, 'public', 'main.mp4')).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(dir, 'public', 'main.mp4'))).toEqual(before);
     expect(existsSync(join(dir, '.sme', 'videoLink.json'))).toBe(false);

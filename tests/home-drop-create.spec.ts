@@ -1,62 +1,5 @@
 import { test, expect } from '@playwright/test';
 
-test('ホーム: 動画ファイルのドロップで作成モーダルが開く（複数は1件目のみ + 通知）', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.locator('.home')).toBeVisible({ timeout: 15_000 });
-
-  const dataTransfer = await page.evaluateHandle(() => {
-    const dt = new DataTransfer();
-    dt.items.add(new File(['00'], 'dropped.mp4', { type: 'video/mp4' }));
-    dt.items.add(new File(['00'], 'second.mov', { type: 'video/quicktime' }));
-    return dt;
-  });
-  await page.dispatchEvent('.home', 'drop', { dataTransfer });
-
-  await expect(page.locator('.home-create-dialog')).toBeVisible();
-  await expect(page.locator('.home-create-file-note')).toContainText('dropped.mp4');
-  const notice = page.locator('.home-drop-notice');
-  await expect(notice).toBeVisible();
-  await expect(notice).toContainText('1件目のみ');
-  // 作成モーダルのスクリム（.export-overlay）の下に沈んでいないこと。toBeVisible() は
-  // 重なりを見ないので実測する（バッチE レビュー指摘②の回帰）。通知は pointer-events:none
-  // なので elementFromPoint では検出できない（ヒットテストから外れる）。代わりに
-  // 「同じスタッキングコンテキストに属していること」を確認したうえで z-index を比べる
-  // — 同一コンテキスト内なら z-index の大小が描画順そのもの。
-  const stack = await page.evaluate(() => {
-    const creates = (el: Element): boolean => {
-      const cs = getComputedStyle(el);
-      return (
-        (cs.position !== 'static' && cs.zIndex !== 'auto') ||
-        cs.transform !== 'none' ||
-        cs.filter !== 'none' ||
-        Number(cs.opacity) < 1 ||
-        cs.isolation === 'isolate' ||
-        cs.mixBlendMode !== 'normal'
-      );
-    };
-    const contextOf = (el: Element): Element => {
-      let cur = el.parentElement;
-      while (cur !== null && cur !== document.documentElement) {
-        if (creates(cur)) return cur;
-        cur = cur.parentElement;
-      }
-      return document.documentElement;
-    };
-    const n = document.querySelector('.home-drop-notice');
-    const o = document.querySelector('.export-overlay');
-    if (n === null || o === null) return null;
-    return {
-      sameContext: contextOf(n) === contextOf(o),
-      noticeZ: Number(getComputedStyle(n).zIndex),
-      overlayZ: Number(getComputedStyle(o).zIndex),
-    };
-  });
-  expect(stack).not.toBeNull();
-  expect(stack!.sameContext).toBe(true);
-  expect(stack!.noticeZ).toBeGreaterThan(stack!.overlayZ);
-  await page.locator('.export-cancel').click();
-});
-
 test('ホーム: 動画以外の拡張子は通知だけ出してモーダルを開かない', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.home')).toBeVisible({ timeout: 15_000 });
@@ -70,7 +13,8 @@ test('ホーム: 動画以外の拡張子は通知だけ出してモーダルを
   await expect(page.locator('.home-create-dialog')).toHaveCount(0);
 });
 
-test('ホーム: カードの上へのドロップは新規作成にしない（明示的ドロップ領域のみ）', async ({ page }) => {
+// ショートを何本も作ると画面の大半がカードになるので、カードの上も新しいプロジェクトを作る場所にする（以前は受け付けず、案内も出なかった）。
+test('ホーム: カードの上に落としても、新しいプロジェクトの作成画面が開く', async ({ page }) => {
   await page.goto('/');
   const card = page.locator('.home-card', { hasText: 'sample-project' });
   await expect(card).toBeVisible({ timeout: 15_000 });
@@ -80,8 +24,8 @@ test('ホーム: カードの上へのドロップは新規作成にしない（
     return dt;
   });
   await card.dispatchEvent('drop', { dataTransfer });
-  await page.waitForTimeout(300);
-  await expect(page.locator('.home-create-dialog')).toHaveCount(0);
+  await expect(page.locator('.home-create-dialog')).toBeVisible();
+  await expect(page.locator('.home-create-dialog')).toContainText('dropped.mp4');
 });
 
 test('ホーム: ドロップ通知はポインタを奪わない（5秒間ボタンが押せなくならない）', async ({ page }) => {
@@ -107,7 +51,7 @@ test('ホーム: ドロップ通知はポインタを奪わない（5秒間ボ�
   expect(String(hit)).not.toContain('home-drop-notice');
 });
 
-test('ホーム: 受理しないカードの上ではドロップヒントを出さない', async ({ page }) => {
+test('ホーム: カードの上でもドロップヒントが出続ける', async ({ page }) => {
   await page.goto('/');
   const card = page.locator('.home-card', { hasText: 'sample-project' });
   await expect(card).toBeVisible({ timeout: 15_000 });
@@ -119,7 +63,31 @@ test('ホーム: 受理しないカードの上ではドロップヒントを出
   // 空きスペースへ入るとヒントが出る
   await page.dispatchEvent('.home-head', 'dragenter', { dataTransfer });
   await expect(page.getByTestId('home-drop-hint')).toBeVisible();
-  // カードの上へ移ると、受理しない場所なのでヒントは消える
   await card.dispatchEvent('dragover', { dataTransfer });
-  await expect(page.getByTestId('home-drop-hint')).toHaveCount(0);
+  await expect(page.getByTestId('home-drop-hint')).toBeVisible();
+});
+
+// 新しい編集画面では、複数の動画を 1 本ずつ別のプロジェクトにする（HomeDashboard.tsx の startCreate。実際に作るところは home-folder-materials.spec.ts）。
+// 旧画面の「複数は 1 件目のみ＋通知」は契約が変わったので、2026-10-15 に退役した旧 test の期待を今の仕様で書き直した。
+test('ホーム: 複数の動画を落とすと、作るプロジェクトが名前の順に並ぶ作成画面が開き、1 件目だけの通知は出ない', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.home')).toBeVisible({ timeout: 15_000 });
+  // 落とす順は名前の順と逆にし、自然順（clip-2 < clip-10）に並べ替わることまで見る。
+  const dataTransfer = await page.evaluateHandle(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(['00'], 'clip-10.mp4', { type: 'video/mp4' }));
+    dt.items.add(new File(['00'], 'clip-2.mov', { type: 'video/quicktime' }));
+    return dt;
+  });
+  await page.dispatchEvent('.home', 'drop', { dataTransfer });
+
+  const dialog = page.locator('.home-create-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.home-create-file-note')).toHaveText('素材: 動画 2 本（1 本ずつ別のプロジェクト）');
+  await expect(dialog.locator('.home-create-link-note', { hasText: '動画 2 本を、それぞれ別のプロジェクトとして作ります' })).toBeVisible();
+  await expect(dialog.getByRole('list', { name: '作るプロジェクト' }).getByRole('listitem').nth(0)).toContainText('clip-2');
+  await expect(page.locator('.home-drop-notice')).toHaveCount(0);
+  // 作らずに閉じられる（使い捨てのドロップで案件を増やさない）。
+  await dialog.getByRole('button', { name: 'キャンセル', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });

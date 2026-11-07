@@ -32,7 +32,7 @@ export interface ConvertDeps {
   roots?: BrowseRoot[];
   chunkBytes?: number;
   symlinkOk?: () => boolean;
-  match?: typeof findLinkTarget;
+  match?: (...args: Parameters<typeof findLinkTarget>) => MatchOutcome | Promise<MatchOutcome>;
   link?: (target: string, linkPath: string) => void;
   writeLink?: typeof writeVideoLink;
   /** 退避 tombstone の破棄（既定は emptyTrash）。テストで失敗系を作るための seam。 */
@@ -81,7 +81,7 @@ function resolveCopiedMainVideo(dir: string): MainVideo {
  * このプロジェクトのコピー実体と同一のファイルが、起点配下にあるかを探す。
  * 見つからない・曖昧な場合は matched:false を返す（例外にしない）。
  */
-export function findConvertCandidate(root: string, dir: string, deps: ConvertDeps = {}): MatchOutcome {
+export async function findConvertCandidate(root: string, dir: string, deps: ConvertDeps = {}): Promise<MatchOutcome> {
   return matchForMainVideo(root, resolveCopiedMainVideo(dir), deps);
 }
 
@@ -90,7 +90,7 @@ export function findConvertCandidate(root: string, dir: string, deps: ConvertDep
  * 変換本体は `resolveCopiedMainVideo` を 1 回だけ呼ぶ（M-4）— 2 回呼ぶと、その間に
  * 実体が差し替わった場合に「検証した対象」と「置き換える対象」が別物になり得る。
  */
-function matchForMainVideo(root: string, main: MainVideo, deps: ConvertDeps): MatchOutcome {
+async function matchForMainVideo(root: string, main: MainVideo, deps: ConvertDeps): Promise<MatchOutcome> {
   const match = deps.match ?? findLinkTarget;
   return match(
     { path: main.linkPath, name: null, sizeBytes: main.sizeBytes },
@@ -125,13 +125,13 @@ export function describeLinkMissReason(reason: Extract<MatchOutcome, { matched: 
  * コピー実体をリンクへ張り替える。成功したら回収できた容量（バイト）を返す。
  * 対象パスは**サーバ側の探索結果のみ**を使う（クライアントから受け取らない）。
  */
-export function convertProjectToLink(
+export async function convertProjectToLink(
   root: string,
   dir: string,
   deps: ConvertDeps = {},
-): { target: string; freedBytes: number; keptCopyPath?: string } {
+): Promise<{ target: string; freedBytes: number; keptCopyPath?: string }> {
   const main = resolveCopiedMainVideo(dir);
-  const outcome = matchForMainVideo(root, main, deps);
+  const outcome = await matchForMainVideo(root, main, deps);
   if (!outcome.matched) {
     throw new HttpError(409, describeLinkMissReason(outcome.reason));
   }

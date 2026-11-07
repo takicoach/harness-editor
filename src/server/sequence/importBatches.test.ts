@@ -365,3 +365,15 @@ it('after a failed confirm the waiting re-send gets the same failure, and the ne
   await expect(third).resolves.toMatchObject({appliedRevision:1,changed:true});
   expect(sessions.open(dir).document.clips.filter(c=>c.trackId==='v-main')).toHaveLength(1);
 });
+it('a materials batch registers every ready video and places nothing on the main track',async()=>{
+  const batches=make(),view=batches.create(dir,{...input(['a.mp4','b.mp4']),placement:'materials'});await batches.idle(dir,view.batchId);
+  expect(view.placement).toBe('materials');
+  const state=sessions.open(dir),done=await batches.confirm(dir,view.batchId,{sessionId:state.sessionId,executionId:'c'},sessions);
+  expect(done.document.clips).toEqual([]);expect(done.document.assets.map(a=>a.name)).toEqual(['a.mp4','b.mp4']);
+  expect(batches.get(dir,view.batchId)).toMatchObject({phase:'confirmed',placement:'materials'});
+});
+it('treats the same request id with a different placement as a conflict, and keeps old append-main keys unchanged',()=>{
+  const batches=make(),first=batches.create(dir,input(['a.mp4']));
+  expect(batches.create(dir,input(['a.mp4']))).toMatchObject({batchId:first.batchId,placement:'append-main'});
+  expect(caught(()=>batches.create(dir,{...input(['a.mp4']),placement:'materials'}))).toMatchObject({status:409});
+});

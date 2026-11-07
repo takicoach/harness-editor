@@ -18,7 +18,8 @@ const OPEN=new Set<ImportBatchView['phase']>(['preparing','deciding','ready','pa
 export function importFrames(doc:SequenceDocument,batches:readonly ImportBatchView[],durationOf:(batchId:string,item:ImportItemView)=>number|undefined):ImportFrame[]{
   const fps=timeNumber(doc.fps),frames:ImportFrame[]=[],failed:Omit<ImportFrame,'startFrame'>[]=[];let at=mainAppendStart(doc);
   for(const batch of batches){
-    if(!OPEN.has(batch.phase)||doc.clips.some(clip=>clip.id.startsWith(`${batch.batchId}-`)))continue;
+    // 素材欄に入れるだけの束はメインに並ばないので枠を出さない。
+    if(batch.placement==='materials'||!OPEN.has(batch.phase)||doc.clips.some(clip=>clip.id.startsWith(`${batch.batchId}-`)))continue;
     const items=batch.items.filter(item=>item.phase!=='cancelled'&&!item.audioOnly),placing=items.filter(item=>item.phase!=='failed'),lead=placing[0]??items[0];
     for(const item of items){
       const seconds=item.durationSeconds??durationOf(batch.batchId,item),durationFrames=Math.max(1,Math.ceil((seconds??IMPORT_PLACEHOLDER_SECONDS)*fps));

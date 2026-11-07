@@ -4,9 +4,10 @@ import {lstat,open,realpath} from 'node:fs/promises';
 import {basename,relative,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {BROWSE_MEDIA_EXTENSIONS,type BrowseRoot} from '../browsePaths';
-import {findSizeMatches,type FindOptions} from '../matchVideoSource';
+import {DEFAULT_SCAN_MILLIS,findSizeMatches,type FindOptions} from '../matchVideoSource';
 import {isContained} from '../projectRoot';
 import {HttpError} from '../http';
+import {UnresponsiveFileError,watchedFs} from './fsWatch';
 
 export const referenceMatchSchema=z.object({name:z.string().min(1).max(255).refine(name=>!name.startsWith('.')&&!/[\\/\0]/.test(name)),
  sizeBytes:z.number().int().positive().safe(),fingerprint:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
@@ -19,12 +20,13 @@ export async function matchSequenceReference(input:unknown,roots:BrowseRoot[],pr
  const parsed=referenceMatchSchema.safeParse(input);if(!parsed.success)throw new HttpError(400,'素材照合の名前・サイズ・全体SHA-256が不正です');
  const request=parsed.data;signal?.throwIfAborted();
  const excluded=await realpath(projectRoot).catch(()=>resolve(projectRoot)),allowed:BrowseRoot[]=[];
- for(const root of roots){signal?.throwIfAborted();try{const path=await realpath(root.path);if(!isContained(path,excluded))allowed.push({...root,path});}catch{/* disconnected roots cannot yield a candidate */}}
- const found=findSizeMatches(allowed,request,{...options,exclude:[excluded],extensions:BROWSE_MEDIA_EXTENSIONS,strictPaths:true,signal});
+ let unanswered=false;
+ for(const root of roots){signal?.throwIfAborted();try{const path=await watchedFs('realpath',root.path,()=>realpath(root.path),{limitMs:DEFAULT_SCAN_MILLIS});if(!isContained(path,excluded))allowed.push({...root,path});}catch(error){/* disconnected roots cannot yield a candidate; one that does not answer might */if(error instanceof UnresponsiveFileError)unanswered=true;}}
+ const found=await findSizeMatches(allowed,request,{...options,exclude:[excluded],extensions:BROWSE_MEDIA_EXTENSIONS,strictPaths:true,signal});
  signal?.throwIfAborted();
- if(found.exhausted)return {matched:false,reason:'search-truncated'};
  if(found.candidates.length>1)return {matched:false,reason:'ambiguous'};
- const candidate=found.candidates[0];if(!candidate)return {matched:false,reason:'no-candidate'};
+ // 探し切れなくても、候補が 1 つなら全体の照合まで進む。一致すれば中身は同じなので、未走査の場所に同じコピーがあっても取り違えにならない。
+ const candidate=found.candidates[0];if(!candidate)return {matched:false,reason:found.exhausted||unanswered?'search-truncated':'no-candidate'};
  const path=resolve(candidate.path),root=allowed.find(r=>isContained(path,r.path));
  const checkPath=async()=>{
   if(!root||isContained(path,excluded)||basename(path)!==request.name)throw new Error('source outside roots');

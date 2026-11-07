@@ -31,7 +31,7 @@ export type ImportPlan =
 
 export interface PlanImportDeps {
   roots?: BrowseRoot[];
-  match?: typeof findLinkTarget;
+  match?: (...args: Parameters<typeof findLinkTarget>) => MatchOutcome | Promise<MatchOutcome>;
   symlinkOk?: () => boolean;
   chunkBytes?: number;
 }
@@ -40,7 +40,7 @@ export interface PlanImportDeps {
  * 取り込み方法を決める。
  * `preferCopy` はユーザーが作成モーダルで「コピーして取り込む」を選んだ場合。
  */
-export function planImport(
+export async function planImport(
   input: {
     root: string;
     tmpPath: string;
@@ -50,7 +50,7 @@ export function planImport(
     probeDir?: string;
   },
   deps: PlanImportDeps = {},
-): ImportPlan {
+): Promise<ImportPlan> {
   if (input.preferCopy) return { link: false, reason: 'requested' };
   const probeDir = input.probeDir ?? dirname(input.tmpPath);
   const symlinkOk = deps.symlinkOk ?? (() => canCreateSymlink(() => probeSymlinkSupport(probeDir)).ok);
@@ -58,7 +58,7 @@ export function planImport(
   const match = deps.match ?? findLinkTarget;
   try {
     const size = statSync(input.tmpPath).size;
-    const outcome = match(
+    const outcome = await match(
       { path: input.tmpPath, name: input.videoName, sizeBytes: size },
       deps.roots ?? browseRoots(),
       // プロジェクト置き場は起点に含まれることがある（例: ~/Movies の下で運用）。

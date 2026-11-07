@@ -3,7 +3,8 @@ import type { SequenceCommand } from '../../core/sequence/commands';
 import type { SequenceSessionState } from '../../server/sequence/service';
 import type {TransferProgress} from '../components/TaskProgress';
 import {imageUploadPrefix} from '../../shared/imageUploadFrame';
-import type {ImportBatchView} from '../../shared/importBatches';
+import type {ImportBatchView,ImportPlacement} from '../../shared/importBatches';
+import type {ProjectDocument} from '../../shared/projectDocuments';
 
 /** signal が止まったら送信を中断する（取り込みの束の取り消し）。断られた理由の code（IMPORT_CLOSED など）も返す。 */
 function uploadWithProgress<T>(url:string,file:Blob,onProgress:(progress:TransferProgress)=>void,signal?:AbortSignal):Promise<T>{
@@ -89,7 +90,7 @@ export async function uploadNativeAsset(projectId: string, file: File,onProgress
   return result.asset;
 }
 /** 取り込みの束を作る。応答が届かなかった時だけ同じ要求 ID で1回再送する（サーバは同じ要求 ID の束を返す）。 */
-export async function createImportBatch(projectId:string,body:{requestId:string;mode:'link'|'copy';origin:'ui'|'home';items:Array<{key:string;name:string;path?:string}>}):Promise<ImportBatchView>{
+export async function createImportBatch(projectId:string,body:{requestId:string;mode:'link'|'copy';origin:'ui'|'home';placement?:ImportPlacement;items:Array<{key:string;name:string;path?:string}>}):Promise<ImportBatchView>{
   try{return await nativeRequest<ImportBatchView>(projectId,'/imports',body);}
   catch(error){if(error instanceof NativeApiError)throw error;return nativeRequest<ImportBatchView>(projectId,'/imports',body);}
 }
@@ -113,3 +114,27 @@ export function abandonImportItems(projectId:string,batchId:string,itemIds:reado
  */
 export function retryOnce<T>(request:()=>Promise<T>):Promise<T>{return request().catch(()=>request());}
 export function cancelImportBatch(projectId:string,batchId:string):Promise<ImportBatchView>{return nativeRequest<ImportBatchView>(projectId,'/imports/cancel',{batchId});}
+/** 案件の取り込みの束の一覧（読み直し用。編集画面は SSE で受ける）。 */
+export async function fetchImportBatches(projectId:string):Promise<ImportBatchView[]>{return (await nativeRequest<{batches:ImportBatchView[]}>(projectId,'/imports')).batches;}
+const documentQuery=(projectId:string,path?:string)=>new URLSearchParams({id:projectId,...(path===undefined?{}:{path})});
+async function documentError(response:Response):Promise<NativeApiError>{
+  const result=await response.json().catch(()=>({})) as {error?:string};
+  return new NativeApiError(result.error??'書類を扱えませんでした',response.status);
+}
+/** 書類を案件の「資料」へ保管する。path は資料からの相対パス。 */
+export async function uploadProjectDocument(projectId:string,path:string,file:File):Promise<void>{
+  const response=await fetch(`/api/project/documents?${documentQuery(projectId,path)}`,{method:'POST',body:file});
+  if(!response.ok)throw await documentError(response);
+}
+export async function fetchProjectDocuments(projectId:string):Promise<ProjectDocument[]>{
+  const response=await fetch(`/api/project/documents?${documentQuery(projectId)}`);
+  if(!response.ok)throw await documentError(response);
+  return ((await response.json()) as {documents:ProjectDocument[]}).documents;
+}
+/** 保管した書類の本文を File で受け取る（台本欄の読み込みへ渡す）。 */
+export async function fetchProjectDocumentFile(projectId:string,path:string):Promise<File>{
+  const response=await fetch(`/api/project/documents/file?${documentQuery(projectId,path)}`);
+  if(!response.ok)throw await documentError(response);
+  return new File([await response.blob()],path.split('/').pop()!);
+}
+

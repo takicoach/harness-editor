@@ -8,7 +8,9 @@
 .native-preview-box{margin:10px;border-radius:9px;background:var(--bg-2);min-height:0}.native-preview-stage{box-shadow:none}.native-preview-status{max-width:calc(100% - 24px);border-radius:9px;line-height:1.6}
 .native-right-dock{grid-column:5;grid-row:1;min-height:0;min-width:0;display:flex;flex-direction:column}/* container-type は fixed の包含ブロックを作る: 配下に position:fixed を置かない（置くならポータル）。 */
 .native-inspector-host{min-height:0;flex:1;overflow:auto;container-type:inline-size}.native-inspector-host[hidden]{display:none}.native-inspector{overflow:visible;background:transparent}
-.native-ai-panel{min-height:0;overflow:auto;flex:1;padding:6px}.native-ai-panel .cl{width:100%;height:100%;border:0;background:transparent}.native-ai-panel textarea{max-width:100%}
+.native-ai-panel{min-height:0;overflow:auto;flex:1;padding:6px}.native-ai-panel .cl{width:100%;height:100%;border:0;background:transparent}.native-ai-panel textarea:not(.xterm-helper-textarea){max-width:100%}
+/* 端末（xterm）の隠し入力欄は除く: 幅の基準の箱（.xterm-helpers）は幅 0 なので、max-width:100% だと入力欄の幅が 0 に潰れ、
+   日本語の変換を確定するたびに入力欄の中のカーソルが先頭へ戻る。xterm は確定した文字を末尾から切り出すため、2 語目から化けて送られる（tests/ai-tab-ime.spec.ts）。 */
 .native-mode-finish .native-right-dock{grid-row:1/-1}.native-mode-finish .native-main{grid-template-columns:var(--native-left,248px) 10px minmax(260px,1fr) 10px var(--native-right,340px)}
 .native-inspector fieldset{padding:12px 16px}.native-inspector section{padding:17px 0 8px;margin-top:10px}.native-inspector h3{font-size:12px;font-weight:700;margin-bottom:14px}.native-property{gap:8px;min-height:32px;line-height:1.5}.native-property input,.native-property select,.native-text-field textarea,.native-transcript select{border:1px solid var(--border);border-radius:7px;background:var(--bg-2);padding:7px 9px;min-width:0}.native-property input{font-variant-numeric:tabular-nums}
 .native-number-field{margin:13px 0 18px}.native-number-field .native-property{margin:0 0 7px}.native-property-slider{display:block;width:100%;height:16px;accent-color:var(--accent);cursor:ew-resize;padding:0!important;border:0!important;background:transparent!important}
@@ -64,3 +66,11 @@
 .native-thumbnail-ai[data-open="false"] { width: 44px; align-items: center; padding-top: 8px; }
 .native-thumbnail-ai[data-open="true"] { width: min(380px, 34vw); }
 .native-thumbnail-ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--fg-0); }
+.native-workspace .script-documents{padding:0 0 14px;margin-bottom:10px;border-bottom:1px solid var(--border)}
+.native-workspace .script-documents h3{margin:0 0 4px;font-size:13px}
+.native-workspace .script-documents p{margin:0 0 8px;font-size:12px;opacity:.75}
+.native-workspace .script-documents ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.native-workspace .script-documents li{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.native-workspace .script-document-name{flex:1 1 160px;min-width:0;overflow-wrap:anywhere;font-size:12px}
+.native-workspace .script-documents small{flex-basis:100%;order:3;font-size:11px;opacity:.75}
+

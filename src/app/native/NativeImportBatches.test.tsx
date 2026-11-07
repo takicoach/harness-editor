@@ -82,3 +82,10 @@ it('takes a choice once, and asks again when the same batch waits for a decision
   view.rerender(<NativeImportBatches batches={[deciding]} {...props} unfinishedCopies={new Set(['imp-aaaaaaaaaaaaaaaaaaaa:i0'])}/>);
   expect(button('このまま使う').disabled).toBe(false);expect(view.getByText(/前回のコピーを最後まで終えられなかった動画があります/)).toBeTruthy();
 });
+it('words a materials batch as going into the materials, not the main track',()=>{
+  const onConfirm=vi.fn(),items=[{itemId:'i0',key:'0',name:'a.mp4',phase:'ready' as const}];
+  const view=render(<NativeImportBatches batches={[{...batch('ready',items),placement:'materials'}]} unplaced={[{...batch('confirmed',[{...items[0]!,itemId:'i1',assetId:'x'}]),batchId:'imp-bbbbbbbbbbbbbbbbbbbb',placement:'materials'}]} disabled={false} onConfirm={onConfirm} onCancel={vi.fn()}/>);
+  expect(view.getByText('準備済み・素材欄に未登録（1本）')).toBeTruthy();expect(view.queryByText(/メインの末尾/)).toBeNull();
+  expect(view.getByText(/今の素材欄に入っていません/)).toBeTruthy();
+  fireEvent.click(view.getByRole('button',{name:'素材欄に入れる'}));expect(onConfirm).toHaveBeenCalledWith('imp-aaaaaaaaaaaaaaaaaaaa',false);
+});

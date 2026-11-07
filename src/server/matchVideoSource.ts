@@ -1,9 +1,11 @@
-import { closeSync, openSync, readSync, readdirSync, realpathSync, statSync, lstatSync } from 'node:fs';
+import { closeSync, openSync, readSync } from 'node:fs';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { extname, join, resolve } from 'node:path';
 import { VIDEO_EXTENSIONS } from '../shared/videoExtensions';
 import { isContained } from './projectRoot';
 import type { BrowseRoot } from './browsePaths';
+import { UnresponsiveFileError, volumeStalled, watchedFs, type FsOperation } from './sequence/fsWatch';
 
 /**
  * 「手元の動画ファイルと同一の実体が、登録済みブラウズルート（外付け等）にあるか」を探す。
@@ -22,6 +24,9 @@ import type { BrowseRoot } from './browsePaths';
  * 走査は「起点配下のみ・深さ/件数/時間の上限つき・symlink を辿らない」。
  * これは `browsePaths.listDirectory`（1 階層）と同じ封じ込め方針の再帰版で、
  * 対象パスはすべてサーバ側の走査結果であり、クライアントから受け取らない。
+ *
+ * 走査は非同期で行い、1 回の問い合わせも残り時間で見限る。同期で読むと、応答しない外付けの open が戻らない間
+ * サーバー全体が止まり、時間の上限も効かない（2026-11-04 実測）。
  */
 
 /** 走査の上限。UI を待たせすぎず、巨大ドライブでもサーバを詰まらせない。 */
@@ -84,19 +89,24 @@ export interface FindOptions {
   signal?: AbortSignal;
   /** Native full-file matching uses canonical roots and refuses changed/symlink paths. */
   strictPaths?: boolean;
+  /** 試験専用: 応答しないドライブを作るための差し替え。 */
+  fs?: { readdir: typeof scanReaddir; lstat: typeof lstat; stat: typeof stat; realpath: typeof realpath };
 }
+
+const scanReaddir = (dir: string) => readdir(dir, { withFileTypes: true });
 
 /**
  * 起点配下から「サイズ一致（name 指定時は名前も一致）」の動画を集める。
  * 候補が 2 件に達した時点で打ち切る（2 件＝曖昧確定なので、それ以上数える意味がない）。
  */
-export function findSizeMatches(
+export async function findSizeMatches(
   roots: BrowseRoot[],
   criteria: { name: string | null; sizeBytes: number },
   options: FindOptions = {},
-): { candidates: FoundFile[]; exhausted: boolean } {
+): Promise<{ candidates: FoundFile[]; exhausted: boolean }> {
   const limits = options.limits ?? defaultMatchLimits();
   const now = options.now ?? (() => Date.now());
+  const fs = options.fs ?? { readdir: scanReaddir, lstat, stat, realpath };
   const excluded = (options.exclude ?? []).map((p) => resolve(p));
   const startedAt = now();
   const candidates: FoundFile[] = [];
@@ -109,6 +119,9 @@ export function findSizeMatches(
 
   const isExcluded = (dir: string): boolean =>
     excluded.some((ex) => isContained(resolve(dir), ex));
+  /** 1 回の問い合わせ。残り時間を過ぎても戻らなければ UnresponsiveFileError。 */
+  const ask = <T>(operation: FsOperation, path: string, call: () => Promise<T>): Promise<T> =>
+    watchedFs(operation, path, call, { limitMs: Math.max(1, limits.maxMillis - (now() - startedAt)) });
 
   const stack: Array<{ dir: string; depth: number }> = [];
   for (const root of roots) {
@@ -124,12 +137,13 @@ export function findSizeMatches(
     }
     const item = stack.pop();
     if (item === undefined) break;
-    let entries: import('node:fs').Dirent[];
+    if (volumeStalled(item.dir, limits.maxMillis)) { exhausted = true; continue; }
+    let entries: Awaited<ReturnType<typeof scanReaddir>>;
     try {
-      if (options.strictPaths && (lstatSync(item.dir).isSymbolicLink() || realpathSync(item.dir) !== resolve(item.dir))) { exhausted = true; continue; }
-      entries = readdirSync(item.dir, { withFileTypes: true });
-    } catch {
-      if (options.strictPaths) exhausted = true;
+      if (options.strictPaths && ((await ask('lstat', item.dir, () => fs.lstat(item.dir))).isSymbolicLink() || await ask('realpath', item.dir, () => fs.realpath(item.dir)) !== resolve(item.dir))) { exhausted = true; continue; }
+      entries = await ask('readdir', item.dir, () => fs.readdir(item.dir));
+    } catch (error) {
+      if (options.strictPaths || error instanceof UnresponsiveFileError) exhausted = true;
       continue; // 未接続・権限なしの起点は飛ばす（一覧全体を落とさない）
     }
     for (const e of entries) {
@@ -159,10 +173,10 @@ export function findSizeMatches(
       if (criteria.name !== null && e.name !== criteria.name) continue;
       let st: import('node:fs').Stats;
       try {
-        if (options.strictPaths && lstatSync(full).isSymbolicLink()) { exhausted = true; continue; }
-        st = statSync(full);
-      } catch {
-        if (options.strictPaths) exhausted = true;
+        if (options.strictPaths && (await ask('lstat', full, () => fs.lstat(full))).isSymbolicLink()) { exhausted = true; continue; }
+        st = await ask('stat', full, () => fs.stat(full));
+      } catch (error) {
+        if (options.strictPaths || error instanceof UnresponsiveFileError) exhausted = true;
         continue;
       }
       // Dirent が通常ファイルだと言っても、stat 側でも確かめる（#142: FIFO・
@@ -171,9 +185,9 @@ export function findSizeMatches(
       if (st.size !== criteria.sizeBytes) continue;
       let real: string;
       try {
-        real = realpathSync(full);
-      } catch {
-        if (options.strictPaths) { exhausted = true; continue; }
+        real = await ask('realpath', full, () => fs.realpath(full));
+      } catch (error) {
+        if (options.strictPaths || error instanceof UnresponsiveFileError) { exhausted = true; continue; }
         real = resolve(full); // realpath が引けなくても候補自体は落とさない
       }
       if (options.strictPaths && (real !== resolve(full) || isExcluded(real))) { exhausted = true; continue; }
@@ -236,25 +250,25 @@ export type MatchOutcome =
 export interface MatchDeps extends FindOptions {
   chunkBytes?: number;
   digest?: (path: string, sizeBytes: number, chunkBytes: number) => string;
-  find?: typeof findSizeMatches;
+  find?: (...args: Parameters<typeof findSizeMatches>) => Awaited<ReturnType<typeof findSizeMatches>> | ReturnType<typeof findSizeMatches>;
 }
 
 /**
  * 手元の実体（source.path）と同一のファイルを起点配下から探す。
  * 少しでも曖昧なら matched:false を返す（呼び出し側は従来どおりコピーする）。
  */
-export function findLinkTarget(
+export async function findLinkTarget(
   source: { path: string; name: string | null; sizeBytes: number },
   roots: BrowseRoot[],
   deps: MatchDeps = {},
-): MatchOutcome {
+): Promise<MatchOutcome> {
   // サイズ 0 は「中身が無い」＝両端ハッシュも常に一致してしまう。決してマッチさせない。
   if (source.sizeBytes <= 0) return { matched: false, reason: 'no-candidate' };
   const find = deps.find ?? findSizeMatches;
   const chunkBytes = deps.chunkBytes ?? DEFAULT_CHUNK_BYTES;
   const digest = deps.digest ?? chunkDigest;
 
-  const { candidates, exhausted } = find(
+  const { candidates, exhausted } = await find(
     roots,
     { name: source.name, sizeBytes: source.sizeBytes },
     { exclude: deps.exclude, limits: deps.limits, now: deps.now },

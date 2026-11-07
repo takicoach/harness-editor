@@ -22,12 +22,12 @@ function roots(p: string): BrowseRoot[] {
 }
 
 describe('planImport', () => {
-  it('外付けに同一実体があればリンク取り込みを選ぶ', () => {
+  it('外付けに同一実体があればリンク取り込みを選ぶ', async () => {
     const { root, ssd, tmpPath, cleanup } = setup();
     try {
       const target = join(ssd, 'take1.mp4');
       writeFileSync(target, 'video-bytes-0123456789');
-      const plan = planImport(
+      const plan = await planImport(
         { root, tmpPath, videoName: 'take1.mp4', preferCopy: false },
         { roots: roots(ssd), chunkBytes: 8 },
       );
@@ -37,12 +37,12 @@ describe('planImport', () => {
     }
   });
 
-  it('ユーザーがコピーを選んでいたら探索そのものを行わない', () => {
+  it('ユーザーがコピーを選んでいたら探索そのものを行わない', async () => {
     const { root, ssd, tmpPath, cleanup } = setup();
     try {
       writeFileSync(join(ssd, 'take1.mp4'), 'video-bytes-0123456789');
       let searched = false;
-      const plan = planImport(
+      const plan = await planImport(
         { root, tmpPath, videoName: 'take1.mp4', preferCopy: true },
         {
           roots: roots(ssd),
@@ -56,11 +56,11 @@ describe('planImport', () => {
     }
   });
 
-  it('この環境でリンクを作れないならコピーへ落とす', () => {
+  it('この環境でリンクを作れないならコピーへ落とす', async () => {
     const { root, ssd, tmpPath, cleanup } = setup();
     try {
       writeFileSync(join(ssd, 'take1.mp4'), 'video-bytes-0123456789');
-      const plan = planImport(
+      const plan = await planImport(
         { root, tmpPath, videoName: 'take1.mp4', preferCopy: false },
         { roots: roots(ssd), chunkBytes: 8, symlinkOk: () => false },
       );
@@ -70,13 +70,13 @@ describe('planImport', () => {
     }
   });
 
-  it('プロジェクト置き場の中は探索しない（取り込み済みのコピーを自分の実体にしない）', () => {
+  it('プロジェクト置き場の中は探索しない（取り込み済みのコピーを自分の実体にしない）', async () => {
     const { root, tmpPath, cleanup } = setup();
     try {
       // 起点にプロジェクト置き場そのものを指定しても、その配下は候補にならない。
       mkdirSync(join(root, 'p1', 'public'), { recursive: true });
       writeFileSync(join(root, 'p1', 'public', 'take1.mp4'), 'video-bytes-0123456789');
-      const plan = planImport(
+      const plan = await planImport(
         { root, tmpPath, videoName: 'take1.mp4', preferCopy: false },
         { roots: roots(root), chunkBytes: 8 },
       );
@@ -86,10 +86,10 @@ describe('planImport', () => {
     }
   });
 
-  it('候補が無ければコピー（理由を持ち帰る）', () => {
+  it('候補が無ければコピー（理由を持ち帰る）', async () => {
     const { root, ssd, tmpPath, cleanup } = setup();
     try {
-      const plan = planImport(
+      const plan = await planImport(
         { root, tmpPath, videoName: 'take1.mp4', preferCopy: false },
         { roots: roots(ssd), chunkBytes: 8 },
       );
@@ -99,10 +99,10 @@ describe('planImport', () => {
     }
   });
 
-  it('探索が例外を投げてもコピーへ落として作成をブロックしない', () => {
+  it('探索が例外を投げてもコピーへ落として作成をブロックしない', async () => {
     const { root, ssd, tmpPath, cleanup } = setup();
     try {
-      const plan = planImport(
+      const plan = await planImport(
         { root, tmpPath, videoName: 'take1.mp4', preferCopy: false },
         { roots: roots(ssd), match: () => { throw new Error('boom'); } },
       );
@@ -114,20 +114,20 @@ describe('planImport', () => {
 });
 
 describe('describeCopyReason', () => {
-  it('理由ごとに非エンジニア向けの説明を返す', () => {
+  it('理由ごとに非エンジニア向けの説明を返す', async () => {
     expect(describeCopyReason('no-candidate')).toContain('コピー');
     expect(describeCopyReason('ambiguous')).toContain('複数');
     expect(describeCopyReason('content-mismatch')).toContain('中身');
     expect(describeCopyReason('requested')).toContain('コピー');
   });
 
-  it('探索の打ち切りは「無かった」と区別して伝える（I-4）', () => {
+  it('探索の打ち切りは「無かった」と区別して伝える（I-4）', async () => {
     const text = describeCopyReason('search-truncated');
     expect(text).toContain('探索を途中で打ち切りました');
     expect(text).toContain('登録フォルダを絞ると見つかることがあります');
   });
 
-  it('リンク作成に失敗してコピーへ落ちた場合も理由を持つ（I-3）', () => {
+  it('リンク作成に失敗してコピーへ落ちた場合も理由を持つ（I-3）', async () => {
     expect(describeCopyReason('link-failed')).toContain('コピー');
   });
 });

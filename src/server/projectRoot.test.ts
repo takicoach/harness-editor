@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolveProjectDir, resolvePublicAsset } from './projectRoot';
+import { resolveProjectDir, resolveProjectDirAsync, resolvePublicAsset } from './projectRoot';
 import { HttpError } from './http';
 
 const ROOT = '/tmp/sme-root';
@@ -160,5 +160,30 @@ describe('resolvePublicAsset', () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe('resolveProjectDirAsync', () => {
+  it('同期版と同じく、ルート配下は解決し、外へ出る ID とリンクは弾く', async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'sme-async-')));
+    try {
+      const root = join(base, 'root');
+      mkdirSync(join(root, 'p'), { recursive: true });
+      mkdirSync(join(base, 'outside'));
+      symlinkSync(join(base, 'outside'), join(root, 'escape'));
+      await expect(resolveProjectDirAsync(root, 'p')).resolves.toBe(join(root, 'p'));
+      await expect(resolveProjectDirAsync(root, 'not-yet')).resolves.toBe(join(root, 'not-yet'));
+      await expect(resolveProjectDirAsync(root, '../outside')).rejects.toMatchObject({ status: 400 });
+      await expect(resolveProjectDirAsync(root, 'escape')).rejects.toMatchObject({ status: 400 });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('応答しないドライブでは待ち続けず 503 で断る', async () => {
+    const started = Date.now();
+    await expect(resolveProjectDirAsync(ROOT, 'stalled-project', { limitMs: 20, realpath: () => new Promise<string>(() => {}) }))
+      .rejects.toMatchObject({ status: 503 });
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });

@@ -53,7 +53,9 @@ export async function handleImportApi(req:IncomingMessage,res:ServerResponse,url
       const source:ImportItemSource=item.path===undefined?{kind:'client'}:{kind:'path',path:path(item.path)};
       return {key:typeof item.key==='string'?item.key:'',name:typeof item.name==='string'?item.name:'',source};});
     const origin:ImportBatchOrigin=body.origin==='home'?{kind:'home'}:{kind:'ui'};
-    sendJson(res,200,importBatches.create(directory,{requestId:id(body.requestId),projectId,origin,mode,items}));return true;
+    const placement=body.placement===undefined||body.placement==='append-main'?'append-main' as const:body.placement==='materials'?'materials' as const:null;
+    if(!placement)throw new HttpError(400,'取り込みの配置先が不正です');
+    sendJson(res,200,importBatches.create(directory,{requestId:id(body.requestId),projectId,origin,mode,items,placement}));return true;
   }
   if(route==='/imports/reference'){
     sendJson(res,200,importBatches.deliverPath(directory,id(body.batchId),id(body.itemId),path(body.path),expectedReferenceFingerprint(body.expectedFingerprint)));return true;

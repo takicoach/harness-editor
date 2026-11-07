@@ -64,7 +64,7 @@ export async function importSequenceAssetDetailed(projectDirectory: string, sour
     const probed = await probeSequenceAsset(root, `.harness/assets/${basename(temporary)}`, name, signal), inspected = probed.asset;
     hooks?.onProbed?.(probed.asset.streams);
     if (inspected.fingerprint !== fingerprint) throw new Error('取り込んだ素材の内容が一致しません');
-    const handle = await open(temporary, 'r'); try { await handle.sync(); } finally { await handle.close(); }
+    const handle = await open(temporary, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
     const file = `.harness/assets/${fingerprint}${extension}`, destination = join(root, file);
     try { await link(temporary, destination); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { HomeDashboardWithAgentBoard, type CreateSource } from '../panels/HomeDashboard';
+import { HomeDashboardWithAgentBoard, type CreateManyResult, type CreateSource } from '../panels/HomeDashboard';
 import { useTheme } from '../layout/useTheme';
 import { Icon } from '../Icon';
 import { useEventBusProjectId } from '../eventBus';
@@ -12,10 +12,8 @@ import { HelpModal } from '../help/HelpModal';
 import { TutorialOverlay } from '../tutorial/TutorialOverlay';
 import { useNativeTutorial } from '../tutorial/useNativeTutorial';
 import { NativeWorkspace } from './NativeWorkspace';
-import { abandonImportItems, cancelImportBatch, createImportBatch, createNativeEmptyProject, createNativeImageProject, createNativeProject, referenceImportItem, retryOnce, savedNativeDocument, uploadImportItem } from './api';
-import {desktopFilePath} from './fileReference';
-import {createWithDurations,handOverImportSeconds} from './importSeconds';
-import {deleteProjectRequest} from '../trashApi';
+import { createNativeEmptyProject, createNativeImageProject, createNativeProject } from './api';
+import {createFolderProject,folderProjectNotes,waitForImportPrepared} from './createFolderProject';
 import {useNativeFileReference} from './useNativeFileReference';
 import './native.css';
 import './native-polish.css';
@@ -34,19 +32,6 @@ export function NativeApp() {
     return () => { window.removeEventListener('dragover', prevent); window.removeEventListener('drop', prevent); };
   }, []);
   return projectId ? <NativeWorkspace key={`${projectId}:${workspaceVersion}`} projectId={projectId} navigation={navigation} onReload={()=>setWorkspaceVersion(value=>value+1)} /> : <NativeHome navigate={id=>void navigation.navigate(id)} />;
-}
-
-/** 空の作品の版（作成時の文書は版0。createDocuments の buildEmptyDocument）。 */
-const UNTOUCHED_REVISION = 0;
-/**
- * 複数の動画からの作成に失敗した時、作ったばかりの空の作品をゴミ箱へ移す（一覧に空の作品だけが残らないように）。
- * クリップ・素材が無く、版が作成時のまま（誰も編集していない）と確かめられた時だけ。確かめられない・移せない時は残す。
- */
-async function dropUntouchedProject(id: string): Promise<void> {
-  try {
-    const document = await savedNativeDocument(id);
-    if (document && document.clips.length === 0 && document.assets.length === 0 && document.revision === UNTOUCHED_REVISION) await deleteProjectRequest(id);
-  } catch { /* 残す */ }
 }
 
 /** 編集画面へ全ページ遷移する（テストでは NativeHome の navigate で差し替える）。 */
@@ -89,36 +74,55 @@ export function NativeHome({ navigate = navigateToProject }: { navigate?: (id: s
     }).catch(error => { if (mounted.current) setNotice(error.message); });
     stages.current.set(id, task); void task.finally(() => { if (stages.current.get(id) === task) stages.current.delete(id); });
   };
-  const create = async (name: string, source: CreateSource,preferCopy:boolean,onProgress?:(progress:TransferProgress)=>void) => {
+  const create = async (name: string, source: CreateSource,preferCopy:boolean,onProgress?:(progress:TransferProgress)=>void,onStep?:(index:number,count:number)=>void):Promise<void|CreateManyResult> => {
     if (source.kind === 'empty') { const result = await createNativeEmptyProject(name); pick(result.id); return; }
-    if (source.kind === 'videos') {
-      // 空の作品を作り、ホームの束（開いた編集画面が準備完了で自動確定する）を作ってから開く（設計 §1 ③）。
-      // デスクトップ版のリンクは実パスを渡す。コピーは実パスを渡さず画面から送る（編集画面の「コピーして追加」と同じ。許可された場所の外の動画もコピーできる）。
-      // 長さの先読み（デスクトップ版）は束の作成と並行に行い、遷移の直前に読めている分を開く作品へ引き継ぐ。ブラウザ版は受け渡しを終えてから開く。
-      const { id } = await createNativeEmptyProject(name), paths = source.files.map(desktopFilePath), desktop = paths.every(Boolean), link = desktop && !preferCopy;
-      const { view, stop } = await createWithDurations(desktop ? source.files : null, () => createImportBatch(id, { requestId: crypto.randomUUID(), mode: preferCopy ? 'copy' : 'link', origin: 'home',
-        items: source.files.map((file, index) => ({ key: String(index), name: file.name, ...(link ? { path: paths[index] } : {}) })) }))
-        .catch(async (error: unknown) => { await dropUntouchedProject(id); throw error; });
-      // デスクトップ版のリンクは、束の作成で実パスを渡し終えている（サーバは応答の後に準備を始めるので、応答の項目は waiting のまま）。
-      // もう一度渡すとサーバが「受け付け済み」で断るので、何も渡さずに開く（編集画面の importVideos の `if(link)` と同じ）。
-      // ブラウザ版の参照（実パスなし）とコピーは、受付順に1本ずつ渡す。最初に渡せなかった素材で止め、渡せなかった分は束の中で失敗にする（1本も渡せなければ束を取り消して理由を出す）。
-      const waiting = link ? [] : view.items.filter(entry => entry.phase === 'waiting'), undelivered: string[] = []; let delivered = 0, failure: unknown;
-      for (const item of waiting) {
-        if (failure !== undefined) { undelivered.push(item.itemId); continue; }
-        const file = source.files[Number(item.key)]!;
+    if (source.kind === 'video-projects') {
+      // 1 本ずつ単発の作成を順に呼び、どれも開かない（作り終えたらホームに留まる。設計 3-3）。1 本の失敗で残りを止めない。
+      const result: CreateManyResult = { created: [], failed: [], stopped: [] };
+      for (const [index, file] of source.files.entries()) {
+        const projectName = source.names[index]!;
+        onStep?.(index + 1, source.files.length);
         try {
-          if (preferCopy) await uploadImportItem(id, view.batchId, item.itemId, file, onProgress);
-          else { const reference = await fileReference.resolve(file, onProgress); await referenceImportItem(id, { batchId: view.batchId, itemId: item.itemId, ...reference }); }
-          delivered++;
-        } catch (error) { undelivered.push(item.itemId); failure = error ?? new Error('動画を取り込めませんでした'); }
+          const reference = preferCopy ? null : await fileReference.resolve(file, onProgress);
+          const created = await createNativeProject(projectName, reference?.path ?? file, onProgress, reference?.expectedFingerprint);
+          result.created.push(created.id);
+        } catch (error) {
+          // 保存場所の選択を取り消したら残りは作らない（選択が本数分開き続けないように）。
+          if ((error as { name?: string } | null)?.name === 'AbortError') { result.stopped.push(...source.names.slice(index)); break; }
+          result.failed.push({ name: projectName, reason: error instanceof Error ? error.message : String(error) });
+        }
       }
-      if (waiting.length && !delivered) {
-        stop(); await cancelImportBatch(id, view.batchId).catch(() => undefined); await dropUntouchedProject(id); throw failure;
+      return result;
+    }
+    if (source.kind === 'folders') {
+      // フォルダごとに 1 プロジェクト。動画の準備が終わるまで待ってからトップに留まる（準備済みの束は再起動しても残り、開いた時に素材欄へ入る）。
+      const result: CreateManyResult = { created: [], failed: [], stopped: [], unit: 'folder', notes: [] };
+      for (const [index, folder] of source.folders.entries()) {
+        const projectName = source.names[index]!;
+        onStep?.(index + 1, source.folders.length);
+        try {
+          const made = await createFolderProject(projectName, folder, preferCopy, fileReference, onProgress);
+          result.created.push(made.id);
+          onProgress?.({ phase: 'preparing' });
+          result.notes!.push(...folderProjectNotes(projectName, made, await waitForImportPrepared(made.id, made.batchId)));
+          if (made.aborted) { result.stopped.push(...source.names.slice(index + 1)); break; }
+        } catch (error) {
+          // 保存場所の選択を取り消したら残りは作らない（選択が本数分開き続けないように）。
+          if ((error as { name?: string } | null)?.name === 'AbortError') { result.stopped.push(...source.names.slice(index)); break; }
+          result.failed.push({ name: projectName, reason: error instanceof Error ? error.message : String(error) });
+        }
       }
-      // ページを読み直す遷移（既定の navigateToProject）では要求が途中で切れうる。失敗の印が届いてから開く（届かないと束が準備中のまま残り、自動で並ばない）。
-      if (undelivered.length) await retryOnce(() => abandonImportItems(id, view.batchId, undelivered)).catch(() => undefined);
-      handOverImportSeconds(id, view.batchId);
-      pick(id); return;
+      return result;
+    }
+    if (source.kind === 'folder') {
+      const made = await createFolderProject(name, source, preferCopy, fileReference, onProgress);
+      // 全ページ遷移で通知が消えるので、書類の失敗があれば開かずにトップで見せる。
+      // 開かずに留まる時は、複数フォルダと同じく準備が終わるまで待つ（準備中の動画は再起動で失敗に変わるため）。
+      if (made.documentFailures.length) {
+        onProgress?.({ phase: 'preparing' });
+        return { created: [made.id], failed: [], stopped: [], unit: 'folder', notes: folderProjectNotes(name, made, await waitForImportPrepared(made.id, made.batchId)) };
+      }
+      pick(made.id); return;
     }
     if (source.kind === 'upload-images' || source.kind === 'link-images') {
       const result = await createNativeImageProject(name, source.kind === 'upload-images' ? source.files : source.files.map(file => file.path), onProgress);

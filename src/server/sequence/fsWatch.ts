@@ -1,5 +1,5 @@
 import {homedir} from 'node:os';
-import {sep} from 'node:path';
+import {parse,sep} from 'node:path';
 
 /**
  * ファイルを開く・読む処理の見張り（2026-10-06: 起動後に読み取りが open() で固まり、書き出し前の確認が返らなかった。
@@ -17,8 +17,8 @@ export const FS_REPORT_MS=15_000;
 export const UNRESPONSIVE_READ_MS=60_000;
 /** 書き出し前の確認が渡す待ちの上限。無ければ従来どおり待つ（記録だけ出す）。 */
 export interface ReadLimit {unresponsiveMs?:number}
-export type FsOperation='open'|'read'|'stat'|'realpath'|'readFile';
-const verbs:Record<FsOperation,string>={open:'開く',read:'読む',stat:'情報を得る',realpath:'実際の場所を確かめる',readFile:'読む'};
+export type FsOperation='open'|'read'|'stat'|'lstat'|'readdir'|'realpath'|'readFile';
+const verbs:Record<FsOperation,string>={open:'開く',read:'読む',stat:'情報を得る',lstat:'情報を得る',readdir:'一覧する',realpath:'実際の場所を確かめる',readFile:'読む'};
 
 export class UnresponsiveFileError extends Error{
   readonly code='ETIMEDOUT';
@@ -55,6 +55,19 @@ export function watchedFs<T>(operation:FsOperation,path:string,call:()=>Promise<
     const timer=setTimeout(()=>{abandoned=true;reject(new UnresponsiveFileError(operation,path,limitMs));},limitMs);
     work.then(value=>{if(abandoned)return;clearTimeout(timer);resolve(value);},error=>{if(abandoned)return;clearTimeout(timer);reject(error);});
   });
+}
+
+/** 同じ媒体とみなす単位。外付けは /Volumes/名前、それ以外はドライブの起点。 */
+function volumeOf(path:string):string{return /^\/Volumes\/[^/]+/.exec(path)?.[0]??parse(path).root;}
+const slowIsNormal:ReadonlySet<FsOperation>=new Set(['read','readFile']);
+/**
+ * このパスと同じ媒体で、afterMs を過ぎても戻らない問い合わせが残っているか。戻らない 1 件は作業用スレッドを 1 本ふさぐので、
+ * 走査のように次々とパスを変えて問い合わせる処理は、同じパスだけを見る watchedFs の「積み重ねない」では止まれない。大きいファイルの読み込みは長くかかって当然なので数えない。
+ */
+export function volumeStalled(path:string,afterMs:number):boolean{
+  const volume=volumeOf(path),now=Date.now();
+  for(const other of pending)if(!slowIsNormal.has(other.operation)&&now-other.startedAt>=afterMs&&volumeOf(other.path)===volume)return true;
+  return false;
 }
 
 /** 利用者に見せる場所（パス全体は見せない: 書き出し前の確認の結果に絶対パスを載せない既存の約束）。 */

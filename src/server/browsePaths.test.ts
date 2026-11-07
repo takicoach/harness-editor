@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import {
   browseRoots,
+  assertPathResponds,
   assertBrowsablePath,
   listDirectory,
   parentOf,
@@ -27,19 +28,19 @@ function makeTree(): { root: string; cleanup: () => void } {
 }
 
 describe('browseRoots', () => {
-  it('SME_BROWSE_ROOTS を path.delimiter で分割する（Windows のドライブ文字と衝突しない）', () => {
+  it('SME_BROWSE_ROOTS を path.delimiter で分割する（Windows のドライブ文字と衝突しない）', async () => {
     const roots = browseRoots({ SME_BROWSE_ROOTS: ['/a', '/b'].join(delimiter) } as NodeJS.ProcessEnv, '/home/u', () => true);
     expect(roots.map((r) => r.path)).toEqual(['/a', '/b']);
   });
 
-  it('存在しない起点は落とす（外付け未接続なら一覧に出さない）', () => {
+  it('存在しない起点は落とす（外付け未接続なら一覧に出さない）', async () => {
     const roots = browseRoots({} as NodeJS.ProcessEnv, '/home/u', (p) => p === '/Volumes');
     expect(roots.map((r) => r.key)).toEqual(['volumes']);
   });
 });
 
 describe('assertBrowsablePath', () => {
-  it('起点配下は許可し realpath を返す', () => {
+  it('起点配下は許可し realpath を返す', async () => {
     const { root, cleanup } = makeTree();
     try {
       const roots = [{ key: 'r', label: 'r', path: join(root, 'inside') }];
@@ -51,7 +52,7 @@ describe('assertBrowsablePath', () => {
     }
   });
 
-  it('.. で起点の外へ出ようとしたら 403', () => {
+  it('.. で起点の外へ出ようとしたら 403', async () => {
     const { root, cleanup } = makeTree();
     try {
       const roots = [{ key: 'r', label: 'r', path: join(root, 'inside') }];
@@ -62,7 +63,7 @@ describe('assertBrowsablePath', () => {
     }
   });
 
-  it('起点内から外を指すリンク経由の脱出も 403（realpath で判定するため）', () => {
+  it('起点内から外を指すリンク経由の脱出も 403（realpath で判定するため）', async () => {
     const { root, cleanup } = makeTree();
     try {
       symlinkSync(join(root, 'outside', 'other.mp4'), join(root, 'inside', 'escape.mp4'));
@@ -73,7 +74,7 @@ describe('assertBrowsablePath', () => {
     }
   });
 
-  it('相対パスは 400・存在しないパスは 404', () => {
+  it('相対パスは 400・存在しないパスは 404', async () => {
     const roots = [{ key: 'r', label: 'r', path: '/tmp' }];
     expect(() => assertBrowsablePath('relative/path.mp4', roots)).toThrow(/絶対パス/);
     expect(() => assertBrowsablePath('/tmp/does-not-exist-xyz.mp4', roots)).toThrow(/見つかりません/);
@@ -81,11 +82,11 @@ describe('assertBrowsablePath', () => {
 });
 
 describe('listDirectory', () => {
-  it('サブフォルダと動画だけを返し、隠しファイルと非動画は除く', () => {
+  it('サブフォルダと動画だけを返し、隠しファイルと非動画は除く', async () => {
     const { root, cleanup } = makeTree();
     try {
       const roots = [{ key: 'r', label: 'r', path: root }];
-      const out = listDirectory(join(root, 'inside'), roots);
+      const out = await listDirectory(join(root, 'inside'), roots);
       expect(out.dirs.map((d) => d.name)).toEqual(['sub']);
       expect(out.files.map((f) => f.name)).toEqual(['a.mp4', 'b.MOV']);
       expect(out.files[0]?.sizeBytes).toBe(10);
@@ -95,8 +96,8 @@ describe('listDirectory', () => {
     }
   });
 
-  it('stat に失敗する項目は飛ばす（切れたリンク・権限なしで一覧を落とさない）', () => {
-    const out = listDirectory('/fake', [], {
+  it('stat に失敗する項目は飛ばす（切れたリンク・権限なしで一覧を落とさない）', async () => {
+    const out = await listDirectory('/fake', [], {
       readdir: () => ['ok.mp4', 'broken.mp4'],
       stat: (p) => {
         if (p.endsWith('broken.mp4')) throw new Error('ENOENT');
@@ -107,9 +108,9 @@ describe('listDirectory', () => {
     expect(out.files.map((f) => f.name)).toEqual(['ok.mp4']);
   });
 
-  it('件数上限で打ち切り truncated を立てる', () => {
+  it('件数上限で打ち切り truncated を立てる', async () => {
     const names = Array.from({ length: MAX_BROWSE_ENTRIES + 10 }, (_, i) => `v${i}.mp4`);
-    const out = listDirectory('/fake', [], {
+    const out = await listDirectory('/fake', [], {
       readdir: () => names,
       stat: () => ({ isDirectory: () => false, isFile: () => true, size: 1 }),
       realpath: (p) => p,
@@ -118,15 +119,13 @@ describe('listDirectory', () => {
     expect(out.files.length).toBe(MAX_BROWSE_ENTRIES);
   });
 
-  it('読めないフォルダは 404', () => {
-    expect(() =>
-      listDirectory('/fake', [], { readdir: () => { throw new Error('EACCES'); }, realpath: (p) => p }),
-    ).toThrow(HttpError);
+  it('読めないフォルダは 404', async () => {
+    await expect(listDirectory('/fake', [], { readdir: () => { throw new Error('EACCES'); }, realpath: (p) => p })).rejects.toThrow(HttpError);
   });
 });
 
 describe('parentOf', () => {
-  it('起点そのものからは上がれない', () => {
+  it('起点そのものからは上がれない', async () => {
     const roots = [{ key: 'r', label: 'r', path: '/root' }];
     expect(parentOf('/root', roots, (p) => p)).toBeNull();
     expect(parentOf('/root/sub', roots, (p) => p)).toBe('/root');
@@ -134,7 +133,7 @@ describe('parentOf', () => {
 });
 
 describe('isBrokenLink', () => {
-  it('切れたリンクだけ true（未配置は false）', () => {
+  it('切れたリンクだけ true（未配置は false）', async () => {
     const { root, cleanup } = makeTree();
     try {
       symlinkSync(join(root, 'gone.mp4'), join(root, 'link.mp4'));
@@ -148,13 +147,40 @@ describe('isBrokenLink', () => {
 });
 
 describe('canCreateSymlink', () => {
-  it('作れない環境では理由つきで ok:false', () => {
+  it('作れない環境では理由つきで ok:false', async () => {
     const res = canCreateSymlink(() => { throw new Error('EPERM'); });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.message).toContain('EPERM');
   });
 
-  it('作れれば ok:true', () => {
+  it('作れれば ok:true', async () => {
     expect(canCreateSymlink(() => { /* noop */ })).toEqual({ ok: true });
+  });
+});
+
+describe('応答しないドライブがあっても保存場所の選択で止まらない', () => {
+  const dirStat = { isDirectory: () => true, isFile: () => false, size: 0 };
+  const roots = [{ key: 'v', label: '外付け', path: '/Volumes' }];
+  const realpath = (path: string) => path;
+
+  it('一覧が戻らないフォルダは 503 と、どのドライブかの案内で返す', async () => {
+    await expect(listDirectory('/Volumes/固まるC', roots, { readdir: () => new Promise<string[]>(() => {}), realpath, limitMs: 20 }))
+      .rejects.toMatchObject({ status: 503, message: expect.stringContaining('ドライブ「固まるC」') });
+  });
+
+  it('一覧の中で情報が戻らないものだけを除き、他は出す', async () => {
+    const listing = await listDirectory('/Volumes', roots, {
+      readdir: () => ['固まるD', '正常'], realpath, limitMs: 20,
+      stat: (path) => path.endsWith('固まるD') ? new Promise<typeof dirStat>(() => {}) : dirStat,
+    });
+    expect(listing.dirs.map((dir) => dir.name)).toEqual(['正常']);
+  });
+
+  it('選ばれたパスの確認が戻らない時も 503 で返す。起点の外のパスには触れない', async () => {
+    const stuck = () => new Promise<string>(() => {});
+    await expect(assertPathResponds('/Volumes/固まるE/撮影', roots, { realpath: stuck, limitMs: 20 })).rejects.toMatchObject({ status: 503 });
+    let asked = false;
+    await assertPathResponds('/etc/秘密', roots, { realpath: async (path) => { asked = true; return path; }, limitMs: 20 });
+    expect(asked).toBe(false);
   });
 });

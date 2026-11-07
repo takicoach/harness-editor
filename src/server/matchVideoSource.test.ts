@@ -35,14 +35,14 @@ function body(seed: number, bytes: number): Buffer {
 }
 
 describe('findSizeMatches', () => {
-  it('名前とサイズが一致する動画だけを拾う', () => {
+  it('名前とサイズが一致する動画だけを拾う', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       mkdirSync(join(root, 'sub'), { recursive: true });
       writeFileSync(join(root, 'sub', 'a.mp4'), 'x'.repeat(10));
       writeFileSync(join(root, 'sub', 'b.mp4'), 'x'.repeat(10)); // 名前違い
       writeFileSync(join(root, 'a.mp4'), 'x'.repeat(11)); // サイズ違い
-      const r = findSizeMatches(roots(root), { name: 'a.mp4', sizeBytes: 10 });
+      const r = await findSizeMatches(roots(root), { name: 'a.mp4', sizeBytes: 10 });
       expect(r.candidates.map((c) => c.path)).toEqual([join(root, 'sub', 'a.mp4')]);
       expect(r.exhausted).toBe(false);
     } finally {
@@ -50,32 +50,32 @@ describe('findSizeMatches', () => {
     }
   });
 
-  it('name=null ならサイズ一致だけで拾う（コピー実体は元の名前を失っているため）', () => {
+  it('name=null ならサイズ一致だけで拾う（コピー実体は元の名前を失っているため）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       writeFileSync(join(root, 'zzz.mov'), 'x'.repeat(10));
-      const r = findSizeMatches(roots(root), { name: null, sizeBytes: 10 });
+      const r = await findSizeMatches(roots(root), { name: null, sizeBytes: 10 });
       expect(r.candidates.map((c) => c.path)).toEqual([join(root, 'zzz.mov')]);
     } finally {
       cleanup();
     }
   });
 
-  it('動画以外の拡張子・隠しファイル・隠しフォルダは見ない', () => {
+  it('動画以外の拡張子・隠しファイル・隠しフォルダは見ない', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       writeFileSync(join(root, 'a.txt'), 'x'.repeat(10));
       writeFileSync(join(root, '.a.mp4'), 'x'.repeat(10));
       mkdirSync(join(root, '.hidden'), { recursive: true });
       writeFileSync(join(root, '.hidden', 'a.mp4'), 'x'.repeat(10));
-      const r = findSizeMatches(roots(root), { name: null, sizeBytes: 10 });
+      const r = await findSizeMatches(roots(root), { name: null, sizeBytes: 10 });
       expect(r.candidates).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  it('symlink は辿らない（ファイルもフォルダも）', () => {
+  it('symlink は辿らない（ファイルもフォルダも）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       mkdirSync(join(root, 'real'), { recursive: true });
@@ -83,32 +83,32 @@ describe('findSizeMatches', () => {
       mkdirSync(join(root, 'roots'), { recursive: true });
       symlinkSync(join(root, 'real'), join(root, 'roots', 'linkdir'));
       symlinkSync(join(root, 'real', 'a.mp4'), join(root, 'roots', 'a.mp4'));
-      const r = findSizeMatches(roots(join(root, 'roots')), { name: null, sizeBytes: 10 });
+      const r = await findSizeMatches(roots(join(root, 'roots')), { name: null, sizeBytes: 10 });
       expect(r.candidates).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  it('FIFO 等の非通常ファイルは statSync isFile で弾く（size=0 でも上限を素通りさせない）', () => {
+  it('FIFO 等の非通常ファイルは statSync isFile で弾く（size=0 でも上限を素通りさせない）', async () => {
     if (process.platform === 'win32') return;
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       const fifo = join(root, 'pipe.mp4');
       execFileSync('mkfifo', [fifo]);
-      const r = findSizeMatches(roots(root), { name: null, sizeBytes: 0 });
+      const r = await findSizeMatches(roots(root), { name: null, sizeBytes: 0 });
       expect(r.candidates).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  it('exclude 配下は走査しない（プロジェクト置き場の自分自身を候補にしない）', () => {
+  it('exclude 配下は走査しない（プロジェクト置き場の自分自身を候補にしない）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       mkdirSync(join(root, 'projects', 'p1', 'public'), { recursive: true });
       writeFileSync(join(root, 'projects', 'p1', 'public', 'main.mp4'), 'x'.repeat(10));
-      const r = findSizeMatches(
+      const r = await findSizeMatches(
         roots(root),
         { name: null, sizeBytes: 10 },
         { exclude: [join(root, 'projects')] },
@@ -119,13 +119,13 @@ describe('findSizeMatches', () => {
     }
   });
 
-  it('深さ上限を超えたフォルダへは降りない（exhausted になる）', () => {
+  it('深さ上限を超えたフォルダへは降りない（exhausted になる）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       const deep = join(root, 'a', 'b', 'c');
       mkdirSync(deep, { recursive: true });
       writeFileSync(join(deep, 'x.mp4'), 'x'.repeat(10));
-      const r = findSizeMatches(
+      const r = await findSizeMatches(
         roots(root),
         { name: null, sizeBytes: 10 },
         { limits: { ...DEFAULT_MATCH_LIMITS, maxDepth: 1 } },
@@ -137,12 +137,12 @@ describe('findSizeMatches', () => {
     }
   });
 
-  it('件数上限で打ち切る（exhausted になる）', () => {
+  it('件数上限で打ち切る（exhausted になる）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       for (let i = 0; i < 5; i++) writeFileSync(join(root, `f${i}.txt`), 'y');
       writeFileSync(join(root, 'zz.mp4'), 'x'.repeat(10));
-      const r = findSizeMatches(
+      const r = await findSizeMatches(
         roots(root),
         { name: null, sizeBytes: 10 },
         { limits: { ...DEFAULT_MATCH_LIMITS, maxEntries: 3 } },
@@ -153,13 +153,13 @@ describe('findSizeMatches', () => {
     }
   });
 
-  it('時間上限を超えたら打ち切る', () => {
+  it('時間上限を超えたら打ち切る', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       mkdirSync(join(root, 'sub'), { recursive: true });
       writeFileSync(join(root, 'sub', 'a.mp4'), 'x'.repeat(10));
       let t = 0;
-      const r = findSizeMatches(
+      const r = await findSizeMatches(
         roots(root),
         { name: null, sizeBytes: 10 },
         { limits: { ...DEFAULT_MATCH_LIMITS, maxMillis: 5 }, now: () => (t += 100) },
@@ -171,39 +171,39 @@ describe('findSizeMatches', () => {
     }
   });
 
-  it('同名同サイズが 2 件見つかった時点で打ち切る（曖昧確定のため走査を続けない）', () => {
+  it('同名同サイズが 2 件見つかった時点で打ち切る（曖昧確定のため走査を続けない）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       writeFileSync(join(root, 'a.mp4'), 'x'.repeat(10));
       mkdirSync(join(root, 'sub'), { recursive: true });
       writeFileSync(join(root, 'sub', 'a.mp4'), 'x'.repeat(10));
       writeFileSync(join(root, 'sub', 'a2.mp4'), 'x'.repeat(10));
-      const r = findSizeMatches(roots(root), { name: null, sizeBytes: 10 });
+      const r = await findSizeMatches(roots(root), { name: null, sizeBytes: 10 });
       expect(r.candidates.length).toBe(2);
     } finally {
       cleanup();
     }
   });
 
-  it('入れ子の起点で同じ実体を二重に数えない（realpath で重複排除・M-1）', () => {
+  it('入れ子の起点で同じ実体を二重に数えない（realpath で重複排除・M-1）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       mkdirSync(join(root, 'sub'), { recursive: true });
       writeFileSync(join(root, 'sub', 'a.mp4'), 'x'.repeat(10));
       // 「外付け全体」と「その中の撮影フォルダ」の両方が登録されているのは普通の設定。
       // 重複排除しないと 1 本の動画が 2 候補になり ambiguous でリンク化できなくなる。
-      const r = findSizeMatches(roots(root, join(root, 'sub')), { name: null, sizeBytes: 10 });
+      const r = await findSizeMatches(roots(root, join(root, 'sub')), { name: null, sizeBytes: 10 });
       expect(r.candidates.map((c) => c.path)).toEqual([join(root, 'sub', 'a.mp4')]);
     } finally {
       cleanup();
     }
   });
 
-  it('読めない起点は飛ばす（未接続の外付けで全体を落とさない）', () => {
+  it('読めない起点は飛ばす（未接続の外付けで全体を落とさない）', async () => {
     const { root, cleanup } = tmpRoot('sme-match-');
     try {
       writeFileSync(join(root, 'a.mp4'), 'x'.repeat(10));
-      const r = findSizeMatches(roots(join(root, 'nope'), root), { name: null, sizeBytes: 10 });
+      const r = await findSizeMatches(roots(join(root, 'nope'), root), { name: null, sizeBytes: 10 });
       expect(r.candidates.map((c) => c.path)).toEqual([join(root, 'a.mp4')]);
     } finally {
       cleanup();
@@ -212,7 +212,7 @@ describe('findSizeMatches', () => {
 });
 
 describe('chunkDigest', () => {
-  it('同じ内容なら同じ、1 バイト違えば違う（末尾の差も検出する）', () => {
+  it('同じ内容なら同じ、1 バイト違えば違う（末尾の差も検出する）', async () => {
     const { root, cleanup } = tmpRoot('sme-digest-');
     try {
       const a = body(1, 3000);
@@ -229,7 +229,7 @@ describe('chunkDigest', () => {
     }
   });
 
-  it('チャンクより小さいファイルでも全体を読む', () => {
+  it('チャンクより小さいファイルでも全体を読む', async () => {
     const { root, cleanup } = tmpRoot('sme-digest-');
     try {
       writeFileSync(join(root, 'a.bin'), 'abc');
@@ -253,12 +253,12 @@ describe('findLinkTarget', () => {
     return { root, cleanup, src };
   }
 
-  it('同名・同サイズ・内容一致の 1 件だけが見つかればリンク先になる', () => {
+  it('同名・同サイズ・内容一致の 1 件だけが見つかればリンク先になる', async () => {
     const { root, cleanup, src } = setup();
     try {
       const target = join(root, 'ssd', 'DJI_0688.mp4');
       writeFileSync(target, body(7, 5000));
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: statSync(src).size },
         roots(join(root, 'ssd')),
         { chunkBytes: 1024 },
@@ -274,10 +274,10 @@ describe('findLinkTarget', () => {
     }
   });
 
-  it('候補が無ければ no-candidate（＝従来どおりコピー）', () => {
+  it('候補が無ければ no-candidate（＝従来どおりコピー）', async () => {
     const { root, cleanup, src } = setup();
     try {
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: 5000 },
         roots(join(root, 'ssd')),
         { chunkBytes: 1024 },
@@ -288,10 +288,10 @@ describe('findLinkTarget', () => {
     }
   });
 
-  it('候補 0 でも探索を打ち切っていたら search-truncated（「無い」と言い切らない）', () => {
+  it('候補 0 でも探索を打ち切っていたら search-truncated（「無い」と言い切らない）', async () => {
     const { root, cleanup, src } = setup();
     try {
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: 5000 },
         roots(join(root, 'ssd')),
         {
@@ -313,11 +313,11 @@ describe('findLinkTarget', () => {
    * 取り違えは「別の動画で編集を続ける」という静かな事故になるため、
    * リンク化の成功率よりも取り違えの回避を優先する。
    */
-  it('打ち切り中は候補 1 件でも一意と見なさず search-truncated', () => {
+  it('打ち切り中は候補 1 件でも一意と見なさず search-truncated', async () => {
     const { root, cleanup, src } = setup();
     try {
       const twin = join(root, 'ssd', 'DJI_0688.mp4');
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: 5000 },
         roots(join(root, 'ssd')),
         {
@@ -335,13 +335,13 @@ describe('findLinkTarget', () => {
     }
   });
 
-  it('同名同サイズが複数なら ambiguous（内容を見るまでもなくリンク化しない）', () => {
+  it('同名同サイズが複数なら ambiguous（内容を見るまでもなくリンク化しない）', async () => {
     const { root, cleanup, src } = setup();
     try {
       writeFileSync(join(root, 'ssd', 'DJI_0688.mp4'), body(7, 5000));
       mkdirSync(join(root, 'ssd', 'backup'), { recursive: true });
       writeFileSync(join(root, 'ssd', 'backup', 'DJI_0688.mp4'), body(7, 5000));
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: 5000 },
         roots(join(root, 'ssd')),
         { chunkBytes: 1024 },
@@ -352,11 +352,11 @@ describe('findLinkTarget', () => {
     }
   });
 
-  it('同名同サイズでも内容が違えば content-mismatch', () => {
+  it('同名同サイズでも内容が違えば content-mismatch', async () => {
     const { root, cleanup, src } = setup();
     try {
       writeFileSync(join(root, 'ssd', 'DJI_0688.mp4'), body(9, 5000));
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: 5000 },
         roots(join(root, 'ssd')),
         { chunkBytes: 1024 },
@@ -367,11 +367,11 @@ describe('findLinkTarget', () => {
     }
   });
 
-  it('サイズ 0 は決してマッチさせない（空ファイル同士の偶然一致を避ける）', () => {
+  it('サイズ 0 は決してマッチさせない（空ファイル同士の偶然一致を避ける）', async () => {
     const { root, cleanup } = tmpRoot('sme-link-');
     try {
       writeFileSync(join(root, 'empty.mp4'), '');
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: join(root, 'empty.mp4'), name: 'empty.mp4', sizeBytes: 0 },
         roots(root),
         { chunkBytes: 1024 },
@@ -382,12 +382,12 @@ describe('findLinkTarget', () => {
     }
   });
 
-  it('読み取りに失敗したら unreadable（例外にせずコピー経路へ落とす）', () => {
+  it('読み取りに失敗したら unreadable（例外にせずコピー経路へ落とす）', async () => {
     const { root, cleanup, src } = setup();
     try {
       const target = join(root, 'ssd', 'DJI_0688.mp4');
       writeFileSync(target, body(7, 5000));
-      const out = findLinkTarget(
+      const out = await findLinkTarget(
         { path: src, name: 'DJI_0688.mp4', sizeBytes: 5000 },
         roots(join(root, 'ssd')),
         { chunkBytes: 1024, digest: () => { throw new Error('boom'); } },
@@ -407,20 +407,61 @@ describe('defaultMatchLimits', () => {
     else process.env[KEY] = prev;
   });
 
-  it('既定の探索時間は 3 秒（エディタが止まって見える時間を短く保つ）', () => {
+  it('既定の探索時間は 3 秒（エディタが止まって見える時間を短く保つ）', async () => {
     delete process.env[KEY];
     expect(defaultMatchLimits().maxMillis).toBe(3000);
   });
 
-  it('HARNESS_LINK_SCAN_MS で上書きできる', () => {
+  it('HARNESS_LINK_SCAN_MS で上書きできる', async () => {
     process.env[KEY] = '12000';
     expect(defaultMatchLimits().maxMillis).toBe(12000);
   });
 
-  it('数値でない・0 以下の指定は無視して既定へ落とす', () => {
+  it('数値でない・0 以下の指定は無視して既定へ落とす', async () => {
     process.env[KEY] = 'あとで';
     expect(defaultMatchLimits().maxMillis).toBe(3000);
     process.env[KEY] = '0';
     expect(defaultMatchLimits().maxMillis).toBe(3000);
+  });
+});
+
+describe('応答しないドライブがあっても止まらない（2026-11-04 実測: 外付けの open が戻らず、サーバー全体が無応答になった）', () => {
+  const entry = (name: string, kind: 'dir' | 'file') => ({ name, isSymbolicLink: () => false, isDirectory: () => kind === 'dir', isFile: () => kind === 'file' });
+  /** tree に無いパスの一覧は stuck の約束が解けるまで戻らない（作業用スレッドが open で止まった状態）。 */
+  function fakeFs(tree: Record<string, ReturnType<typeof entry>[]>, stuck: Promise<unknown>) {
+    const asked: string[] = [];
+    const notSymlink = { isSymbolicLink: () => false };
+    return { asked, fs: {
+      readdir: async (dir: string) => { asked.push(dir); if (tree[dir]) return tree[dir]; await stuck; return []; },
+      lstat: async () => notSymlink,
+      stat: async () => ({ isFile: () => true, size: 1, mtimeMs: 0 }),
+      realpath: async (path: string) => path,
+    } as unknown as NonNullable<import('./matchVideoSource').FindOptions['fs']> };
+  }
+  const limits = { maxDepth: 6, maxEntries: 100, maxMillis: 40 };
+
+  it('止まったフォルダで待ち続けず、打ち切りを返す。待っている間も他の処理が動く', async () => {
+    const { fs } = fakeFs({ '/Volumes': [entry('固まるA', 'dir')] }, new Promise(() => {}));
+    let ticks = 0; const timer = setInterval(() => { ticks++; }, 5);
+    const found = await findSizeMatches([{ key: 'v', label: 'v', path: '/Volumes' }], { name: 'a.mp4', sizeBytes: 1 }, { limits, fs });
+    clearInterval(timer);
+    expect(found).toEqual({ candidates: [], exhausted: true });
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  it('同じドライブの止まった処理が残っている間は、そのドライブへ新しく問い合わせない（作業用スレッドを使い切らない）', async () => {
+    let release!: () => void; const stuck = new Promise<void>((resolve) => { release = resolve; });
+    const tree = { '/Volumes': [entry('固まるB', 'dir')], '/Volumes/固まるB': [entry('x', 'dir'), entry('y', 'dir')] };
+    const { fs, asked } = fakeFs(tree, stuck), roots = [{ key: 'v', label: 'v', path: '/Volumes' }], criteria = { name: 'a.mp4', sizeBytes: 1 };
+    expect((await findSizeMatches(roots, criteria, { limits, fs })).exhausted).toBe(true);
+    const stuckAsked = () => asked.filter((dir) => dir.startsWith('/Volumes/固まるB/'));
+    expect(stuckAsked()).toEqual(['/Volumes/固まるB/y']);
+    expect((await findSizeMatches(roots, criteria, { limits, fs })).exhausted).toBe(true);
+    expect(stuckAsked()).toEqual(['/Volumes/固まるB/y']);
+    // 戻ってきたら、また探せる。
+    release(); await stuck; await new Promise((resolve) => { setTimeout(resolve, 0); });
+    const recovered = { ...tree, '/Volumes/固まるB/x': [], '/Volumes/固まるB/y': [entry('a.mp4', 'file')] };
+    const again = await findSizeMatches(roots, criteria, { limits, fs: fakeFs(recovered, new Promise(() => {})).fs });
+    expect(again).toMatchObject({ exhausted: false, candidates: [{ path: '/Volumes/固まるB/y/a.mp4' }] });
   });
 });

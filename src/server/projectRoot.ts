@@ -1,6 +1,8 @@
 import { existsSync, realpathSync } from 'node:fs';
+import { realpath as realpathAsync } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { HttpError } from './http';
+import { UnresponsiveFileError, unresponsiveReadMessage, watchedFs } from './sequence/fsWatch';
 
 /** プロジェクト探索のルートディレクトリ。HARNESS_PROJECT_ROOT（旧 SME_PROJECT_ROOT）環境変数、無ければ cwd。 */
 export function getProjectRoot(): string {
@@ -38,6 +40,40 @@ export function resolveProjectDir(root: string, id: string): string {
     throw new HttpError(400, `不正なプロジェクトパスです: ${id}`);
   }
   return real;
+}
+
+
+/** 外付けの回転待ちより長く、利用者が固まったと感じる前に案内を返せる長さ（browsePaths.ts の確認と同じ）。 */
+const PROJECT_DIR_UNRESPONSIVE_MS = 5000;
+
+/**
+ * resolveProjectDir と同じ判定を、サーバーを止めずに行う。応答しないドライブでは limitMs で待つのをやめて 503 で断る
+ * （同期の realpathSync はその間すべての API を止める。2026-11-04 実測）。新しい経路はこちらを使う。
+ */
+export async function resolveProjectDirAsync(
+  root: string,
+  id: string,
+  deps: { realpath?: (p: string) => Promise<string>; limitMs?: number } = {},
+): Promise<string> {
+  const normalizedRoot = resolve(root);
+  const dir = resolve(normalizedRoot, id);
+  if (!isContained(dir, normalizedRoot)) throw new HttpError(400, `不正なプロジェクトパスです: ${id}`);
+  const check = deps.realpath ?? ((p: string) => realpathAsync(p));
+  const limitMs = deps.limitMs ?? PROJECT_DIR_UNRESPONSIVE_MS;
+  const real = async (path: string): Promise<string | null> => {
+    try {
+      return await watchedFs('realpath', path, () => check(path), { limitMs });
+    } catch (error) {
+      if (error instanceof UnresponsiveFileError) throw new HttpError(503, unresponsiveReadMessage(path));
+      return null;
+    }
+  };
+  const realDir = await real(dir);
+  // 実体が無い（未作成）。文字列封じ込めは通過済みなので dir を返す。
+  if (realDir === null) return dir;
+  const realRoot = (await real(normalizedRoot)) ?? normalizedRoot;
+  if (!isContained(realDir, realRoot)) throw new HttpError(400, `不正なプロジェクトパスです: ${id}`);
+  return realDir;
 }
 
 /**

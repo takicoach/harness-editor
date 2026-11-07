@@ -11,6 +11,8 @@ import { editorToolInputError, registerEditorTools } from './editorTools';
 import { aiFocus, type AiFocusRegistry } from '../aiFocus';
 import { EDITOR_BRIEF } from '../../shared/agentPrompts';
 import { registerContextTools } from './contextTools';
+import { listProjectDocuments } from '../projectDocuments';
+import { getProjectRoot, resolveProjectDirAsync } from '../projectRoot';
 import { slidesAgent } from '../slides/agent';
 import { registerSlidesTools } from '../slides/mcpTools';
 import { thumbnailAgent } from '../thumbnail/agent';
@@ -85,7 +87,7 @@ function buildMcpServer(inbox: InstructionInbox, editor: EditorAgentService | un
   // 説明書は初期化時の説明と最初の依頼の両方に入れる（設計書 4。Codex が instructions を読むかは T0 の結果を参照）。
   const server = new McpServer({ name: 'harness-editor', version: '0.1.0' }, { instructions: EDITOR_BRIEF });
   // AI タブの土台: 今の画面と依頼時点を返す道具（依頼のたびに最初に呼ばせる）。
-  registerContextTools(server, { focus, sessions: editor ? () => editor.sessions.list() : undefined });
+  registerContextTools(server, { focus, sessions: editor ? () => editor.sessions.list() : undefined, documents: async (id) => listProjectDocuments(await resolveProjectDirAsync(getProjectRoot(), id)) });
   // guard は AI タブの接続だけに付く（依頼時点の案件にだけ書ける）。外からの接続は今までどおり。
   if (editor) registerEditorTools(server, editor, guard);
   // スライドの道具は編集画面が無くても使える（保存はサーバーの SlidesService が行う）。

@@ -154,7 +154,7 @@ export class LegacyNativeRenderJobs {
       const expected=readExportRecord(root,record.id).output;if(!expected)throw new Error('書き出した動画の検証記録がありません');
       await copyFile(source,temporary,constants.COPYFILE_EXCL|constants.COPYFILE_FICLONE);
       const stat=await lstat(temporary,{bigint:true});record.publication={sha256:expected.sha256,bytes:expected.bytes,device:String(stat.dev),inode:String(stat.ino)};this.persist(run);
-      const file=await open(temporary,'r');try{await file.sync();}finally{await file.close();}
+      const file=await open(temporary,'r+');try{await file.sync();}finally{await file.close();}
       const bytes=await hashExportFile(temporary,signal);
       if(bytes.sha256!==expected.sha256||bytes.bytes!==expected.bytes)throw new Error('保存先へコピーした動画を確認できません');
       this.persist(run);signal.throwIfAborted();
