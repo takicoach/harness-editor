@@ -7,6 +7,7 @@ import { parseSequence } from '../../core/sequence/validate';
 import type {RenderedSceneGeometry} from './renderGeometry';
 import { previewFailure, type NativePreviewFailure } from './previewError';
 import type { LegacyMeasurementRequest, LegacyMeasurementSnapshot } from './legacyMeasurement';
+import { installCanvasExport } from './exportCanvasPage';
 
 declare global {
   interface Window { harnessNativeFrame?: (frame: number) => Promise<void>; harnessNativeReady?: boolean; harnessNativeError?: string; harnessNativeFailure?: NativePreviewFailure;
@@ -86,6 +87,8 @@ async function initialize() {
   window.harnessNativeDecodeStats = () => structuredClone(nativeDecodeStats);
   window.harnessNativeFrameSamples = () => renderer.frameSamples();
   window.harnessNativeFrameTiming = () => renderer.lastDrawTiming();
+  // The canvas engine (exportRunner.exportRenderPageUrl canvas=1): its half of the page, started by the runner.
+  if (query.get('canvas') === '1') installCanvasExport(stage);
   window.harnessNativeReady = true;
 }
 void initialize().catch(error => { window.harnessNativeFailure = previewFailure(error); window.harnessNativeError = window.harnessNativeFailure.message; });

@@ -54,8 +54,13 @@ it('the product capture is JPEG at quality 100; the measuring capture stays PNG'
   const fast = fakeBrowser(image);
   const captured = await (await openRenderSurface(fast.browser, 'http://fixture.invalid', { projectId: 'p', jobId: 'j' }, { width: 32, height: 32 })).capture(0);
   expect(isJpeg(captured)).toBe(true);
-  expect(fast.sent.filter(call => call.method === 'Page.captureScreenshot').map(call => call.params))
-    .toEqual([expect.objectContaining({ format: 'jpeg', quality: 100, fromSurface: true, clip: { x: 0, y: 0, width: 32, height: 32, scale: 1 } })]);
+  // Opening the surface spends one 1×1 clipped capture and fixes the viewport again on the capture session (Chrome 157
+  // drops the viewport override on the first clipped capture: exportFirstFrame.e2e.test.ts); only then is the frame captured.
+  expect(fast.sent.map(call => call.method)).toEqual(['Page.captureScreenshot', 'Emulation.setDeviceMetricsOverride', 'Page.captureScreenshot']);
+  const [warmUp, override, product] = fast.sent.map(call => call.params);
+  expect(warmUp).toEqual({ format: 'jpeg', quality: 1, fromSurface: true, captureBeyondViewport: false, optimizeForSpeed: true, clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } });
+  expect(override).toEqual({ width: 32, height: 32, deviceScaleFactor: 1, mobile: false });
+  expect(product).toEqual(expect.objectContaining({ format: 'jpeg', quality: 100, fromSurface: true, clip: { x: 0, y: 0, width: 32, height: 32, scale: 1 } }));
   expect(fast.screenshots).toEqual([]);
   const reference = fakeBrowser(image);
   const referenced = await (await openRenderSurface(reference.browser, 'http://fixture.invalid', { projectId: 'p', jobId: 'j' }, { width: 32, height: 32 }, { captureMode: 'reference' })).capture(0);

@@ -78,7 +78,8 @@ const failureMark = Symbol.for('harness-editor.exportFailure');
 export function isExportFailure(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[failureMark] === true;
 }
-function failureOf(error: unknown): Error {
+/** The error, marked for isExportFailure. Mark it when the failure happens, before cleaning up: a cancel can arrive during the cleanup. */
+export function markExportFailure(error: unknown): Error {
   let value = error instanceof Error ? error : new Error(String(error));
   try { Object.defineProperty(value, failureMark, { value: true }); }
   catch { value = new Error(value.message, { cause: value }); Object.defineProperty(value, failureMark, { value: true }); }
@@ -141,7 +142,7 @@ export async function renderExportFrames(options: {
     stop.abort(reason);
     try { stopped?.(reason); } catch (error) { console.warn('[sme] 書き出しの停止処理でエラーが起きました:', error); }
   };
-  const fail = (error: unknown) => { if (stop.signal.aborted) return; failure = failureOf(error); halt(failure); };
+  const fail = (error: unknown) => { if (stop.signal.aborted) return; failure = markExportFailure(error); halt(failure); };
   const cancel = () => halt(signal.reason);
   signal.addEventListener('abort', cancel, { once: true });
   watch?.then(() => { if (!finished) fail(new Error('動画の符号化が最後のコマの前に終わりました')); }, error => { if (!finished) fail(error); });

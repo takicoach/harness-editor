@@ -22,3 +22,11 @@ it.skipIf(process.platform === 'win32')('keeps a cancellation distinguishable fr
     await expect(probe).rejects.toMatchObject({ name: 'AbortError' });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+it('accepts the canvas engine stream only without reordered frames, since FFmpeg stamps frame n at n × den/num', async () => {
+  const { verifyNoFrameReordering } = await import('./exportVerification');
+  const probe = (video: Record<string, unknown>) => ({ streams: [{ codec_type: 'video', codec_name: 'h264', ...video }, { codec_type: 'audio', codec_name: 'aac' }] });
+  expect(() => verifyNoFrameReordering(probe({ has_b_frames: 0 }))).not.toThrow();
+  for (const video of [{ has_b_frames: 2 }, { has_b_frames: 1 }, {}])
+    expect(() => verifyNoFrameReordering(probe(video))).toThrow('書き出した映像にコマの並べ替えが含まれています');
+  expect(() => verifyNoFrameReordering({ streams: [{ codec_type: 'audio', codec_name: 'aac' }] })).toThrow('書き出した映像にコマの並べ替えが含まれています');
+});

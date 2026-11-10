@@ -99,6 +99,11 @@ it('preflights saved sources and rejects a direct export before creating a job w
  const list=await fetch(`${origin}/api/sequence/export/list?id=case`);expect((await list.json()).jobs).toEqual([]);
  expect((await post('/export/preflight',{...request,expectedRevision:999})).status).toBe(409);
 });
+it('tells the export screen whether the canvas engine can run on this machine',async()=>{
+  const response=await fetch(`${origin}/api/sequence/export/engines?id=case`);expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({canvas:process.platform==='darwin'&&process.arch==='arm64'?{available:true}:{available:false,reason:'速い書き出しは Apple シリコンの Mac でだけ使えます'}});
+  expect((await post('/export/engines',{})).status).toBe(405);
+});
 async function open(): Promise<SequenceSessionState> {
   const response = await post('/session', {}); expect(response.status).toBe(200); return response.json();
 }

@@ -11,7 +11,7 @@ import { HttpError } from '../http';
 import {isValidRenderOutputName,targetResolution} from '../../shared/renderPreset';
 
 const id=z.string().min(1).max(128),integer=z.number().int().nonnegative().safe(),hash=z.string().regex(/^[a-f0-9]{64}$/);
-export const exportSettingsSchema=z.object({resolution:z.enum(['full','1080p','720p']),quality:z.enum(['high','standard','light'])}).strict();
+export const exportSettingsSchema=z.object({resolution:z.enum(['full','1080p','720p']),quality:z.enum(['high','standard','light']),engine:z.literal('canvas').optional()}).strict();
 const outputResolutionSchema=z.object({width:integer.positive(),height:integer.positive()}).strict();
 const oldRequestSchema=z.object({sessionId:id,expectedRevision:integer,executionId:id}).strict();
 export const exportRequestSchema=oldRequestSchema.extend({settings:exportSettingsSchema.optional()});

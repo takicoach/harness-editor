@@ -313,6 +313,102 @@ it('routes a throwing onComplete to the notification history, not the export pan
   expect(spy).toHaveBeenCalledWith('p',expect.any(String),'listener boom');
   expect(view.queryByRole('alert')).toBeNull();
 });
+/** setup() with GET /export/engines answering `engines` (or failing), /export echoing the settings it was sent and
+ * the list holding the job it started. */
+function setupEngines(engines:unknown){
+  const result=setup(),normal=request.getMockImplementation()!;let started:unknown=null;
+  request.mockImplementation(async(...args)=>{
+    if(args[1]==='/export/engines'){if(engines instanceof Error)throw engines;return engines;}
+    if(args[1]==='/export'){started={...status,settings:args[2].settings,outputResolution:{width:1920,height:1080}};return started;}
+    if(args[1]==='/export/list')return {jobs:started?[started]:[],total:started?1:0,nextOffset:null};
+    return normal(...args);
+  });
+  return result;
+}
+const fastToggle=(view:ReturnType<typeof render>)=>view.queryByRole('checkbox',{name:'速い書き出し（試験中）'}) as HTMLInputElement|null;
+async function openSettings(view:ReturnType<typeof render>){
+  await waitFor(()=>expect((view.getByText('書き出し') as HTMLButtonElement).disabled).toBe(false));
+  await act(async()=>{});fireEvent.click(view.getByText('書き出し'));
+}
+it.each([
+  ['the engines answer that this machine cannot',{canvas:{available:false,reason:'速い書き出しは Apple シリコンの Mac でだけ使えます'}}],
+  ['the engines request fails',new Error('connection lost')],
+  ['the engines answer is not the expected shape',{canvas:null}],
+])('shows no fast-export switch when %s, and exports with the screenshot path as before',async(_case,engines)=>{
+  localStorage.setItem('harness.nativeExport.engine','canvas');
+  const {props}=setupEngines(engines),view=render(<NativeExportControl {...props}/>);
+  await openSettings(view);
+  await waitFor(()=>expect(request).toHaveBeenCalledWith('p','/export/engines',undefined,expect.anything()));await act(async()=>{});
+  expect(fastToggle(view)).toBeNull();
+  expect(view.queryByRole('alert')).toBeNull();
+  await act(async()=>fireEvent.click(view.getByRole('button',{name:'書き出し開始'})));
+  expect(request.mock.calls.find(call=>call[1]==='/export')![2].settings).toEqual({resolution:'full',quality:'high'});
+  // The remembered choice stays for a machine (or a moment) where the switch is offered.
+  expect(localStorage.getItem('harness.nativeExport.engine')).toBe('canvas');
+});
+it('offers the fast export when the machine can, sends engine canvas only when checked, and names it in the result and history',async()=>{
+  const {props}=setupEngines({canvas:{available:true}}),view=render(<NativeExportControl {...props}/>);
+  await openSettings(view);
+  await waitFor(()=>expect(fastToggle(view)).not.toBeNull());
+  const toggle=fastToggle(view)!;
+  expect(toggle.checked).toBe(false);expect(toggle.disabled).toBe(false);
+  expect(view.getByText('Mac の圧縮回路を使って速く書き出します。解像度「そのまま」の時だけ使えます。')).toBeTruthy();
+  fireEvent.click(toggle);expect(toggle.checked).toBe(true);
+  await act(async()=>fireEvent.click(view.getByRole('button',{name:'書き出し開始'})));
+  expect(request.mock.calls.filter(call=>call[1]==='/export').map(call=>call[2].settings)).toEqual([{resolution:'full',quality:'high',engine:'canvas'}]);
+  expect(view.getByText('1920×1080 · 高画質 · 速い書き出し')).toBeTruthy();
+  fireEvent.click(view.getByText('書き出し履歴（1件）'));
+  expect(within(view.getByRole('list',{name:'書き出し履歴'})).getAllByRole('button')[0]!.textContent).toContain('そのまま · 1920×1080 · 高画質 · 速い書き出し');
+  // The old dialog's shared preset never carries the engine.
+  expect(JSON.parse(localStorage.getItem('sme:render-preset')!)).toEqual({resolution:'full',quality:'high'});
+});
+it('turns the fast export off with a notice when the resolution leaves full, and keeps it off until chosen again',async()=>{
+  const {props}=setupEngines({canvas:{available:true}}),view=render(<NativeExportControl {...props}/>);
+  await openSettings(view);
+  await waitFor(()=>expect(fastToggle(view)).not.toBeNull());
+  fireEvent.click(fastToggle(view)!);
+  fireEvent.change(view.getByLabelText('書き出し解像度'),{target:{value:'1080p'}});
+  expect(fastToggle(view)!.checked).toBe(false);
+  expect(view.getByRole('status').textContent).toBe('解像度を変えたので、速い書き出しを切りました');
+  // While the resolution is not full the switch cannot be turned on.
+  expect(fastToggle(view)!.disabled).toBe(true);
+  fireEvent.click(fastToggle(view)!);expect(fastToggle(view)!.checked).toBe(false);
+  await act(async()=>fireEvent.click(view.getByRole('button',{name:'書き出し開始'})));
+  expect(request.mock.calls.find(call=>call[1]==='/export')![2].settings).toEqual({resolution:'1080p',quality:'high'});
+  expect(view.queryByText('速い書き出し',{exact:false,selector:'p.native-subtle'})).toBeNull();
+});
+it('says why the switch is off at another resolution, and a preset back to full lets it be chosen again without turning it on',async()=>{
+  localStorage.setItem('sme:render-preset',JSON.stringify({resolution:'720p',quality:'light'}));
+  localStorage.setItem('harness.nativeExport.engine','canvas');
+  const {props}=setupEngines({canvas:{available:true}}),view=render(<NativeExportControl {...props}/>);
+  await openSettings(view);
+  await waitFor(()=>expect(fastToggle(view)).not.toBeNull());
+  // A remembered choice does not apply at a resolution where it cannot run, and no change was made to announce.
+  expect(fastToggle(view)!.checked).toBe(false);expect(fastToggle(view)!.disabled).toBe(true);
+  expect(view.queryByRole('status')).toBeNull();
+  expect(view.getByText('今の解像度では使えません。解像度を「そのまま」にすると選べます。')).toBeTruthy();
+  fireEvent.click(view.getByRole('button',{name:'YouTube 投稿用（高画質）'}));
+  expect((view.getByLabelText('書き出し解像度') as HTMLSelectElement).value).toBe('full');
+  expect(fastToggle(view)!.disabled).toBe(false);expect(fastToggle(view)!.checked).toBe(false);
+  expect(view.queryByText('今の解像度では使えません。解像度を「そのまま」にすると選べます。')).toBeNull();
+});
+it('remembers the fast export only once an export starts with it, and forgets it when one starts without it',async()=>{
+  const {props}=setupEngines({canvas:{available:true}}),view=render(<NativeExportControl {...props}/>);
+  await openSettings(view);
+  await waitFor(()=>expect(fastToggle(view)).not.toBeNull());
+  fireEvent.click(fastToggle(view)!);
+  expect(localStorage.getItem('harness.nativeExport.engine')).toBeNull();
+  await act(async()=>fireEvent.click(view.getByRole('button',{name:'書き出し開始'})));
+  expect(localStorage.getItem('harness.nativeExport.engine')).toBe('canvas');
+  view.unmount();
+  const next=render(<NativeExportControl {...props}/>);
+  await openSettings(next);
+  await waitFor(()=>expect(fastToggle(next)).not.toBeNull());
+  expect(fastToggle(next)!.checked).toBe(true);
+  fireEvent.click(fastToggle(next)!);
+  await act(async()=>fireEvent.click(next.getByRole('button',{name:'書き出し開始'})));
+  expect(localStorage.getItem('harness.nativeExport.engine')).toBeNull();
+});
 it('disabledReason があれば書き出しを押せず、理由を title と見える補足文で示す',async()=>{
   const {props}=setup(),view=render(<NativeExportControl {...props} disabledReason="試し表示中は書き出せません"/>);
   await waitFor(()=>expect(request).toHaveBeenCalledWith('p','/export/list',undefined,expect.anything()));await act(async()=>{});

@@ -7,7 +7,7 @@ import {Transform,Readable} from 'node:stream';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativeChromeDistribution} from './nativeChromeDistribution';
-import {nativeChromeToolsPath,NATIVE_CHROME_VERSION} from './resolveNativeChromium';
+import {nativeChromeToolsPath} from './resolveNativeChromium';
 import {checkNativeChromeHealth} from './nativeChromeHealth';
 const exec=promisify(execFile), MAX_ARCHIVE_BYTES=1024*1024*1024;
 export async function sha256File(path:string):Promise<string>{const hash=createHash('sha256');for await(const chunk of createReadStream(path))hash.update(chunk);return hash.digest('hex');}
@@ -54,13 +54,13 @@ export async function installNativeChrome(options:NativeChromeInstallOptions,eff
   const deps={...defaults,...effects},platform=options.platform??process.platform,arch=options.arch??process.arch;
   const distribution=nativeChromeDistribution(platform,arch),root=await realpath(options.editorRoot);
   const tools=await directoryInside(root,'tools'),base=await directoryInside(tools,'chrome-for-testing');
-  const target=join(base,NATIVE_CHROME_VERSION),bin=nativeChromeToolsPath(root,platform,arch)!;
+  const target=join(base,distribution.version),bin=nativeChromeToolsPath(root,platform,arch)!;
   const lock=join(base,'.install.lock');await mkdir(lock).catch(()=>{throw new Error('native-browser-install-busy: 別のsetupが実行中です');});
   let temporary:string|undefined,backup:string|undefined,promoted=false;
   try {
     try {await lstat(target).then(s=>{if(s.isSymbolicLink())throw new Error('unsafe-installed-directory');});}
     catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
-    try {await deps.health(bin,options.signal);options.signal?.throwIfAborted();return {bin,installed:false};}catch{options.signal?.throwIfAborted();/* Stage a replacement without retiring the old copy yet. */}
+    try {await deps.health(bin,options.signal,distribution.version);options.signal?.throwIfAborted();return {bin,installed:false};}catch{options.signal?.throwIfAborted();/* Stage a replacement without retiring the old copy yet. */}
     temporary=await mkdtemp(join(base,'.stage-'));const archive=join(temporary,'chrome.zip');
     if(options.archive)await copyFile(options.archive,archive,constants.COPYFILE_EXCL);
     else await deps.download(distribution.url,archive,undefined,options.signal);
@@ -69,7 +69,7 @@ export async function installNativeChrome(options:NativeChromeInstallOptions,eff
     const suffix=relative(target,bin);if(isAbsolute(suffix)||suffix.startsWith('..'))throw new Error('unsafe-browser-path');
     const stagedBin=join(extracted,suffix);
     if(!(await lstat(stagedBin)).isFile())throw new Error('missing-browser-executable');
-    await deps.health(stagedBin,options.signal);
+    await deps.health(stagedBin,options.signal,distribution.version);
     options.signal?.throwIfAborted();
     await writeFile(join(extracted,'harness-native-chrome.json'),JSON.stringify({...distribution,executableSha256:await sha256File(stagedBin)},null,2)+'\n');
     options.signal?.throwIfAborted();

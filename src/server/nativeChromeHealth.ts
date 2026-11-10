@@ -1,9 +1,12 @@
 import {decodePngRgba} from './pngRgba';
 import {chromium} from 'playwright-core';
-import {NATIVE_CHROME_VERSION} from './resolveNativeChromium';
+import {nativeChromeVersion} from './resolveNativeChromium';
 
-/** Always checks the supplied executable, never a cached/override substitute. */
-export async function checkNativeChromeHealth(bin: string, signal?:AbortSignal): Promise<void> {
+/**
+ * Always checks the supplied executable, never a cached/override substitute.
+ * The installer passes the release it is staging; otherwise the host's pinned release is expected.
+ */
+export async function checkNativeChromeHealth(bin: string, signal?:AbortSignal, version=nativeChromeVersion(process.platform,process.arch)): Promise<void> {
   signal?.throwIfAborted();
   const server=await chromium.launchServer({executablePath:bin,headless:true,timeout:30_000});
   const cancel=()=>{void server.kill().catch(()=>{});};
@@ -15,7 +18,7 @@ export async function checkNativeChromeHealth(bin: string, signal?:AbortSignal):
       (async()=>{
         const browser=await chromium.connect(server.wsEndpoint(),{timeout:10_000});
         try {
-          if(browser.version()!==NATIVE_CHROME_VERSION)throw new Error(`version-mismatch: ${browser.version()}`);
+          if(browser.version()!==version)throw new Error(`version-mismatch: ${browser.version()}`);
           const page=await browser.newPage({viewport:{width:2,height:2},deviceScaleFactor:1});
           page.setDefaultTimeout(10_000);const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
           await page.setContent('<body style="margin:0;background:rgb(23,91,177)"></body>');

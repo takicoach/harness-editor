@@ -1,22 +1,24 @@
 {
-  "version": "148.0.7778.96",
-  "verifiedAt": "2026-09-12",
   "source": "https://storage.googleapis.com/chrome-for-testing-public",
   "artifacts": [
     {
       "platform": "mac-arm64",
+      "version": "157.0.8103.38",
+      "verifiedAt": "2026-11-10",
       "file": "chrome-mac-arm64.zip",
-      "bytes": 177411466,
-      "sha256": "fbab7ac5c63f72771a7cd79ab15ed6f198b0f9567ec927c9cf5ece3b1f08ffb1",
-      "source": "https://storage.googleapis.com/chrome-for-testing-public/148.0.7778.96/mac-arm64/chrome-mac-arm64.zip",
+      "bytes": 196562867,
+      "sha256": "3406b38b52b7d341d74450eb7b369be038c9fec9894c8b8a9e9e9f97333caf2f",
+      "source": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/mac-arm64/chrome-mac-arm64.zip",
       "zipCRC": "pass",
       "executable": "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-      "bundleVersion": "148.0.7778.96",
-      "executableVersion": "148.0.7778.96",
-      "executableSha256": "2447c7bdea8e8ad38b52594f1ba53e18821c05445e8a07ad1cf3b0f23931d89d"
+      "bundleVersion": "157.0.8103.38",
+      "executableVersion": "157.0.8103.38",
+      "executableSha256": "3336497800b2b2045f4b64d269319af2acf37778b132aac1d03789b4decbc7e6"
     },
     {
       "platform": "mac-x64",
+      "version": "148.0.7778.96",
+      "verifiedAt": "2026-09-12",
       "file": "chrome-mac-x64.zip",
       "bytes": 187779698,
       "sha256": "9d896b8c242652fe274b5ff7029853ac4b1471086ecfe48a675552783323108a",
@@ -29,6 +31,8 @@
     },
     {
       "platform": "win64",
+      "version": "148.0.7778.96",
+      "verifiedAt": "2026-09-12",
       "file": "chrome-win64.zip",
       "bytes": 190733461,
       "sha256": "6cd8c5f6eeff7b6515dbcd35d050f696da3f7eac4b4a209c06e3d4354c2704a6",

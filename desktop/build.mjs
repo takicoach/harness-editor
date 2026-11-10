@@ -59,9 +59,9 @@ for(const name of ['ffmpeg','ffprobe']){
 await cp(join(media,'sources'),join(runtime,'tools/media-sources'),{recursive:true});
 const chromeManifest=JSON.parse(await readFile(join(repo,'src/server/native-chromium-sha-verified.json'),'utf8'));
 const chrome=chromeManifest.artifacts.find(item=>item.platform==='mac-arm64');
-const chromeZip=join(cache,`${chromeManifest.version}-${chrome.file}`);
+const chromeZip=join(cache,`${chrome.version}-${chrome.file}`);
 await download(chrome.source,chromeZip,chrome.sha256);
-const chromeDir=join(runtime,'tools','chrome-for-testing',chromeManifest.version);await mkdir(chromeDir,{recursive:true});
+const chromeDir=join(runtime,'tools','chrome-for-testing',chrome.version);await mkdir(chromeDir,{recursive:true});
 run('/usr/bin/ditto',['-x','-k',chromeZip,chromeDir]);
 const appDir=join(stage,'app');await mkdir(appDir,{recursive:true});
 await writeFile(join(appDir,'package.json'),JSON.stringify({name:'harness-editor-desktop',productName:'Harness Editor',version:appVersion,private:true,main:'main.cjs'}));

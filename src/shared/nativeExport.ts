@@ -11,13 +11,18 @@ export interface NativeExportStatus {
   settings?:NativeExportSettings;outputResolution?:{width:number;height:number};
 }
 import type {RenderQuality,RenderResolution} from './renderPreset';
-export interface NativeExportSettings {resolution:RenderResolution;quality:RenderQuality}
+/** 'canvas' = HTML in Canvas with the browser's VideoEncoder (exportCanvas.ts). Absent = the screenshot path, whose
+ * settings and records carry no engine key at all, so they stay exactly what they were before engines existed. */
+export type NativeExportEngine='canvas';
+export interface NativeExportSettings {resolution:RenderResolution;quality:RenderQuality;engine?:NativeExportEngine}
 export const DEFAULT_NATIVE_EXPORT_SETTINGS:Readonly<NativeExportSettings>=Object.freeze({resolution:'full',quality:'high'});
 export function nativeExportSettings(value:unknown):NativeExportSettings {
   if(value===undefined)return {...DEFAULT_NATIVE_EXPORT_SETTINGS};
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('書き出し設定が不正です');
   const item=value as Record<string,unknown>;
-  if(Object.keys(item).some(key=>key!=='resolution'&&key!=='quality')
-    ||typeof item.resolution!=='string'||!['full','1080p','720p'].includes(item.resolution)||typeof item.quality!=='string'||!['high','standard','light'].includes(item.quality))throw new Error('書き出し設定が不正です');
-  return {resolution:item.resolution as RenderResolution,quality:item.quality as RenderQuality};
+  if(Object.keys(item).some(key=>key!=='resolution'&&key!=='quality'&&key!=='engine')
+    ||typeof item.resolution!=='string'||!['full','1080p','720p'].includes(item.resolution)||typeof item.quality!=='string'||!['high','standard','light'].includes(item.quality)
+    ||item.engine!==undefined&&item.engine!=='canvas')throw new Error('書き出し設定が不正です');
+  // Key order is part of the record: assertVerifiedSettings and the replay check compare JSON.
+  return {resolution:item.resolution as RenderResolution,quality:item.quality as RenderQuality,...(item.engine==='canvas'?{engine:'canvas' as const}:{})};
 }

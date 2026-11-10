@@ -1,8 +1,9 @@
 import {describe,it,expect} from 'vitest';
-import {nativeChromeToolsPath,nativeChromeFromCachePath,resolveNativeChromiumBin,NATIVE_CHROME_REVISION} from './resolveNativeChromium';
-import type {ResolveChromiumDeps} from './resolveChromium';
+import {nativeChromeToolsPath,nativeChromeFromCachePath,nativeChromeVersion,resolveNativeChromiumBin,NATIVE_CHROME_REVISION} from './resolveNativeChromium';
+import {CHROME_HEADLESS_SHELL_VERSION,type ResolveChromiumDeps} from './resolveChromium';
 
 const cache='/cache/chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+const macX64Cache='/cache/chromium-1223/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
 const base:ResolveChromiumDeps={env:{},platform:'darwin',arch:'arm64',editorRoot:'/editor',exists:()=>false,defaultCachePath:()=>cache};
 describe('native capture uses full Chrome for video decoding',()=>{
   it('chooses an explicitly supplied existing binary and does not hide a missing override',()=>{
@@ -17,9 +18,20 @@ describe('native capture uses full Chrome for video decoding',()=>{
     expect(resolveNativeChromiumBin({...base,exists:p=>{seen.push(p);return p.includes('headless-shell');}})).toMatchObject({ok:false,kind:'chromium-missing'});
     expect(seen.some(p=>p.includes('headless-shell'))).toBe(false);
   });
+  it('pins Mac arm64 to Chrome 157 and keeps every other platform on the Playwright release',()=>{
+    expect(nativeChromeVersion('darwin','arm64')).toBe('157.0.8103.38');
+    for(const [platform,arch] of [['darwin','x64'],['win32','x64'],['linux','x64'],['linux','arm64']] as const)expect(nativeChromeVersion(platform,arch)).toBe(CHROME_HEADLESS_SHELL_VERSION);
+    expect(nativeChromeToolsPath('/editor','darwin','arm64')).toBe('/editor/tools/chrome-for-testing/157.0.8103.38/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
+    expect(nativeChromeToolsPath('/editor','darwin','x64')).toBe('/editor/tools/chrome-for-testing/148.0.7778.96/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
+  });
+  it('never substitutes the older Playwright browser on Mac arm64',()=>{
+    expect(nativeChromeFromCachePath(cache,'darwin','arm64')).toBeNull();
+    expect(resolveNativeChromiumBin({...base,exists:p=>p===cache})).toMatchObject({ok:false,kind:'chromium-missing'});
+  });
   it('selects full Chrome from the pinned development cache',()=>{
-    expect(resolveNativeChromiumBin({...base,exists:p=>p===cache})).toEqual({ok:true,bin:cache,source:'playwright-cache'});
-    expect(nativeChromeFromCachePath('/cache/chromium-1000/old-bin','darwin','arm64')).toBe(cache);
+    const deps={...base,arch:'x64',defaultCachePath:()=>macX64Cache};
+    expect(resolveNativeChromiumBin({...deps,exists:p=>p===macX64Cache})).toEqual({ok:true,bin:macX64Cache,source:'playwright-cache'});
+    expect(nativeChromeFromCachePath('/cache/chromium-1000/old-bin','darwin','x64')).toBe(macX64Cache);
   });
   it('uses the Windows executable and supports spaces in the installation root',()=>{
     const path=nativeChromeToolsPath('C:\\My Editor','win32','x64');
@@ -33,7 +45,7 @@ describe('native capture uses full Chrome for video decoding',()=>{
     expect(resolveNativeChromiumBin({...base,platform:'linux',arch:'arm64'})).toMatchObject({ok:false,kind:'unsupported-platform'});
   });
   it('rejects cache paths without a recognized browser directory',()=>{
-    expect(nativeChromeFromCachePath('/unrelated/chrome','darwin','arm64')).toBeNull();
+    expect(nativeChromeFromCachePath('/unrelated/chrome','darwin','x64')).toBeNull();
     expect(resolveNativeChromiumBin({...base,defaultCachePath:()=>null})).toMatchObject({ok:false,kind:'chromium-missing'});
   });
 });

@@ -14,11 +14,22 @@ type History = {jobs:NativeExportStatus[];total:number;nextOffset:number|null};
 const storageKey=(id:string)=>`harness.native.export.pending:${id}`;
 const message=(error:unknown)=>error instanceof Error?error.message:String(error);
 const qualityLabels={high:'高画質',standard:'標準',light:'軽量'};
+const FAST_LABEL='速い書き出し';
 function historySettings(job:NativeExportStatus):string {
   // Older records may know only some fields; never infer their encoding settings.
   return [job.settings&&({full:'そのまま','1080p':'1080p','720p':'720p'})[job.settings.resolution],
     job.outputResolution&&`${job.outputResolution.width}×${job.outputResolution.height}`,
-    job.settings&&qualityLabels[job.settings.quality]].filter(Boolean).join(' · ');
+    job.settings&&qualityLabels[job.settings.quality],job.settings?.engine==='canvas'&&FAST_LABEL].filter(Boolean).join(' · ');
+}
+/** 速い書き出しの選択。書き出しを始めた時だけ覚える（解像度・画質の記憶と同じ）。保存先が使えなくても書き出しは止めない。 */
+const ENGINE_STORAGE_KEY='harness.nativeExport.engine';
+function loadStoredFast():boolean {try{return localStorage.getItem(ENGINE_STORAGE_KEY)==='canvas';}catch{return false;}}
+function saveStoredFast(fast:boolean):void {try{if(fast)localStorage.setItem(ENGINE_STORAGE_KEY,'canvas');else localStorage.removeItem(ENGINE_STORAGE_KEY);}catch{/* 記憶できなくても書き出しは続ける */}}
+/** GET /export/engines の答え。形が違えば使えない扱い（切り替えを出さない）。 */
+function canvasOffered(value:unknown):boolean {
+  if(!value||typeof value!=='object')return false;
+  const canvas=(value as {canvas?:unknown}).canvas;
+  return !!canvas&&typeof canvas==='object'&&(canvas as {available?:unknown}).available===true;
 }
 function readPending(projectId:string):StartRequest|null {
   const raw=sessionStorage.getItem(storageKey(projectId));if(!raw)return null;
@@ -42,6 +53,14 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
   const [configuring,setConfiguring]=useState(false),[settings,setSettings]=useState<NativeExportSettings>(()=>{
     const {resolution,quality}=loadStoredRenderOptions();return {resolution,quality};
   });
+  // 速い書き出し: この機械で使えると分かった時だけ切り替えを出す。選択中は常に解像度「そのまま」（外れたら切る）。
+  const [canvasAvailable,setCanvasAvailable]=useState(false);
+  const [fast,setFast]=useState(()=>settings.resolution==='full'&&loadStoredFast()),[fastNotice,setFastNotice]=useState(false);
+  const chooseSettings=(next:NativeExportSettings)=>{
+    setSettings(next);
+    if(next.resolution==='full'){setFastNotice(false);return;}
+    if(fast){setFast(false);if(canvasAvailable)setFastNotice(true);}
+  };
   const [pending,setPending]=useState<StartRequest|null>(null),[loading,setLoading]=useState(true);
   const [storageBroken,setStorageBroken]=useState(false);
   const [verifying,setVerifying]=useState(false);
@@ -97,6 +116,13 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
     }).catch(error=>{if(!controller.signal.aborted)setError(message(error));}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     return ()=>{projectEpoch.current++;controller.abort();};
   },[projectId]);
+  useEffect(()=>{
+    // 取得できない時は切り替えを出さない（今の方式だけで書き出せる状態を保つ）。失敗は知らせない。
+    const controller=new AbortController();setCanvasAvailable(false);
+    void nativeRequest<unknown>(projectId,'/export/engines',undefined,controller.signal)
+      .then(result=>{if(!controller.signal.aborted)setCanvasAvailable(canvasOffered(result));}).catch(()=>undefined);
+    return ()=>controller.abort();
+  },[projectId]);
   const running=history.jobs.find(active)??null;
   // 理由つきの停止も、通常の disabled と同じく「新しく始める」操作だけを止める（再確認と実行中の表示は残す）。
   const blocked=disabled||!!disabledReason,reason=disabledReason&&!pending&&!running?disabledReason:undefined;
@@ -138,10 +164,12 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
     setStarting(true);setPreflight(null);if(!pending)setError(null);
     try {
       if(pending){await submit(pending);return;}
-      const selectedSettings=nativeExportSettings(settings);
+      const useCanvas=canvasAvailable&&fast;
+      const selectedSettings=nativeExportSettings({resolution:settings.resolution,quality:settings.quality,...(useCanvas?{engine:'canvas'}:{})});
       // Match the old dialog's start-time memory without making it authoritative
-      // for pending retries. Only the two native fields enter the frozen request.
-      saveStoredRenderOptions({...loadStoredRenderOptions(),...selectedSettings});
+      // for pending retries. Only resolution and quality go to the dialog's shared preset.
+      saveStoredRenderOptions({...loadStoredRenderOptions(),resolution:selectedSettings.resolution,quality:selectedSettings.quality});
+      if(canvasAvailable)saveStoredFast(useCanvas);
       if(!await save()||!owns())return;
       const state=await nativeRequest<NativeSession>(projectId,'/session',{});
       if(!owns())return;
@@ -182,8 +210,8 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
       </div>}
       {configuring&&!pending&&!running&&<fieldset className="native-export-settings" disabled={starting||blocked||loading||storageBroken}>
         <legend>書き出し設定</legend>
-        <div className="native-export-presets">{(Object.keys(RENDER_PRESETS) as RenderPresetId[]).map(id=><button key={id} aria-pressed={settings.resolution===RENDER_PRESETS[id].resolution&&settings.quality===RENDER_PRESETS[id].quality} onClick={()=>setSettings(nativeExportSettings({resolution:RENDER_PRESETS[id].resolution,quality:RENDER_PRESETS[id].quality}))}>{presetLabel(id,resolution.width===resolution.height?'square':resolution.width>resolution.height?'landscape':'portrait')}</button>)}</div>
-        <label>解像度<select aria-label="書き出し解像度" value={settings.resolution} onChange={event=>setSettings(previous=>({...previous,resolution:event.target.value as RenderResolution}))}>
+        <div className="native-export-presets">{(Object.keys(RENDER_PRESETS) as RenderPresetId[]).map(id=><button key={id} aria-pressed={settings.resolution===RENDER_PRESETS[id].resolution&&settings.quality===RENDER_PRESETS[id].quality} onClick={()=>chooseSettings(nativeExportSettings({resolution:RENDER_PRESETS[id].resolution,quality:RENDER_PRESETS[id].quality}))}>{presetLabel(id,resolution.width===resolution.height?'square':resolution.width>resolution.height?'landscape':'portrait')}</button>)}</div>
+        <label>解像度<select aria-label="書き出し解像度" value={settings.resolution} onChange={event=>chooseSettings({...settings,resolution:event.target.value as RenderResolution})}>
           <option value="full">そのまま（{resolutionLabel(resolution.width,resolution.height,'full')}）</option>
           <option value="1080p">1080p（{resolutionLabel(resolution.width,resolution.height,'1080p')}）</option>
           <option value="720p">720p・軽量（{resolutionLabel(resolution.width,resolution.height,'720p')}）</option>
@@ -191,6 +219,14 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
         <label>画質<select aria-label="書き出し画質" value={settings.quality} onChange={event=>setSettings(previous=>({...previous,quality:event.target.value as RenderQuality}))}>
           <option value="high">高画質</option><option value="standard">標準</option><option value="light">軽量</option>
         </select></label>
+        {canvasAvailable&&<div>
+          {/* 外す操作は常にできる。入れられるのは解像度「そのまま」の時だけ。 */}
+          <label className="native-check"><input type="checkbox" checked={fast} disabled={!fast&&settings.resolution!=='full'}
+            onChange={event=>{const next=event.target.checked;if(next&&settings.resolution!=='full')return;setFast(next);setFastNotice(false);}}/>{FAST_LABEL}（試験中）</label>
+          <p className="native-subtle">Mac の圧縮回路を使って速く書き出します。解像度「そのまま」の時だけ使えます。</p>
+          {fastNotice?<p className="native-subtle" role="status">解像度を変えたので、速い書き出しを切りました</p>
+            :settings.resolution!=='full'&&<p className="native-subtle">今の解像度では使えません。解像度を「そのまま」にすると選べます。</p>}
+        </div>}
         <p className="native-subtle">{resolutionLabel(resolution.width,resolution.height,settings.resolution)} · 編集を保存して、この設定で書き出します。</p>
         <p className="native-subtle">1080p は拡大せず、720p は元の寸法の2/3に縮小します。</p>
         <p className="native-subtle">開始前に素材と接続を確認します。外付けの素材は完了まで接続を保ち、移動・変更しないでください。</p>
@@ -198,7 +234,7 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
       </fieldset>}
       {pending&&<p className="native-subtle">前回の開始要求を確認できていません。「開始状況を再確認」で同じ要求を確認できます。</p>}
       {job?.historical&&<p className="native-subtle">以前の書き出しです。動画を保存するときにファイルを確認します。</p>}
-      {job?.settings&&job.outputResolution&&<p className="native-subtle">{job.outputResolution.width}×{job.outputResolution.height} · {qualityLabels[job.settings.quality]}</p>}
+      {job?.settings&&job.outputResolution&&<p className="native-subtle">{job.outputResolution.width}×{job.outputResolution.height} · {qualityLabels[job.settings.quality]}{job.settings.engine==='canvas'?` · ${FAST_LABEL}`:''}</p>}
       {job&&<><p className="native-subtle">{new Date(job.createdAt).toLocaleString('ja-JP')} 開始{revision!==job.revision?' · 開始時の編集内容を書き出します':''}</p>
         {active(job)&&<><TaskProgress label={labels[job.phase]} value={job.phase==='rendering'&&job.totalFrames?job.completedFrames/job.totalFrames:job.phase==='audio'?job.audioProgress:undefined} detail={job.phase==='rendering'?`${job.completedFrames} / ${job.totalFrames} フレーム`:undefined}/>
           <button onClick={()=>{void nativeRequest<NativeExportStatus>(projectId,'/export/cancel',{},undefined,{job:job.id}).then(record).catch(error=>setError(message(error)));}}>中止</button></>}

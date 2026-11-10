@@ -18,6 +18,9 @@ it('names the export retention in the drawing page URL, and only when there is o
   expect(exportRenderPageUrl('http://h', target, 8)).toBe('http://h/native-render.html?id=p+q&job=j&retain=8');
   expect(exportRenderPageUrl('http://h', target, 0)).toBe('http://h/native-render.html?id=p+q&job=j');
   expect(exportRenderPageUrl('http://h', target)).toBe('http://h/native-render.html?id=p+q&job=j');
+  // canvas=1 asks the page for the canvas engine's half (exportCanvasPage.ts); the screenshot path never names it.
+  expect(exportRenderPageUrl('http://h', target, 8, true)).toBe('http://h/native-render.html?id=p+q&job=j&retain=8&canvas=1');
+  expect(exportRenderPageUrl('http://h', target, 8, false)).toBe('http://h/native-render.html?id=p+q&job=j&retain=8');
   // The product always passes the export value; only the measuring tool overrides it (0 = earlier behaviour).
   expect(exportRetainFrames(undefined)).toBe(EXPORT_RETAIN_FRAMES);
   expect(exportRetainFrames({})).toBe(EXPORT_RETAIN_FRAMES);

@@ -8,8 +8,9 @@ import type { SequenceSessionState } from './service';
 import type { SequenceDocument } from '../../core/sequence/model';
 import { assertLegacySequenceAuthority } from './authority';
 import { HttpError } from '../http';
-import type { NativeExportStatus } from '../../shared/nativeExport';
+import type { NativeExportSettings,NativeExportStatus } from '../../shared/nativeExport';
 import {nativeExportSettings} from '../../shared/nativeExport';
+import { avcCodec,canvasExportUnavailable } from './exportCanvasSupport';
 import {targetResolution} from '../../shared/renderPreset';
 import { runSequenceExport,type ExportRunInput } from './exportRunner';
 import { isExportFailure } from './exportParallel';
@@ -30,6 +31,10 @@ export interface LegacySnapshotExportReservation {
   cancel():void;
   /** Call after preparation settles, the native runner stops, and out/ publication finishes. */
   release():void;
+}
+/** An engine that cannot run here stops the request before anything is recorded, with the reason. Never silently the other engine. */
+function assertEngineAvailable(settings:NativeExportSettings):void {
+  const unavailable=canvasExportUnavailable(settings);if(unavailable)throw new HttpError(400,unavailable);
 }
 /** Every export this process is running, for recognizing this PID on records of a crashed server. */
 const runningHere=processRegistry('exports.running');
@@ -72,6 +77,7 @@ export class SequenceExports {
   }
   start(projectDirectory:string,projectId:string,origin:string,input:ExportRequest,snapshot:()=>SequenceSessionState,admit:()=>void=()=>undefined):NativeExportStatus {
     const parsed=exportRequestSchema.parse(input),request={...parsed,settings:nativeExportSettings(parsed.settings)};
+    assertEngineAvailable(request.settings);
     return this.startPrepared(projectDirectory,projectId,origin,request,()=>{
       const state=snapshot();
       if(state.sessionId!==request.sessionId||state.document.revision!==request.expectedRevision||state.dirty)throw new HttpError(409,'編集内容が変わっています。現在の編集を保存してから書き出してください');
@@ -111,6 +117,7 @@ export class SequenceExports {
   }
   private startLegacySnapshotPrepared(projectDirectory:string,projectId:string,origin:string,input:LegacySnapshotExportRequest,document:SequenceDocument,admit:()=>void,reservation?:LegacyReservation):NativeExportStatus {
     const parsed=legacySnapshotRequestSchema.parse(input),request={...parsed,settings:nativeExportSettings(parsed.settings)};
+    assertEngineAvailable(request.settings);
     return this.startPrepared(projectDirectory,projectId,origin,request,()=>{
       assertLegacySequenceAuthority(projectDirectory);
       if(document.revision!==request.expectedRevision||document.legacy?.sourceFingerprint!==request.sourceFingerprint||sequenceContentHash(document)!==request.snapshotHash)
@@ -139,6 +146,10 @@ export class SequenceExports {
     if(!plan.document.sequenceEndFrame)throw new HttpError(400,'出力する内容がありません');
     const outputResolution=targetResolution(plan.document.resolution.width,plan.document.resolution.height,request.settings.resolution);
     if(outputResolution.width%2||outputResolution.height%2)throw new HttpError(400,'MP4の幅と高さは偶数で指定してください');
+    // The canvas engine's H.264 level comes from the size and frame rate. Past the highest one, refuse here, not after the audio is prepared.
+    if(request.settings.engine==='canvas'){
+      try{avcCodec(plan.document.resolution,plan.document.fps);}catch{throw new HttpError(400,'この案件の大きさとコマ速度は、速い書き出しでは扱えません（H.264 の上限を超えます）');}
+    }
     const status={id,projectId,revision:plan.document.revision,contentHash:sequenceContentHash(plan.document),settings:request.settings,outputResolution,
       executionId:request.executionId,phase:'queued' as const,completedFrames:0,totalFrames:plan.document.sequenceEndFrame,createdAt:new Date().toISOString()};
     const record:ExportRecord='kind' in request?{version:3,request,ownerPid:process.pid,status}:{version:2,request,ownerPid:process.pid,status};
@@ -165,6 +176,8 @@ export class SequenceExports {
     try {
       controller.signal.throwIfAborted();
       const settings=nativeExportSettings(hasFrozenSettings(record)?record.request.settings:undefined);
+      // The saved settings are checked again where they are read for running, as at the start.
+      const unavailable=canvasExportUnavailable(settings);if(unavailable)throw new Error(unavailable);
       await this.runner({plan,settings,projectDirectory:job.projectDirectory,directory,status,origin,signal:controller.signal,progress});
       controller.signal.throwIfAborted();
       const verificationBytes=await readFile(join(directory,'verification.json'),'utf8'),verification=JSON.parse(verificationBytes);

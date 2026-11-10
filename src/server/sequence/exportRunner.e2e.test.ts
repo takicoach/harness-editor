@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
@@ -8,6 +8,7 @@ import { EXPORT_JPEG_QUALITY, openRenderSurface } from './exportRunner';
 import { intermediateDifference, intermediateMismatch } from './intermediateCompare';
 import {execFileSync} from 'node:child_process';
 import {resolveFfmpegBin} from '../resolveFfmpeg';
+import { decodePngRgba } from '../pngRgba';
 
 const chromiumBin = resolveNativeChromiumBin();
 if (!chromiumBin.ok && process.env.HARNESS_REQUIRE_CAPTURE_E2E === '1') throw new Error('描画画面の失敗検証にChromiumが必要です');
@@ -17,6 +18,7 @@ const pages: Record<string, { status: number; html: string }> = {
   '/never-ready': { status: 200, html: '<div id="stage"></div>' },
   '/crashes': { status: 200, html: '<div id="stage"></div><script>setTimeout(()=>{throw new Error("renderer exploded")},0)</script>' },
   '/stalls': { status: 200, html: '<div id="stage"></div><script>window.harnessNativeFrame=()=>new Promise(()=>{});window.harnessNativeReady=true</script>' },
+  '/solid': {status:200,html:'<style>html,body{margin:0;overflow:hidden;background:#fff}#stage{width:640px;height:360px;background:rgb(200,0,120)}</style><div id="stage"></div><script>window.harnessNativeFrame=async n=>{document.getElementById("stage").style.background="rgb(200,"+(n*10)+",120)";};window.harnessNativeReady=true</script>'},
   '/paints': {status:200,html:`<style>html,body{margin:0;overflow:hidden}#stage{width:640px;height:360px;background:linear-gradient(35deg,#027b96,#f87329)}canvas{position:absolute}#text{position:absolute;left:40px;top:90px;font:32px sans-serif;color:white;padding:16px;background:#1239;backdrop-filter:blur(7px);border-radius:12px;text-shadow:2px 3px 4px #000;transform:rotate(-3deg)}</style><div id="stage"><canvas width="640" height="360"></canvas><div id="text"></div></div><script>window.harnessNativeFrame=async n=>{const ctx=document.querySelector('canvas').getContext('2d');ctx.clearRect(0,0,640,360);ctx.fillStyle='hsl('+(n*67)+',80%,45%)';ctx.fillRect(n*13,20,280,270);document.querySelector('#text').textContent='字幕 Frame '+n;await document.fonts.ready;};window.harnessNativeReady=true</script>`},
 };
 let server: Server, browser: Browser;
@@ -88,20 +90,54 @@ it.skipIf(!chromiumBin.ok)('the JPEG capture keeps the PNG capture\'s luma and b
 
 // 2026-10-08: a long export's hidden browser window shrank midway (1676×1050). The fixed-size
 // iframe kept drawing correctly, but every later capture was white beyond the window, and the
-// export still completed. The window must be put back before the frame is captured.
-it.skipIf(!chromiumBin.ok)('restores a shrunken browser window before capturing, so the frame is not cut off',async()=>{
+// export still completed. The frame must stay whole, and a page that shrank must be put back before it is captured.
+// Since the Chrome 157 fix (2026-11-10) the surface fixes its viewport again on its capture session, and that override
+// holds while the window alone shrinks (measured on 148 and 157): the page keeps the export size.
+it.skipIf(!chromiumBin.ok)('keeps the whole frame when the browser window shrinks',async()=>{
   const ffmpeg=resolveFfmpegBin();if(!ffmpeg.ok)throw new Error(ffmpeg.message);
   const surface=await openRenderSurface(browser,`http://127.0.0.1:${(server.address() as AddressInfo).port}/paints`,
     {projectId:'case',jobId:'job'},{width:640,height:360});
   const page=browser.contexts().at(-1)!.pages()[0]!;
   const pixels=(png:Buffer)=>execFileSync(ffmpeg.bin,['-v','error','-i','pipe:0','-frames:v','1','-f','rawvideo','-pix_fmt','rgba','pipe:1'],{input:png,maxBuffer:4*1024*1024});
-  const expected=pixels(await surface.capture(2));
-  const cdp=await page.context().newCDPSession(page);
-  const {windowId}=await cdp.send('Browser.getWindowForTarget');
-  await cdp.send('Browser.setWindowBounds',{windowId,bounds:{width:500,height:300}});
-  expect(await page.evaluate(()=>[innerWidth,innerHeight])).not.toEqual([640,360]);
-  const actual=pixels(await surface.capture(2));
-  expect(actual.equals(expected),'the frame after the window shrank differs').toBe(true);
-  expect(await page.evaluate(()=>[innerWidth,innerHeight])).toEqual([640,360]);
+  const warn=vi.spyOn(console,'warn');
+  try{
+    const expected=pixels(await surface.capture(2));
+    const cdp=await page.context().newCDPSession(page);
+    const {windowId}=await cdp.send('Browser.getWindowForTarget');
+    await cdp.send('Browser.setWindowBounds',{windowId,bounds:{width:500,height:300}});
+    expect((await cdp.send('Browser.getWindowForTarget')).bounds.width,'the window did not shrink').toBe(500);
+    expect(pixels(await surface.capture(2)).equals(expected),'the frame after the window shrank differs').toBe(true);
+    expect(await page.evaluate(()=>[innerWidth,innerHeight])).toEqual([640,360]);
+    expect(warn.mock.calls.filter(args=>String(args[0]).includes('縮んだので'))).toEqual([]);
+  }finally{warn.mockRestore();}
+  await page.close();
+});
+
+// The page itself shrinks only once that override is lost, as Chrome 157's first clipped capture lost Playwright's.
+// Here another session switches the override to "follow the window" (0×0) after the window shrank. In this state the
+// clipped capture alone already covers the clip (measured on 148 and 157), so the window bounds and the warning are
+// what show the surface noticed the shrink and put the window back. A single colour read from PNG makes any row or
+// column outside the page visible; the gradient page is not used because 148 rasterises its gradient 1–2 levels
+// differently after this resize in about half the runs (measured 2026-11-10).
+it.skipIf(!chromiumBin.ok)('restores a shrunken page before capturing, so the frame is not cut off',async()=>{
+  const surface=await openRenderSurface(browser,`http://127.0.0.1:${(server.address() as AddressInfo).port}/solid`,
+    {projectId:'case',jobId:'job'},{width:640,height:360});
+  const page=browser.contexts().at(-1)!.pages()[0]!;
+  const wrong=(image:Buffer)=>{const png=decodePngRgba(image);let count=0;
+    for(let i=0;i<png.data.length;i+=4)if(png.data[i]!==200||png.data[i+1]!==20||png.data[i+2]!==120)count++;
+    return {size:[png.width,png.height],wrong:count};};
+  const warn=vi.spyOn(console,'warn');
+  try{
+    expect(wrong(await surface.capture(2,{format:'png'}))).toEqual({size:[640,360],wrong:0});
+    const cdp=await page.context().newCDPSession(page);
+    const {windowId}=await cdp.send('Browser.getWindowForTarget');
+    await cdp.send('Browser.setWindowBounds',{windowId,bounds:{width:500,height:300}});
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width:0,height:0,deviceScaleFactor:0,mobile:false});
+    expect(await page.evaluate(()=>[innerWidth,innerHeight]),'the page did not shrink').not.toEqual([640,360]);
+    expect(wrong(await surface.capture(2,{format:'png'})),'the frame after the page shrank').toEqual({size:[640,360],wrong:0});
+    expect(await page.evaluate(()=>[innerWidth,innerHeight])).toEqual([640,360]);
+    expect((await cdp.send('Browser.getWindowForTarget')).bounds.width,'the window was not put back').toBeGreaterThanOrEqual(640);
+    expect(warn.mock.calls.filter(args=>String(args[0]).includes('縮んだので'))).toHaveLength(1);
+  }finally{warn.mockRestore();}
   await page.close();
 });

@@ -2,12 +2,17 @@ import {statSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {join,win32} from 'node:path';
 import {CHROME_HEADLESS_SHELL_VERSION,CHROME_HEADLESS_SHELL_REVISION,chromiumDownloadPlatform,type ResolveChromiumDeps,type ResolveChromiumResult} from './resolveChromium';
+import {findNativeChromeDistribution} from './nativeChromeDistribution';
 
-// Both capture engines follow the same pinned Playwright / Chrome release.
 // Native video decoding requires full Chrome: the shell can reject HEVC that
 // full Chrome decodes on the same machine. Keep the legacy shell resolver intact.
-export const NATIVE_CHROME_VERSION=CHROME_HEADLESS_SHELL_VERSION;
+// The release comes from the verified archive ledger: Mac arm64 runs ahead of
+// Playwright's pinned browser (HTML in Canvas needs 157), every other platform
+// and the Linux development cache stay on Playwright's release and revision.
 export const NATIVE_CHROME_REVISION=CHROME_HEADLESS_SHELL_REVISION;
+export function nativeChromeVersion(platform:NodeJS.Platform,arch:string):string {
+  return findNativeChromeDistribution(platform,arch)?.version??CHROME_HEADLESS_SHELL_VERSION;
+}
 
 function executableParts(platform:NodeJS.Platform,arch:string):string[]|null {
   if(platform==='darwin'&&(arch==='arm64'||arch==='x64'))return [`chrome-mac-${arch}`,'Google Chrome for Testing.app','Contents','MacOS','Google Chrome for Testing'];
@@ -19,10 +24,12 @@ export function nativeChromeToolsPath(root:string,platform:NodeJS.Platform,arch:
   const parts=executableParts(platform,arch);
   if(!parts||!chromiumDownloadPlatform(platform,arch))return null;
   const path=platform==='win32'?win32: {join};
-  return path.join(root,'tools','chrome-for-testing',NATIVE_CHROME_VERSION,...parts);
+  return path.join(root,'tools','chrome-for-testing',nativeChromeVersion(platform,arch),...parts);
 }
 export function nativeChromeFromCachePath(file:string,platform:NodeJS.Platform,arch:string):string|null {
-  const parts=executableParts(platform,arch);if(!parts)return null;
+  // The Playwright cache only holds Playwright's release: a platform pinned to another one must not
+  // silently run a browser other than the one it was verified and measured with.
+  const parts=executableParts(platform,arch);if(!parts||nativeChromeVersion(platform,arch)!==CHROME_HEADLESS_SHELL_VERSION)return null;
   const segments=file.split(/[\\/]/),index=segments.findIndex(p=>/^chromium(?:_headless_shell)?-\d+$/.test(p));
   if(index<=0)return null;
   return [...segments.slice(0,index),`chromium-${NATIVE_CHROME_REVISION}`,...parts].join(file.includes('\\')?'\\':'/');

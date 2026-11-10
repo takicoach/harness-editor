@@ -3,12 +3,12 @@ import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,rename,symlink,realpath,lsta
 import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {installNativeChrome,downloadNativeChrome,sha256File,type NativeChromeInstallDeps} from './installNativeChrome';
-import {nativeChromeToolsPath,NATIVE_CHROME_VERSION} from './resolveNativeChromium';
-import {NATIVE_CHROME_ARCHIVES} from './nativeChromeDistribution';
+import {nativeChromeToolsPath,nativeChromeVersion} from './resolveNativeChromium';
+import {nativeChromeDistribution} from './nativeChromeDistribution';
 const options=(root:string)=>({editorRoot:root,platform:'darwin' as const,arch:'arm64'});
 async function fixture(){
  const root=await realpath(await mkdtemp(join(tmpdir(),'native-chrome-'))),bin=nativeChromeToolsPath(root,'darwin','arm64')!;
- const deps:NativeChromeInstallDeps={download:async(_,path)=>{await writeFile(path,'official-test-payload');},digest:async()=>NATIVE_CHROME_ARCHIVES['mac-arm64'],
+ const deps:NativeChromeInstallDeps={download:async(_,path)=>{await writeFile(path,'official-test-payload');},digest:async()=>nativeChromeDistribution('darwin','arm64').sha256,
   unpack:async(_,path)=>{const dest=join(path,'chrome-mac-arm64','Google Chrome for Testing.app','Contents','MacOS','Google Chrome for Testing');await mkdir(dirname(dest),{recursive:true});await writeFile(dest,'new-working-browser');},
   health:async(path)=>{if(await readFile(path,'utf8')!=='new-working-browser')throw new Error('bad-browser');},rename,lstat};
  return {root,bin,deps,done:()=>rm(root,{recursive:true,force:true})};
@@ -18,6 +18,11 @@ describe('full Chrome atomic installer',()=>{
  it('uses staged exact binary health then promotes, and reuses a healthy install without download',async()=>{const f=await fixture();try{
   const health=vi.fn(f.deps.health),download=vi.fn(f.deps.download);const first=await installNativeChrome(options(f.root),{...f.deps,health,download});expect(first).toEqual({bin:f.bin,installed:true});expect(health.mock.calls[1]![0]).toContain('.stage-');expect(await readFile(f.bin,'utf8')).toBe('new-working-browser');await clean(f.root);
   expect(await installNativeChrome(options(f.root),{...f.deps,download})).toEqual({bin:f.bin,installed:false});expect(download).toHaveBeenCalledTimes(1);
+ }finally{await f.done();}});
+ it('installs under the distribution release and health-checks that release, not the host default',async()=>{const f=await fixture();try{
+  const {version,url}=nativeChromeDistribution('darwin','arm64'),health=vi.fn(f.deps.health),download=vi.fn(f.deps.download);
+  await installNativeChrome(options(f.root),{...f.deps,health,download});
+  expect(download.mock.calls[0]![0]).toBe(url);expect(health.mock.calls.map(call=>call[2])).toEqual([version,version]);expect(f.bin).toContain(join('chrome-for-testing',version,'chrome-mac-arm64'));
  }finally{await f.done();}});
  it.each(['download','digest','unpack','health','promotion'] as const)('keeps old installation and removes temporary state on %s failure',async(kind)=>{const f=await fixture();try{
   await mkdir(dirname(f.bin),{recursive:true});await writeFile(f.bin,'old-browser');const deps={...f.deps};
@@ -78,7 +83,7 @@ describe('full Chrome atomic installer',()=>{
   await symlink(outside,join(f.root,'tools'));const download=vi.fn(f.deps.download);await expect(installNativeChrome(options(f.root),{...f.deps,download})).rejects.toThrow('unsafe-tools-directory');expect(download).not.toHaveBeenCalled();expect(await readdir(outside)).toEqual([]);
  }finally{await f.done();await rm(outside,{recursive:true,force:true});}});
  it('refuses an installed version symlink rather than health-checking an unrelated target',async()=>{const f=await fixture(),outside=await mkdtemp(join(tmpdir(),'native-chrome-outside-'));try{
-  const base=join(f.root,'tools','chrome-for-testing');await mkdir(base,{recursive:true});await symlink(outside,join(base,NATIVE_CHROME_VERSION));await expect(installNativeChrome(options(f.root),f.deps)).rejects.toThrow('unsafe-installed-directory');await clean(f.root);
+  const base=join(f.root,'tools','chrome-for-testing');await mkdir(base,{recursive:true});await symlink(outside,join(base,nativeChromeVersion('darwin','arm64')));await expect(installNativeChrome(options(f.root),f.deps)).rejects.toThrow('unsafe-installed-directory');await clean(f.root);
  }finally{await f.done();await rm(outside,{recursive:true,force:true});}});
 });
 describe('archive transport identity',()=>{

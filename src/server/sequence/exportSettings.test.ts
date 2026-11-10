@@ -2,6 +2,7 @@ import {expect,it} from 'vitest';
 import {nativeExportVideoSettings} from './exportRunner';
 import {nativeExportSettings,type NativeExportSettings} from '../../shared/nativeExport';
 import {verifyExportProbe} from './exportVerification';
+import {exportSettingsSchema} from './exportRecords';
 import type {SequenceDocument} from '../../core/sequence/model';
 
 it.each([
@@ -21,6 +22,22 @@ it.each([['high',18],['standard',23],['light',24]] as const)('uses the establish
 it('keeps the pre-settings default and rejects malformed settings rather than falling back',()=>{
   expect(nativeExportVideoSettings({width:320,height:180})).toMatchObject({settings:{resolution:'full',quality:'high'},crf:18,outputResolution:{width:320,height:180}});
   for(const value of [null,{},'720p',{resolution:'720p',quality:'bad'},{resolution:['full'],quality:'high'},{resolution:'full',quality:'high',extra:true}])expect(()=>nativeExportSettings(value)).toThrow();
+});
+it('reads the canvas engine and leaves the screenshot path without an engine key, so its records stay byte for byte',()=>{
+  const plain=nativeExportSettings({resolution:'full',quality:'high'});
+  expect(plain).toEqual({resolution:'full',quality:'high'});expect('engine' in plain).toBe(false);
+  expect(JSON.stringify(nativeExportSettings({engine:'canvas',quality:'standard',resolution:'full'}))).toBe('{"resolution":"full","quality":"standard","engine":"canvas"}');
+  expect('engine' in nativeExportSettings(undefined)).toBe(false);
+  // An undefined engine is an absent one (as JSON and the request schema see it).
+  expect('engine' in nativeExportSettings({resolution:'full',quality:'high',engine:undefined})).toBe(false);
+  for(const engine of ['capture','Canvas','',null,1])expect(()=>nativeExportSettings({resolution:'full',quality:'high',engine})).toThrow('書き出し設定が不正です');
+  expect(()=>nativeExportSettings({resolution:'full',quality:'high',engine:'canvas',extra:true})).toThrow('書き出し設定が不正です');
+  expect(nativeExportVideoSettings({width:320,height:180},{resolution:'full',quality:'high',engine:'canvas'}).settings).toEqual({resolution:'full',quality:'high',engine:'canvas'});
+});
+it('accepts the canvas engine in saved requests and records, and nothing else for the engine',()=>{
+  expect(exportSettingsSchema.parse({resolution:'full',quality:'high'})).toEqual({resolution:'full',quality:'high'});
+  expect(JSON.stringify(exportSettingsSchema.parse({engine:'canvas',resolution:'full',quality:'high'}))).toBe('{"resolution":"full","quality":"high","engine":"canvas"}');
+  for(const engine of ['capture',null,'gpu'])expect(()=>exportSettingsSchema.parse({resolution:'full',quality:'high',engine})).toThrow();
 });
 it('verifies the selected encoded dimensions without changing the frozen composition dimensions',()=>{
   const doc={resolution:{width:1920,height:1080},sequenceEndFrame:30,fps:{num:30,den:1}} as SequenceDocument;

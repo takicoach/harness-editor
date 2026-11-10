@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { open, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import type { Browser } from 'playwright-core';
+import type { Browser, Frame, Page } from 'playwright-core';
 import type { ScenePlan } from '../../core/sequence/scenePlan';
 import { resolveNativeChromiumBin } from '../resolveNativeChromium';
 import { resolveFfmpegBin, resolveFfprobeBin } from '../resolveFfmpeg';
@@ -13,7 +13,9 @@ import { writeSequenceAudio } from './exportAudio';
 import { verifiedSequenceAssetPath,openSequenceAsset,type SequenceAssetLease } from './assets';
 import {isSequenceReferenceFile} from './references';
 import { readSequenceComponent } from './components';
-import { probeExportFile, verifyExportProbe } from './exportVerification';
+import { probeExportFile, verifyExportProbe, verifyNoFrameReordering } from './exportVerification';
+import { CANVAS_KEY_FRAME_INTERVAL, canvasEncoderArguments } from './exportCanvasSupport';
+import { renderCanvasExport } from './exportCanvas';
 import { exportScratchFiles } from './exportRecords';
 import { assertExportFreeSpace } from './exportSpace';
 import { exportTraceSink, type ExportTraceSink } from './exportTrace';
@@ -74,12 +76,14 @@ export interface RenderLimits { readyMs?: number; frameMs?: number; captureMode?
 export function exportRetainFrames(trace: Pick<ExportTraceSink, 'retainFrames'> | undefined): number {
   return trace?.retainFrames ?? EXPORT_RETAIN_FRAMES;
 }
-/** The drawing page of an export job. retain=N is how the export, and only the export, asks for its retention. */
-export function exportRenderPageUrl(origin: string, target: { projectId: string; jobId: string }, retainFrames = 0): string {
-  return `${origin}/native-render.html?${new URLSearchParams({ id: target.projectId, job: target.jobId, ...(retainFrames > 0 ? { retain: String(retainFrames) } : {}) })}`;
+/** The drawing page of an export job. retain=N is how the export, and only the export, asks for its retention.
+ * canvas=1 installs the canvas engine's half of the page (preview/native/exportCanvasPage.ts). */
+export function exportRenderPageUrl(origin: string, target: { projectId: string; jobId: string }, retainFrames = 0, canvas = false): string {
+  return `${origin}/native-render.html?${new URLSearchParams({ id: target.projectId, job: target.jobId, ...(retainFrames > 0 ? { retain: String(retainFrames) } : {}), ...(canvas ? { canvas: '1' } : {}) })}`;
 }
-/** Load the export renderer and wait until it can draw frames. */
-export async function openRenderSurface(browser: Browser, origin: string, target: { projectId: string; jobId: string } | { src: string }, resolution: { width: number; height: number }, { readyMs = 30000, frameMs = 120000, captureMode = 'fast', onFrameTiming, retainFrames, recordSamples }: RenderLimits = {}): Promise<RenderSurface> {
+/** A page at the export size holding the drawing page `src` in an iframe, once that page can draw frames.
+ * failure() is the page's uncaught error so far. Both engines draw through this (exportCanvas.ts). */
+export async function openDrawingFrame(browser: Browser, origin: string, src: string, resolution: { width: number; height: number }, readyMs: number): Promise<{ page: Page; drawing: Frame; failure(): Error | undefined }> {
   const page = await browser.newPage({ viewport: { ...resolution }, deviceScaleFactor: 1 });
   page.setDefaultTimeout(30000);
   let pageError: Error | undefined;
@@ -93,7 +97,7 @@ export async function openRenderSurface(browser: Browser, origin: string, target
     frame.dataset.nativeExport = 'true'; frame.width = String(width); frame.height = String(height);
     frame.style.cssText = 'border:0;display:block;pointer-events:none'; frame.src = src;
     document.getElementById('stage')!.appendChild(frame);
-  }, { src: 'src' in target ? target.src : exportRenderPageUrl(origin, target, retainFrames), ...resolution });
+  }, { src, ...resolution });
   const surface = await page.locator('iframe[data-native-export]').elementHandle(), drawing = await surface?.contentFrame();
   if (!drawing) throw new Error('書き出しの描画画面を開けませんでした');
   try { await drawing.waitForFunction(() => window.harnessNativeReady || window.harnessNativeError, undefined, { timeout: readyMs }); }
@@ -104,6 +108,11 @@ export async function openRenderSurface(browser: Browser, origin: string, target
     throw error;
   }
   const initError = await drawing.evaluate(() => window.harnessNativeError); if (initError) throw new Error(initError);
+  return { page, drawing, failure: () => pageError };
+}
+/** Load the export renderer and wait until it can draw frames. */
+export async function openRenderSurface(browser: Browser, origin: string, target: { projectId: string; jobId: string } | { src: string }, resolution: { width: number; height: number }, { readyMs = 30000, frameMs = 120000, captureMode = 'fast', onFrameTiming, retainFrames, recordSamples }: RenderLimits = {}): Promise<RenderSurface> {
+  const { page, drawing, failure } = await openDrawingFrame(browser, origin, 'src' in target ? target.src : exportRenderPageUrl(origin, target, retainFrames), resolution, readyMs);
   // Full Chrome needs an explicit inner composition surface for backdrop-filter.
   // An iframe/outer transform alone leaves blurred caption pixels different from
   // preview; this identity transform preserves layout and the filter itself.
@@ -130,10 +139,23 @@ export async function openRenderSurface(browser: Browser, origin: string, target
       throw new Error(`${frame + 1} コマ目で書き出し用の画面の大きさが ${size[0]}×${size[1]} に変わり、元の ${resolution.width}×${resolution.height} に戻せませんでした`);
     console.warn(`[sme] ${frame + 1} コマ目で書き出し用の画面が ${size[0]}×${size[1]} に縮んだので ${resolution.width}×${resolution.height} に戻しました`);
   };
+  // Chrome 157 (measured 2026-11-10; 148 keeps the override): the first Page.captureScreenshot with a clip drops
+  // Playwright's viewport override and the page falls back to the window's inner size (1920×993 in a 1920×1080 window),
+  // so that capture is white below it. Only the first clipped capture does this: once the override is set again,
+  // repeated clipped captures keep it (checked at 320×180 and 1920×1080). page.setViewportSize does not restore it,
+  // and sizing the window cannot work because a window cannot be narrower than 500 px. So spend that capture here
+  // and set the override again on this session before the first frame.
+  if(captureSession){
+    await captureSession.send('Page.captureScreenshot',{format:'jpeg',quality:1,fromSurface:true,captureBeyondViewport:false,optimizeForSpeed:true,clip:{x:0,y:0,width:1,height:1,scale:1}});
+    await captureSession.send('Emulation.setDeviceMetricsOverride',{width:resolution.width,height:resolution.height,deviceScaleFactor:1,mobile:false});
+    const size=await page.evaluate(()=>new Promise<[number,number]>(resolve=>{requestAnimationFrame(()=>requestAnimationFrame(()=>resolve([innerWidth,innerHeight])));}));
+    if(size[0]!==resolution.width||size[1]!==resolution.height)
+      throw new Error(`書き出し用の画面の大きさを ${resolution.width}×${resolution.height} に合わせられませんでした（${size[0]}×${size[1]}）`);
+  }
   let samples: unknown = null;
   return {
     async capture(frame, shot) {
-      if (pageError) throw pageError;
+      const pageError = failure(); if (pageError) throw pageError;
       samples = null;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const stalled = new Promise<never>((_resolve, reject) => {
@@ -170,7 +192,7 @@ export async function openRenderSurface(browser: Browser, origin: string, target
   };
 }
 /** Bounded: a browser that does not close in time is left to Playwright's own exit handling, with a warning. */
-async function closeBrowser(browser: Browser, ms: number): Promise<void> {
+export async function closeBrowser(browser: Browser, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const closed = await Promise.race([browser.close().then(() => true, () => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), ms); })]);
   clearTimeout(timer);
@@ -268,6 +290,39 @@ export async function runSequenceExport({ plan, projectDirectory, directory, ori
     status.phase = 'audio';
     const audio = await writeSequenceAudio(plan, projectDirectory, audioFile, signal, (sample, total) => { status.audioProgress = total ? sample / total : 1;progress?.(); });
     signal.throwIfAborted();
+    /** Both engines end here: FFmpeg finishes, the file is checked, the proof is written (`video` = what the drawing
+     * produced, in the proof's order), the admitted sources are confirmed, and the output is published. */
+    const publish = async (finishing: FrameEncoder, video: object, check?: (probe: unknown) => void) => {
+      status.phase = 'finalizing'; await finishing.finish(); encoder = undefined;
+      signal.throwIfAborted();
+      const probe = await probeExportFile(ffprobe.bin, partial, { signal, maxBuffer: 1024 * 1024 });verifyExportProbe(doc,probe,audio.sampleCount,outputResolution);check?.(probe);
+      const handle = await open(partial, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
+      await writeFile(join(directory, 'verification.json'), JSON.stringify({ revision: doc.revision, contentHash: status.contentHash,
+        settings,outputResolution,...video, audio, probe,
+        color: { primaries: 'bt709', matrix: 'bt709', transfer: 'iec61966-2-1', range: 'limited' } }, null, 2));
+      // Renderer and PCM caches may have completed their final source reads long
+      // before encoding finishes. Keep the admitted reference generation through
+      // the final publication check, even when no further HTTP reads are needed.
+      for(const reference of referenceLeases)await reference.verify();
+      signal.throwIfAborted(); await rename(partial, join(directory, 'output.mp4'));
+    };
+    if (settings.engine === 'canvas') {
+      // HTML in Canvas + VideoEncoder (exportCanvas.ts): FFmpeg takes the browser's H.264 as it is, with the audio.
+      encoder = startFrameEncoder(ffmpeg.bin, canvasEncoderArguments({ fps: doc.fps, audioFile, output: partial }), signal);
+      status.phase = 'rendering';
+      const frameEncoder = encoder, references: Array<{ frame: number; sha256: string }> = [];
+      const drawn = await renderCanvasExport({ executablePath: chromiumBin.bin, origin, target: { projectId: status.projectId, jobId: status.id }, resolution: doc.resolution, fps: doc.fps,
+        frames: doc.sequenceEndFrame, quality: settings.quality, signal, write: bytes => frameEncoder.write(bytes), encoderClosed: frameEncoder.closed,
+        referenceFrames: new Set([0, Math.floor(doc.sequenceEndFrame / 2), doc.sequenceEndFrame - 1]),
+        async reference(frame, png) {
+          await writeFile(join(directory, `frame-${frame}.png`), png, { flag: 'wx' });
+          references.push({ frame, sha256: createHash('sha256').update(png).digest('hex') });
+        },
+        progress(completed) { status.completedFrames = completed; progress?.(); } });
+      await publish(frameEncoder, { browser: drawn.browser, engine: 'canvas', parallel: { workers: 1, blockFrames: CANVAS_KEY_FRAME_INTERVAL }, intermediate: { format: 'h264' },
+        encoder: drawn.encoder, framesSha256: drawn.streamSha256, references }, verifyNoFrameReordering);
+      return;
+    }
     // Measurement only (scripts/export-baseline.ts); unset in the product.
     const trace = exportTraceSink();
     const timings = new Map<number, Omit<Parameters<NonNullable<RenderLimits['onFrameTiming']>>[0], 'frame'>>();
@@ -304,19 +359,8 @@ export async function runSequenceExport({ plan, projectDirectory, directory, ori
       } });
     trace?.rendered?.({ jobId: status.id, parallel, stats: rendered,
       decode: rendered.workers.length === 1 ? rendered.workers[0]!.decode : rendered.workers.map(worker => worker.decode) });
-    status.phase = 'finalizing'; await encoder.finish(); encoder = undefined;
-    signal.throwIfAborted();
-    const probe = await probeExportFile(ffprobe.bin, partial, { signal, maxBuffer: 1024 * 1024 });verifyExportProbe(doc,probe,audio.sampleCount,outputResolution);
-    const handle = await open(partial, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
-    await writeFile(join(directory, 'verification.json'), JSON.stringify({ revision: doc.revision, contentHash: status.contentHash,
-      settings,outputResolution,browser: workers.versions[0], parallel,
-      intermediate: intermediate === 'jpeg' ? { format: intermediate, quality: EXPORT_JPEG_QUALITY } : { format: intermediate }, framesSha256: framesDigest.digest('hex'), references, audio, probe,
-      color: { primaries: 'bt709', matrix: 'bt709', transfer: 'iec61966-2-1', range: 'limited' } }, null, 2));
-    // Renderer and PCM caches may have completed their final source reads long
-    // before encoding finishes. Keep the admitted reference generation through
-    // the final publication check, even when no further HTTP reads are needed.
-    for(const reference of referenceLeases)await reference.verify();
-    signal.throwIfAborted(); await rename(partial, join(directory, 'output.mp4'));
+    await publish(frameEncoder, { browser: workers.versions[0], parallel,
+      intermediate: intermediate === 'jpeg' ? { format: intermediate, quality: EXPORT_JPEG_QUALITY } : { format: intermediate }, framesSha256: framesDigest.digest('hex'), references });
   } finally {
     signal.removeEventListener('abort', abort);
     if (encoder) await encoder.stop();

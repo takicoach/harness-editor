@@ -79,6 +79,49 @@ it('checks persisted settings against the output proof again after restart',asyn
     await expect(new SequenceExports().download(directory,started.id)).rejects.toThrow(/設定/);
   }finally{await rm(directory,{recursive:true,force:true});}
 });
+it('refuses the canvas engine below the full resolution before any record or rendering, with the reason',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'native-export-canvas-refused-')),inputs:ExportRunInput[]=[];
+  const jobs=new SequenceExports(async input=>{inputs.push(input);await complete(input);});
+  try{
+    let thrown:unknown;
+    try{jobs.start(directory,'case','unused',{sessionId:'session',expectedRevision:3,executionId:'canvas-1080p',settings:{resolution:'1080p',quality:'high',engine:'canvas'}},state);}catch(error){thrown=error;}
+    expect(thrown).toMatchObject({name:'HttpError',status:400,message:'速い書き出しは解像度「そのまま」の時だけ使えます'});
+    expect(inputs).toHaveLength(0);expect(jobs.list(directory)).toEqual([]);
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+it.skipIf(process.platform!=='darwin'||process.arch!=='arm64')('refuses the canvas engine past the H.264 limits before any record or rendering, with the reason',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'native-export-canvas-level-')),inputs:ExportRunInput[]=[];
+  const jobs=new SequenceExports(async input=>{inputs.push(input);await complete(input);}),current=state();
+  // Beyond level 6.2 (exportCanvasSupport.avcCodec).
+  current.document.resolution={width:8192,height:8192};current.document.fps={num:60,den:1};
+  try{
+    let thrown:unknown;
+    try{jobs.start(directory,'case','unused',{sessionId:'session',expectedRevision:3,executionId:'canvas-level',settings:{resolution:'full',quality:'high',engine:'canvas'}},()=>current);}catch(error){thrown=error;}
+    expect(thrown).toMatchObject({name:'HttpError',status:400,message:'この案件の大きさとコマ速度は、速い書き出しでは扱えません（H.264 の上限を超えます）'});
+    expect(inputs).toHaveLength(0);expect(jobs.list(directory)).toEqual([]);
+    // The screenshot path has no such limit.
+    const started=jobs.start(directory,'case','unused',{sessionId:'session',expectedRevision:3,executionId:'capture-level',settings:{resolution:'full',quality:'high'}},()=>current);
+    await jobs.job(directory,started.id).completion;expect(jobs.job(directory,started.id).status.phase).toBe('complete');
+  }finally{
+    // A start that was wrongly accepted is still writing its record; let it end so the assertion, not the removal, reports.
+    await Promise.allSettled(jobs.list(directory).map(job=>jobs.job(directory,job.id).completion));
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+it.skipIf(process.platform!=='darwin'||process.arch!=='arm64')('freezes the canvas engine in the record and its proof, and treats a request without it as a different one',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'native-export-canvas-'));const inputs:ExportRunInput[]=[];
+  const jobs=new SequenceExports(async input=>{inputs.push(input);await complete(input);});
+  const request={sessionId:'session',expectedRevision:3,executionId:'canvas',settings:{resolution:'full' as const,quality:'high' as const,engine:'canvas' as const}};
+  try{
+    const started=jobs.start(directory,'case','unused',request,state);await jobs.job(directory,started.id).completion;
+    expect(inputs[0]!.settings).toEqual({resolution:'full',quality:'high',engine:'canvas'});
+    expect(readExportRecord(directory,started.id)).toMatchObject({version:2,request,status:{phase:'complete',settings:{engine:'canvas'}}});
+    const restored=new SequenceExports(()=>{throw new Error('same request must not render again');});
+    expect(restored.start(directory,'case','unused',request,()=>{throw new Error('must not read the session');}).id).toBe(started.id);
+    expect(()=>restored.start(directory,'case','unused',{...request,settings:{resolution:'full',quality:'high'}},state)).toThrow(/異なる要求/);
+    expect(await readFile(await restored.download(directory,started.id),'utf8')).toBe('verified-output-fixture');
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
 it('preserves odd-size full rejection while permitting an even scaled output',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'native-export-odd-size-')),jobs=new SequenceExports(complete),current=state();current.document.resolution={width:853,height:481};
   const request={sessionId:'session',expectedRevision:3,executionId:'odd'};

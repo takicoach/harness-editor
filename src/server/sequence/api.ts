@@ -39,6 +39,7 @@ import {frameRequestFromQuery,prepareSequenceFrames} from './frameImages';
 import {FfmpegBusyError} from './ffmpegGate';
 import { sequenceExports as exports } from './exports';
 import {exportSettingsSchema} from './exportRecords';
+import {canvasExportUnavailable} from './exportCanvasSupport';
 import { assertContentLengthWithin, resolveMaxUploadBytes, streamBodyToTempFile } from '../streamUpload';
 import { assertEditorDeliveryMayApply, assertEditorDeliveryMaySave } from '../editorSaveGuard';
 import {handleSilenceCutApi} from './silenceCutApi';
@@ -152,6 +153,11 @@ export async function handleSequenceApi(req: IncomingMessage, res: ServerRespons
           }));
       } else if (route === '/export/list') sendJson(res, 200, exports.page(directory,Number(url.searchParams.get('offset')??0),Number(url.searchParams.get('limit')??20)));
       else if (route === '/export/request') sendJson(res,200,{job:exports.lookup(directory,id(url.searchParams.get('executionId')))??null});
+      else if (route === '/export/engines') {
+        // Whether this machine can run the canvas engine at all (the resolution is the export screen's to check).
+        const reason=canvasExportUnavailable({resolution:'full',quality:'high',engine:'canvas'});
+        sendJson(res,200,{canvas:reason===null?{available:true}:{available:false,reason}});
+      }
       else {
         const jobId = id(url.searchParams.get('job')), job = exports.job(directory, jobId);
         if (route === '/export/cancel') sendJson(res, 200, exports.cancel(directory, jobId));

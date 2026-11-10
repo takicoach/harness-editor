@@ -7,7 +7,13 @@ import { compareTime,rational } from '../../core/sequence/time';
 const probeSchema=z.object({streams:z.array(z.object({codec_type:z.string(),codec_name:z.string().optional(),
   width:z.number().optional(),height:z.number().optional(),nb_frames:z.string().optional(),avg_frame_rate:z.string().optional(),
   color_space:z.string().optional(),color_primaries:z.string().optional(),color_transfer:z.string().optional(),color_range:z.string().optional(),
-  time_base:z.string().optional(),duration_ts:z.number().optional(),sample_rate:z.string().optional(),channels:z.number().optional()}).passthrough())}).passthrough();
+  time_base:z.string().optional(),duration_ts:z.number().optional(),sample_rate:z.string().optional(),channels:z.number().optional(),has_b_frames:z.number().optional()}).passthrough())}).passthrough();
+/** The canvas engine's raw H.264 has no timestamps: FFmpeg stamps frame n at n × den/num (exportCanvasSupport),
+ * which is the display order only when no frame is reordered. FFprobe reports that as has_b_frames 0. */
+export function verifyNoFrameReordering(input:unknown):void {
+  const video=probeSchema.parse(input).streams.find(stream=>stream.codec_type==='video');
+  if(video?.has_b_frames!==0)throw new Error('書き出した映像にコマの並べ替えが含まれています');
+}
 /** Shared by a new encode and verification of a pre-manifest completed export. */
 export function verifyExportProbe(document:SequenceDocument,input:unknown,sampleCount:number,outputResolution=document.resolution):void {
   const probe=probeSchema.parse(input),videos=probe.streams.filter(stream=>stream.codec_type==='video'),audios=probe.streams.filter(stream=>stream.codec_type==='audio');

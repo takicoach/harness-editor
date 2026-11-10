@@ -112,6 +112,28 @@ try{
   assert.ok(streams.some(stream=>stream.codec_type==='audio'));
   const decoded=spawnSync(ffmpeg,['-v','error','-i',output,'-f','null','-'],{encoding:'utf8'});assert.equal(decoded.status,0,decoded.stderr);
   console.log('EXPORT COMPLETE',JSON.stringify(status));
+  // The fast export (HTML in Canvas) through the bundled Chrome: the app ships the Chrome it needs (157 on Apple Silicon).
+  const fastResponse=await page.request.post(`${origin}/api/sequence/export?id=DesktopSmoke`,{data:{sessionId:session.sessionId,expectedRevision:session.document.revision,executionId:'desktop-smoke-export-fast',settings:{resolution:'full',quality:'high',engine:'canvas'}}});
+  const fastJob=await fastResponse.json();console.log('FAST EXPORT',fastResponse.status(),JSON.stringify(fastJob));assert.ok(fastResponse.ok());
+  let fastStatus;
+  const fastDeadline=Date.now()+90000;
+  do {
+    const poll=await page.request.get(`${origin}/api/sequence/export/status?id=DesktopSmoke&job=${fastJob.id}`);
+    fastStatus=await poll.json();
+    if(['complete','failed','cancelled'].includes(fastStatus.phase))break;
+    await new Promise(resolve=>setTimeout(resolve,300));
+  }while(Date.now()<fastDeadline);
+  assert.equal(fastStatus.phase,'complete',JSON.stringify(fastStatus));
+  assert.equal(fastStatus.settings?.engine,'canvas');
+  const fastDownload=await page.request.get(`${origin}/api/sequence/export/download?id=DesktopSmoke&job=${fastJob.id}`);
+  assert.ok(fastDownload.ok());
+  const fastOutput=join(testRoot,'export-fast.mp4');await writeFile(fastOutput,await fastDownload.body());
+  const fastProbe=spawnSync(join(runtime,'tools/ffprobe'),['-v','error','-count_frames','-show_streams','-of','json',fastOutput],{encoding:'utf8'});
+  assert.equal(fastProbe.status,0,fastProbe.stderr);const fastStreams=JSON.parse(fastProbe.stdout).streams;
+  assert.ok(fastStreams.some(stream=>stream.codec_type==='video'&&stream.width===640&&stream.height===360&&stream.has_b_frames===0&&Number(stream.nb_read_frames)===fastStatus.totalFrames),JSON.stringify(fastStreams));
+  assert.ok(fastStreams.some(stream=>stream.codec_type==='audio'));
+  const fastDecoded=spawnSync(ffmpeg,['-v','error','-i',fastOutput,'-f','null','-'],{encoding:'utf8'});assert.equal(fastDecoded.status,0,fastDecoded.stderr);
+  console.log('FAST EXPORT COMPLETE',JSON.stringify(fastStatus));
   await close();
   page=await launch();assert.equal(new URL(page.url()).origin,origin);
   assert.equal(await page.evaluate(()=>localStorage.getItem('desktop-smoke')),'retained');

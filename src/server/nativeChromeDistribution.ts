@@ -1,16 +1,21 @@
+import {createRequire} from 'node:module';
 import {chromiumDownloadPlatform} from './resolveChromium';
-import {NATIVE_CHROME_VERSION} from './resolveNativeChromium';
 
-/** Actual official archives, independently downloaded and CRC checked 2026-09-12. */
-export const NATIVE_CHROME_ARCHIVES = {
-  'mac-arm64': 'fbab7ac5c63f72771a7cd79ab15ed6f198b0f9567ec927c9cf5ece3b1f08ffb1',
-  'mac-x64': '9d896b8c242652fe274b5ff7029853ac4b1471086ecfe48a675552783323108a',
-  win64: '6cd8c5f6eeff7b6515dbcd35d050f696da3f7eac4b4a209c06e3d4354c2704a6',
-} as const;
-export function nativeChromeDistribution(platform: NodeJS.Platform, arch: string) {
-  const name = chromiumDownloadPlatform(platform, arch);
-  if (!name || !(name in NATIVE_CHROME_ARCHIVES)) throw new Error(`unsupported-platform: ${platform}/${arch}`);
-  return {platform:name, version:NATIVE_CHROME_VERSION,
-    sha256:NATIVE_CHROME_ARCHIVES[name as keyof typeof NATIVE_CHROME_ARCHIVES],
-    url:`https://storage.googleapis.com/chrome-for-testing-public/${NATIVE_CHROME_VERSION}/${name}/chrome-${name}.zip`};
+export interface NativeChromeDistribution {platform:string; version:string; sha256:string; url:string}
+interface VerifiedArchive {platform:string; version:string; sha256:string; source:string}
+
+// The verified ledger is the only place a native Chrome release, archive URL and hash are written.
+// Each archive carries its own release because Mac arm64 runs ahead of Playwright's pinned browser
+// (HTML in Canvas needs 157); desktop/build.mjs packs the app from the same entry setup installs.
+const archives=(createRequire(import.meta.url)('./native-chromium-sha-verified.json') as {artifacts:VerifiedArchive[]}).artifacts;
+
+/** null where no official archive is verified (the Linux development cache, unsupported CPUs). */
+export function findNativeChromeDistribution(platform:NodeJS.Platform,arch:string):NativeChromeDistribution|null {
+  const name=chromiumDownloadPlatform(platform,arch),archive=name?archives.find(a=>a.platform===name):undefined;
+  return archive?{platform:archive.platform,version:archive.version,sha256:archive.sha256,url:archive.source}:null;
+}
+export function nativeChromeDistribution(platform:NodeJS.Platform,arch:string):NativeChromeDistribution {
+  const distribution=findNativeChromeDistribution(platform,arch);
+  if(!distribution)throw new Error(`unsupported-platform: ${platform}/${arch}`);
+  return distribution;
 }
