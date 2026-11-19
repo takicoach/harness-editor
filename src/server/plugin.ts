@@ -1,3 +1,6 @@
+import { release } from 'node:os';
+import appPackage from '../../package.json';
+import { detectEdition } from './edition';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { randomUUID } from 'node:crypto';
@@ -1361,6 +1364,9 @@ export async function handleApi(
     // autoSaveDelayMs は自動保存の待ち時間（既定 4000ms）。専用 e2e はより短い値へ変更したい
     // 場合クエリ `autoSaveDelayMsForTest` で個別上書きできる（サーバ設定より優先）。
     sendJson(res, 200, {
+      edition: detectEdition(),
+      appVersion: process.env.HARNESS_APP_VERSION || appPackage.version,
+      osVersion: `${process.platform === 'darwin' ? 'macOS (Darwin)' : process.platform === 'win32' ? 'Windows' : process.platform} ${release()}`,
       tutorialEnabled: process.env.SME_TUTORIAL !== '0',
       autoSaveDefaultEnabled: process.env.SME_AUTO_SAVE !== '0',
       autoSaveDelayMs: process.env.SME_AUTO_SAVE_DELAY_MS

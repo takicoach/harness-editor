@@ -3,7 +3,10 @@
  * 進行は nativeTutorialFlow.ts と useNativeTutorial.ts、描画は TutorialOverlay.tsx。
  * 文面は helpTopics.ts（新画面向け）と画面上の実際の表示名に揃える。
  */
-import type { TutorialStep } from './tutorialSteps';
+import { PAID_OFFER_TEXT, PAID_OFFER_URL } from '../../shared/paidOffer';
+import type { TutorialCtx, TutorialStep } from './tutorialSteps';
+
+const offersPlugin = (ctx: TutorialCtx) => ctx.edition === 'free' && ctx.paidOfferEnabled === true;
 
 /** その手順を出す画面。any はホームでも編集画面でも出す。 */
 export type NativeStepScene = 'home' | 'edit' | 'any';
@@ -154,10 +157,12 @@ export const NATIVE_TUTORIAL_STEPS: NativeTutorialStep[] = [
     id: 'finish',
     scene: 'any',
     target: null,
-    text: (c) =>
+    text: (c) => (
       c.editorReady
         ? 'これで準備完了です！ あとは作るだけ。\n分からないことがあったら、右上の「？」からいつでも確かめられます 🎬'
-        : 'チュートリアルはここまで！\n動画が用意できたら、右上の「？」→「もう一度最初から見る」からいつでも見返せますよ 🎬',
+        : 'チュートリアルはここまで！\n動画が用意できたら、右上の「？」→「もう一度最初から見る」からいつでも見返せますよ 🎬'
+    ) + (offersPlugin(c) ? `\n${PAID_OFFER_TEXT}` : ''),
+    offerUrl: (c) => offersPlugin(c) && PAID_OFFER_URL ? PAID_OFFER_URL : undefined,
     nextLabel: 'おわる',
     secondary: null,
   },

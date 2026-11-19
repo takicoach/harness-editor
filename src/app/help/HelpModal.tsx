@@ -38,6 +38,7 @@ export interface HelpModalProps {
    * （既存の再実行機構を App 側で呼ぶため、close と start の両方を App 側の1関数に委ねる）。
    * `hideTutorialRestart` の間はボタン自体を出さないため呼ばれない。 */
   onRestartTutorial: () => void;
+  onFeedback?: () => void;
   /**
    * スポットライト型チュートリアルのない画面では再開ボタンを隠す。
    * 現在、製品コードの利用箇所は無い（2026-09-25 以降、新画面でも再開ボタンを出す）。prop とテストは残している。
@@ -47,7 +48,7 @@ export interface HelpModalProps {
 
 type CategoryFilter = HelpCategory | 'all';
 
-export function HelpModal({ onClose, onRestartTutorial, hideTutorialRestart = false }: HelpModalProps) {
+export function HelpModal({ onClose, onRestartTutorial, onFeedback, hideTutorialRestart = false }: HelpModalProps) {
   const detailPaneRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryFilter>('all');
@@ -244,6 +245,9 @@ export function HelpModal({ onClose, onRestartTutorial, hideTutorialRestart = fa
           </div>
           <div ref={detailPaneRef} className="help-detail-pane">{selected !== null && renderDetail(selected)}</div>
         </div>
+        {onFeedback && <footer className="help-feedback-footer">
+          <button type="button" className="help-nav-btn" onClick={onFeedback}>ご意見・不具合を送る</button>
+        </footer>}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NATIVE_CREATE_BAND_TEXT, NATIVE_UNAVAILABLE_TEXT, NATIVE_WAITING_TEXT, type NativeStepPrep } from './nativeTutorialSteps';
 import { NATIVE_TUTORIAL_DONE_KEY, NATIVE_TUTORIAL_RESUME_KEY } from './nativeTutorialStorage';
+import { resolveText } from './tutorialMachine';
 import { useNativeTutorial, type NativeTutorialApi, type NativeTutorialInputs } from './useNativeTutorial';
 
 const RESUME = NATIVE_TUTORIAL_RESUME_KEY;
@@ -538,4 +539,29 @@ describe('手動再実行・あとで・フォーカス', () => {
     act(() => result.current.next());
     expect(document.activeElement).toBe(document.body);
   });
+});
+
+it.each([false, true])('the tutorial and export use one shared claim (export first: %s)', async exportFirst => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ tutorialEnabled: true, edition: 'free' }) })));
+  localStorage.setItem(NATIVE_TUTORIAL_DONE_KEY, '1');
+  let taken = false;
+  const claimPaidOffer = vi.fn(() => {
+    if (taken) return false;
+    taken = true;
+    return true;
+  });
+  if (exportFirst) expect(claimPaidOffer()).toBe(true);
+  const { result } = mount(edit({ claimPaidOffer }));
+  await flush();
+  act(() => result.current.start());
+  advanceTo(result, 'finish');
+  const text = () => resolveText(result.current.step!, result.current.ctx);
+  expect(text().includes('有料プラグイン')).toBe(!exportFirst);
+  await flush(350);
+  expect(text().includes('有料プラグイン')).toBe(!exportFirst);
+  expect(claimPaidOffer()).toBe(false);
+  act(() => result.current.next());
+  act(() => result.current.start());
+  advanceTo(result, 'finish');
+  expect(text()).not.toContain('有料プラグイン');
 });

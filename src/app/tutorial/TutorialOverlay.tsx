@@ -84,6 +84,7 @@ export function TutorialOverlay({ tutorial, options }: { tutorial: TutorialApi; 
 
   const secondary =
     waiting !== null || step.secondary === null ? null : (step.secondary ?? { label: 'スキップ', action: 'skip' as const });
+  const offerUrl = waiting === null && !unavailable ? step.offerUrl?.(ctx) : undefined;
   const showNext = waiting === null && (unavailable || (step.nextButton ?? true));
 
   // 新画面（options 指定あり）だけ滑らかな動きを付ける。旧画面の描画・DOM は変えない（既存の約束）。
@@ -125,7 +126,7 @@ export function TutorialOverlay({ tutorial, options }: { tutorial: TutorialApi; 
         </div>
         <div className="tut-body" key={step.id}>
           {showNew && <span className="tut-new-badge" aria-label="新機能">NEW</span>}
-          <p className="tut-text">{text}</p>
+          <p className="tut-text">{text}{offerUrl && <> <a href={offerUrl} target="_blank" rel="noopener noreferrer">くわしく見る</a></>}</p>
           {step.body === 'mcp' && (
             <div className="tut-mcp">
               {aiPresence?.connected === true ? (

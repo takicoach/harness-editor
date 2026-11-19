@@ -1,9 +1,11 @@
+import type { FeedbackEnvironment } from '../../shared/feedbackDraft';
+import type { AppEdition } from '../../shared/paidOffer';
 /**
  * 新画面（native）専用のチュートリアル進行。旧画面の useTutorial は変えない。
  * 開始の種類（初回自動・自動復元・手動再実行）、準備待ち、ページまたぎの再開、前提状態の整え、
  * 体験の判定（本人の追加成功＋追加 ID＋対象文書）、ダイアログ中の非表示をここで持つ。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { TutorialOverlayOptions } from './TutorialOverlay';
 import { shouldAutoAdvance, takeSnapshot } from './tutorialMachine';
 import type { TutorialCtx, TutorialSnapshot } from './tutorialSteps';
@@ -36,6 +38,8 @@ export interface NativeTutorialInputs {
   prepare?: (prep: NativeStepPrep) => Promise<void>;
   /** 体験で本人が追加した1件（と空になったトラック）だけを消す。成功で true。 */
   removeTelop?: (record: NativeTelopRecord) => Promise<boolean>;
+  /** ホーム・編集・書き出しで共用する、この起動中の表示枠。 */
+  claimPaidOffer?: () => boolean;
 }
 
 export interface NativeTutorialApi extends TutorialApi {
@@ -50,6 +54,9 @@ export interface NativeTutorialApi extends TutorialApi {
    * それ以外（ホーム・welcome・記録が要る telop-done）はその先で最初の編集画面の手順。無ければ保存しない。
    */
   beforeNavigate: (projectId: string) => void;
+  configEnabled: boolean;
+  edition?: AppEdition;
+  feedbackEnvironment: FeedbackEnvironment;
 }
 
 const STEPS = NATIVE_TUTORIAL_STEPS;
@@ -78,6 +85,9 @@ export function useNativeTutorial(inputs: NativeTutorialInputs): NativeTutorialA
   const [preparing, setPreparing] = useState(false);
   const [dialogs, setDialogs] = useState<DialogState>({ dialogOpen: false, createDialogOpen: false });
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [edition, setEdition] = useState<AppEdition>();
+  const [finishOffer, setFinishOffer] = useState<boolean>();
+  const [feedbackEnvironment,setFeedbackEnvironment] = useState<FeedbackEnvironment>({});
   const [, setTick] = useState(0);
   const latest = useRef(inputs);
   latest.current = inputs;
@@ -106,8 +116,14 @@ export function useNativeTutorial(inputs: NativeTutorialInputs): NativeTutorialA
     let alive = true;
     void fetch('/api/config')
       .then((res) => (res.ok ? res.json() : null))
-      .then((body: { tutorialEnabled?: boolean } | null) => {
-        if (alive) setEnabled(body?.tutorialEnabled === true);
+      .then((body: { tutorialEnabled?: boolean; edition?: unknown; appVersion?: unknown; osVersion?: unknown } | null) => {
+        if (!alive) return;
+        setEnabled(body?.tutorialEnabled === true);
+        if (body?.edition === 'free' || body?.edition === 'paid') setEdition(body.edition);
+        setFeedbackEnvironment({
+          appVersion: typeof body?.appVersion === 'string' ? body.appVersion : undefined,
+          os: typeof body?.osVersion === 'string' ? body.osVersion : undefined,
+        });
       })
       .catch(() => {
         if (alive) setEnabled(false);
@@ -280,6 +296,18 @@ export function useNativeTutorial(inputs: NativeTutorialInputs): NativeTutorialA
     createDialogOpen: dialogs.createDialogOpen,
     preparing,
   });
+  const onFinishStep = step?.id === 'finish';
+  const finishVisible = onFinishStep && view.kind === 'step';
+  useLayoutEffect(() => {
+    if (!onFinishStep) {
+      setFinishOffer(undefined);
+      return;
+    }
+    if (finishVisible && enabled === true && edition === 'free' && finishOffer === undefined && !readDialogState().dialogOpen) {
+      setFinishOffer(latest.current.claimPaidOffer?.() ?? false);
+    }
+  }, [onFinishStep, finishVisible, enabled, edition, finishOffer]);
+
   const overlayOptions: TutorialOverlayOptions =
     view.kind === 'hidden'
       ? { hidden: true }
@@ -294,7 +322,7 @@ export function useNativeTutorial(inputs: NativeTutorialInputs): NativeTutorialA
     step,
     index: index + 1,
     total: STEPS.length,
-    ctx: ctxOf(inputs),
+    ctx: {...ctxOf(inputs), edition, paidOfferEnabled: enabled === true && finishOffer === true},
     next,
     skip,
     close,
@@ -303,5 +331,8 @@ export function useNativeTutorial(inputs: NativeTutorialInputs): NativeTutorialA
     overlayOptions,
     recordTelopAdded,
     beforeNavigate,
+    configEnabled: enabled === true,
+    edition,
+    feedbackEnvironment,
   };
 }

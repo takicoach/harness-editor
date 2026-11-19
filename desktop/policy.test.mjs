@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
-const {isEditorURL,isExternalURL,validateProjectRoot,widenBackendThreadPool}=createRequire(import.meta.url)('./policy.cjs');
+const {isEditorURL,isExternalURL,installNavigationGuards,validateProjectRoot,widenBackendThreadPool}=createRequire(import.meta.url)('./policy.cjs');
 test('navigation stays on this application server',()=>{
   const origin='http://127.0.0.1:42000';
   assert.ok(isEditorURL(`${origin}/?project=demo`,origin));
@@ -35,4 +35,52 @@ test('a backend ended from outside by a signal counts as already exited (2026-10
   child.kill('SIGKILL');await exited;
   assert.equal(child.exitCode,null);assert.equal(child.signalCode,'SIGKILL');
   assert.equal(childHasExited(child),true);
+});
+test('opens a user-chosen mail draft from either navigation event',()=>{
+  const {installNavigationGuards}=createRequire(import.meta.url)('./policy.cjs');
+  const opened=[], hooks={};
+  installNavigationGuards({
+    setWindowOpenHandler:fn=>{hooks.open=fn;},
+    on:(name,fn)=>{hooks[name]=fn;},
+  },'http://localhost:42000',url=>opened.push(url),'example@example.test');
+  const draft='mailto:example@example.test?subject=Test&body=Draft%0ANext';
+  assert.ok(isExternalURL(draft,'example@example.test'));
+  assert.equal(isExternalURL('mailto:example@example.test?bcc=other@example.test'),false);
+  assert.deepEqual(hooks.open({url:draft}),{action:'deny'});
+  let prevented=false;
+  hooks['will-navigate']({preventDefault(){prevented=true;}},draft);
+  assert.ok(prevented);
+  assert.deepEqual(opened,[draft,draft]);
+  hooks.open({url:'javascript:alert(1)'});
+  hooks['will-navigate']({preventDefault(){}},'file:///tmp/path');
+  assert.deepEqual(opened,[draft,draft]);
+});
+
+test('only permits the configured feedback address and safe mail draft fields', () => {
+  const email = 'example@example.test';
+  const draft = `mailto:${email}`;
+  assert.equal(isExternalURL(draft, ''), false);
+  assert.equal(isExternalURL(draft), false);
+  assert.equal(isExternalURL(draft + '?subject=Feedback&body=One%0ATwo', email), true);
+  for (const url of [
+    'mailto:other@example.test?body=Test',
+    draft + ',other@example.test',
+    draft + '?to=other@example.test',
+    draft + '?cc=other@example.test',
+    draft + '?CC=other@example.test',
+    draft + '?bcc=other@example.test',
+    draft + '?BCC=other@example.test',
+    draft + '?%63c=other@example.test',
+    draft + '?subject=One&subject=Two',
+    draft + '?body=One&%62ody=Two',
+    draft + '?subject=Test#hash',
+    draft + '?subject=Test#',
+    draft + '?subject=a%00b',
+    draft + '?subject=a%0Ab',
+    draft + '?subject=a%09b',
+    draft + '?subject=a%7Fb',
+    draft + '?subject=a%E2%80%A8b',
+    draft + '?subject=a%E2%80%A9b',
+    draft + '?body=' + 'x'.repeat(8000),
+  ]) assert.equal(isExternalURL(url, email), false, url.slice(0, 120));
 });

@@ -12,6 +12,7 @@ import { NativeWorkspace } from './NativeWorkspace';
  */
 const session = vi.hoisted(() => ({
   doc: null as unknown,
+  claimExportOffer: undefined as undefined | (() => boolean),
   loading: false,
   error: null as string | null,
   dirty: false,
@@ -33,7 +34,10 @@ vi.mock('./NativeTimeline', () => ({ NativeTimeline: forwardRef((_props: any, re
   return null;
 }) }));
 vi.mock('./NativeScriptPanel', () => ({ NativeScriptPanel: forwardRef(() => null) }));
-vi.mock('./NativeExportControl', () => ({ NativeExportControl: () => null }));
+vi.mock('./NativeExportControl', () => ({ NativeExportControl: ({ claimPaidOffer }: { claimPaidOffer: () => boolean }) => {
+  session.claimExportOffer = claimPaidOffer;
+  return null;
+} }));
 vi.mock('./NativeProjectList', () => ({ NativeProjectList: ({ onPick }: { onPick(id: string): void }) => <button onClick={() => onPick('other')}>別の作品を開く</button> }));
 vi.mock('./NativeTranscribeControl', () => ({ NativeTranscribeControl: () => null }));
 vi.mock('../useAutoSave', () => ({ useAutoSave: () => {} }));
@@ -67,6 +71,7 @@ beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   session.doc = DOC;
+  session.claimExportOffer = undefined;
   session.loading = false;
   session.error = null;
   session.dirty = false;
@@ -259,4 +264,19 @@ it('案内の表示中に外部変更を再読み込みすると、同じ作品�
   await waitFor(() => expect(session.reloadExternal).toHaveBeenCalled());
   await waitFor(() => expect(JSON.parse(sessionStorage.getItem('harness-native-tutorial-resume') ?? 'null'))
     .toEqual({ projectId: 'tut', stepId: 'ai-work' }));
+});
+
+it('書き出しの案内はチュートリアル中・表示枠を使った後は出さない', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok:true, json:async () => ({
+    status:'unchanged', tutorialEnabled:true, edition:'free', autoSaveDefaultEnabled:false,
+  }) })));
+  const claim = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+  render(<NativeWorkspace projectId="demo" claimPaidOffer={claim} />);
+  await waitFor(() => expect(stepId()).toBe('welcome'));
+  expect(session.claimExportOffer?.()).toBe(false);
+  expect(claim).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'あとで'}));
+  await waitFor(() => expect(stepId()).toBeNull());
+  expect(session.claimExportOffer?.()).toBe(true);
+  expect(session.claimExportOffer?.()).toBe(false);
 });

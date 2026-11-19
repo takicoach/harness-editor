@@ -419,3 +419,23 @@ it('disabledReason があれば書き出しを押せず、理由を title と見
   view.rerender(<NativeExportControl {...props}/>);
   expect(button.disabled).toBe(false);expect(button.title).toBe('');expect(view.queryByText('試し表示中は書き出せません')).toBeNull();
 });
+
+it('shows one offer for a new successful export and keeps it dismissed on later exports', async()=>{
+  const {props}=setup(),normal=request.getMockImplementation()!;
+  let id=0;
+  request.mockImplementation(async(...args)=>args[1]==='/export'?{...status,id:String(++id)}:normal(...args));
+  const claimPaidOffer=vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+  const view=render(<NativeExportControl {...props} claimPaidOffer={claimPaidOffer}/>);
+  const start=async()=>{
+    fireEvent.click(view.getByRole('button',{name:'書き出し'}));
+    await act(async()=>fireEvent.click(view.getByRole('button',{name:'書き出し開始'})));
+  };
+  await waitFor(()=>expect(view.getByRole('button',{name:'書き出し'})).toHaveProperty('disabled',false));
+  await start();
+  expect(view.getByRole('note')).toBeTruthy();
+  fireEvent.click(view.getByRole('button',{name:'有料プラグインの案内を閉じる'}));
+  expect(view.queryByRole('note')).toBeNull();
+  await start();
+  expect(view.queryByRole('note')).toBeNull();
+  expect(claimPaidOffer).toHaveBeenCalledTimes(2);
+});

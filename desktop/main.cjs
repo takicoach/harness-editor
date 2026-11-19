@@ -2,11 +2,12 @@ const {app, BrowserWindow, dialog, Menu, shell} = require('electron');
 const {spawn} = require('node:child_process');
 const {mkdirSync, existsSync, appendFileSync, readFileSync, writeFileSync} = require('node:fs');
 const {join, resolve} = require('node:path');
-const {isEditorURL, isExternalURL, validateProjectRoot, widenBackendThreadPool, childHasExited} = require('./policy.cjs');
+const {installNavigationGuards, validateProjectRoot, widenBackendThreadPool, childHasExited} = require('./policy.cjs');
 app.setName('Harness Editor');
 app.setPath('userData', process.env.HARNESS_DESKTOP_USER_DATA ? resolve(process.env.HARNESS_DESKTOP_USER_DATA) : join(app.getPath('appData'),'Harness Editor'));
 let window, backend, origin, quitting = false, stopping = false;
 const runtime = app.isPackaged ? join(process.resourcesPath,'runtime') : resolve(__dirname,'..');
+const {email: feedbackEmail} = require(join(runtime,'src','shared','feedbackTarget.json'));
 const node = app.isPackaged ? join(runtime,'tools','node') : process.env.HARNESS_DESKTOP_NODE;
 let projectRoot;
 const settingsFile=join(app.getPath('userData'),'desktop-settings.json');
@@ -44,8 +45,7 @@ async function undoMenu(redo) {
 async function openWindow() {
   window = new BrowserWindow({width:1440,height:960,minWidth:1000,minHeight:680,backgroundColor:'#17201c',show:false,
     title:'Harness Editor',webPreferences:{preload:join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}});
-  window.webContents.setWindowOpenHandler(({url})=>{if(isExternalURL(url))void shell.openExternal(url);return {action:'deny'};});
-  window.webContents.on('will-navigate',(event,url)=>{if(!isEditorURL(url,origin)){event.preventDefault();if(isExternalURL(url))void shell.openExternal(url);}});
+  installNavigationGuards(window.webContents,origin,url=>{void shell.openExternal(url);},feedbackEmail);
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   window.webContents.on('will-prevent-unload',event=>{
@@ -89,7 +89,7 @@ else {
     const env={...process.env,HARNESS_PROJECT_ROOT:projectRoot,HARNESS_DESKTOP_CACHE:join(app.getPath('userData'),'vite-cache'),HARNESS_MANAGED_AI_DIR:join(app.getPath('userData'),'ai-tools'),SME_NO_OPEN:'1',HARNESS_DESKTOP_PORT:String(savedPort()),PATH:`${join(runtime,'tools')}:${process.env.PATH||'/usr/bin:/bin'}`};
     delete env.NODE_OPTIONS; delete env.NODE_PATH; delete env.ELECTRON_RUN_AS_NODE;
     widenBackendThreadPool(env);
-    if(app.isPackaged){env.HARNESS_FFMPEG=join(runtime,'tools','ffmpeg');env.HARNESS_FFPROBE=join(runtime,'tools','ffprobe');}
+    if(app.isPackaged){env.HARNESS_APP_VERSION=app.getVersion();env.HARNESS_FFMPEG=join(runtime,'tools','ffmpeg');env.HARNESS_FFPROBE=join(runtime,'tools','ffprobe');}
     backend=spawn(node,['--import','tsx',join(runtime,'desktop','server.mjs')],{cwd:runtime,env,stdio:['ignore','pipe','pipe','ipc']});
     backend.stdout.on('data',data=>writeLog(data.toString()));backend.stderr.on('data',data=>writeLog(data.toString()));
     backend.on('exit',(code,signal)=>{writeLog(`server exit ${code}${signal?` ${signal}`:''}`);if(!stopping&&origin){reportError('エディターが停止しました','編集サーバーが停止しました。ログフォルダーのdesktop.logを確認してください。');quitting=true;app.quit();}});

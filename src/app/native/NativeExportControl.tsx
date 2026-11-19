@@ -1,3 +1,4 @@
+import { PaidOfferBand, usePaidOfferResult } from '../offer/PaidOfferBand';
 import {reportEditorError} from './notificationHistory';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {TaskProgress} from '../components/TaskProgress';
@@ -39,11 +40,11 @@ function readPending(projectId:string):StartRequest|null {
   if(value.settings!==undefined)value.settings=nativeExportSettings(value.settings);
   return value;
 }
-export function NativeExportControl({ projectId, disabled, disabledReason, revision, resolution,save,onBusyChange,onComplete }: { projectId: string; disabled: boolean; revision: number; resolution:{width:number;height:number};save(): Promise<boolean>;onBusyChange?(busy:boolean):void;
+export function NativeExportControl({ projectId, disabled, disabledReason, revision, resolution,save,onBusyChange,onComplete,claimPaidOffer }: { projectId: string; disabled: boolean; revision: number; resolution:{width:number;height:number};save(): Promise<boolean>;onBusyChange?(busy:boolean):void;
   /** 指定があれば新しい書き出しを始めさせず、理由をボタンの title と見える補足文で示す（試し表示中など）。 */
   disabledReason?:string;
   /** この画面で開始・回収・監視した実行中ジョブが完了した時に、1ジョブにつき1回だけ呼ぶ（履歴で選んだ過去のジョブでは呼ばない）。 */
-  onComplete?(job:NativeExportStatus):void }) {
+  onComplete?(job:NativeExportStatus):void; claimPaidOffer?():boolean }) {
   const [job,setJob]=useState<NativeExportStatus|null>(null),[history,setHistory]=useState<History>({jobs:[],total:0,nextOffset:null});
   const [opened,setOpened]=useState(false),[starting,setStarting]=useState(false),[error,setError]=useState<string|null>(null);
   const [checking,setChecking]=useState(false),[preflight,setPreflight]=useState<NativeExportPreflight|null>(null);
@@ -66,6 +67,7 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
   const [verifying,setVerifying]=useState(false);
   const historyRefresh=useRef(0);
   const projectEpoch=useRef(0);
+  const {offerJobId, showPaidOfferFor, dismissPaidOffer}=usePaidOfferResult(claimPaidOffer);
   const onCompleteRef=useRef(onComplete);
   // Assign before paint, not during render, so a render that throws or bails out never leaves
   // a stale callback wired in.
@@ -74,6 +76,7 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
   const notifyComplete=(value:NativeExportStatus)=>{
     if(value.phase!=='complete'||completed.current.has(value.id))return;
     completed.current.add(value.id);
+    showPaidOfferFor(value);
     try{onCompleteRef.current?.(value);}
     catch(error){reportEditorError(projectId,'書き出し完了通知',message(error));}
   };
@@ -196,7 +199,7 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
     }catch(error){setError(message(error));}finally{setVerifying(false);}
   };
   return <div className="native-export">
-    <button className="btn-primary" data-tutorial="export" data-native-script-flush disabled={starting||loading||storageBroken||(blocked&&!pending&&!running)} title={reason} onClick={()=>{if(pending||running)void start();else{setOpened(true);setConfiguring(true);setJob(null);setError(null);}}}>{pending?'開始状況を再確認':running?'書き出し中…':starting?checking?'素材を確認中…':'保存中…':'書き出し'}</button>
+    <button className="btn-primary" data-tutorial="export" data-native-script-flush disabled={starting||loading||storageBroken||(blocked&&!pending&&!running)} title={reason} onClick={()=>{if(pending||running)void start();else{setOpened(true);setConfiguring(true);setJob(null);setError(null);dismissPaidOffer();}}}>{pending?'開始状況を再確認':running?'書き出し中…':starting?checking?'素材を確認中…':'保存中…':'書き出し'}</button>
     {reason&&<span className="native-export-reason">{reason}</span>}
     {(history.jobs.length>0||error||!!preflight?.issues.length)&&!opened&&<button aria-label="書き出し結果を表示" onClick={()=>setOpened(true)}>↓</button>}
     {opened&&<section className="native-export-panel" role="region" aria-label="動画の書き出し">
@@ -240,9 +243,10 @@ export function NativeExportControl({ projectId, disabled, disabledReason, revis
           <button onClick={()=>{void nativeRequest<NativeExportStatus>(projectId,'/export/cancel',{},undefined,{job:job.id}).then(record).catch(error=>setError(message(error)));}}>中止</button></>}
         {job.phase==='complete'&&job.downloadUrl&&<a className="native-export-download" href={job.downloadUrl} download aria-disabled={verifying} onClick={event=>{event.preventDefault();void download(job);}}>{verifying?'動画を確認中…':'動画を保存'}</a>}
       </>}
+      {job?.phase==='complete'&&job.id===offerJobId&&<PaidOfferBand onDismiss={dismissPaidOffer}/>}
       {(error||job?.error)&&<p role="alert" className="native-export-error">{error??job?.error}</p>}
       {history.jobs.length>0&&<details className="native-export-history"><summary>書き出し履歴（{history.total}件）</summary>
-        <ul aria-label="書き出し履歴">{history.jobs.map(item=><li key={item.id}><button aria-pressed={item.id===job?.id} onClick={()=>{setJob(item);setError(null);}}>
+        <ul aria-label="書き出し履歴">{history.jobs.map(item=><li key={item.id}><button aria-pressed={item.id===job?.id} onClick={()=>{setJob(item);setError(null);dismissPaidOffer();}}>
           <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('ja-JP')}</time><span>{labels[item.phase]}</span>
           {historySettings(item)&&<span className="native-subtle">{historySettings(item)}</span>}
         </button></li>)}</ul>

@@ -4,6 +4,7 @@ import './styles.css';
 import { EventBusProvider } from './eventBus';
 import { NativeApp } from './native/NativeApp';
 import { SlidesApp } from './native/slides/SlidesApp';
+import './feedback/feedback.css';
 
 // Temporary explicit route for verifying old features during their migration.
 // Normal entry never imports the legacy Player or old editing state.

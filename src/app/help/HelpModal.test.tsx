@@ -228,3 +228,12 @@ describe('HelpModal の NEW バッジ', () => {
     expect(view.queryByText('▶ もう一度最初から見る')).toBeNull();
   });
 });
+
+it('opens the feedback entry from the bottom of the help dialog',()=>{
+  const onFeedback=vi.fn();
+  render(<HelpModal onClose={vi.fn()} onRestartTutorial={vi.fn()} onFeedback={onFeedback}/>);
+  const button=screen.getByRole('button',{name:'ご意見・不具合を送る'});
+  expect(button.closest('footer')).toBeTruthy();
+  fireEvent.click(button);
+  expect(onFeedback).toHaveBeenCalledOnce();
+});

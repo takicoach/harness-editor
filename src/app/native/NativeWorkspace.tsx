@@ -1,3 +1,5 @@
+import { useFeedbackBox } from '../feedback/FeedbackCard';
+import { shouldShowExportOffer } from '../../shared/paidOffer';
 import {loadTrackHeight,saveTrackHeight,MIN_TRACK_HEIGHT,MAX_TRACK_HEIGHT} from './trackHeight';
 import {NativeLibraryDrop} from './NativeLibraryDrop';
 import {NativeSilenceCutPanel} from './NativeSilenceCutPanel';
@@ -163,7 +165,7 @@ const TOOL_ITEMS = [
 // materialRelPath（src/server/uploadMaterial.ts）の subdir と一致させる。
 // より深い prefix を先に（public/ は video の受け皿として最後）。
 const MATERIAL_KINDS: Array<[string, 'se' | 'image' | 'bgm' | 'video']> = [['public/se/', 'se'], ['public/images/', 'image'], ['public/BGM/', 'bgm'], ['public/', 'video']];
-export function NativeWorkspace({ projectId, navigation, onReload }: { projectId: string; navigation?: NativeNavigation; onReload?():void }) {
+export function NativeWorkspace({ projectId, navigation, onReload, claimPaidOffer }: { projectId: string; navigation?: NativeNavigation; onReload?():void; claimPaidOffer?():boolean }) {
   const fileReference=useNativeFileReference(),importPending=useRef(false),importOwner=useRef({}),importReads=useRef(new AbortController());
   // 案件を離れたら持ち主を替え、その案件のために始めた長さの先読みを止める。
   useEffect(()=>()=>{importOwner.current={};importReads.current.abort();importReads.current=new AbortController();},[projectId]);
@@ -822,8 +824,14 @@ export function NativeWorkspace({ projectId, navigation, onReload }: { projectId
   const tutorial = useNativeTutorial({
     scene: 'edit', projectId, documentId: doc?.id ?? null, hasProjects: true,
     ready: !!doc && !session.loading, loadFailed: !session.loading && !!session.error && !doc,
-    dirty: session.state?.dirty ?? false, prepare: prepareTutorial, removeTelop: removeTutorialTelop,
+    dirty: session.state?.dirty ?? false, prepare: prepareTutorial, removeTelop: removeTutorialTelop, claimPaidOffer,
   });
+  const feedback = useFeedbackBox(tutorial.feedbackEnvironment);
+  const claimWorkspaceOffer = () => shouldShowExportOffer({
+    edition: tutorial.edition, exportOutcome: 'success', shownThisSession: false,
+    tutorialEnabled: tutorial.configEnabled, tutorialRunning: tutorial.active,
+    setupOpen: false,
+  }) && (claimPaidOffer?.() ?? false);
   const addText = () => {
     if (!doc) return;
     const documentId = doc.id;
@@ -1103,7 +1111,7 @@ export function NativeWorkspace({ projectId, navigation, onReload }: { projectId
       onSave={() => void (thumbnailOpen ? saveThumbnail() : session.save())}
       saveDisabled={thumbnailOpen ? !thumbnail.state || thumbnail.busy : !doc || session.busy || preparingSave}
       saveProgress={thumbnailOpen ? thumbnail.saveProgress : nativeSession.saveProgress??(preparingSave?0:null)}
-      exportControl={thumbnailOpen ? <ThumbnailExportControl projectId={projectId} session={thumbnail} exporter={thumbnailExport} pageId={thumbnailPageId} /> : doc && <NativeExportControl key={projectId} projectId={projectId} disabled={session.busy} disabledReason={trial?'試し表示中は書き出せません':undefined} revision={doc.revision} resolution={doc.resolution} save={session.save} onBusyChange={setExportBusy} onComplete={openLearning} />} />
+      exportControl={thumbnailOpen ? <ThumbnailExportControl projectId={projectId} session={thumbnail} exporter={thumbnailExport} pageId={thumbnailPageId} /> : doc && <NativeExportControl key={projectId} projectId={projectId} disabled={session.busy} disabledReason={trial?'試し表示中は書き出せません':undefined} revision={doc.revision} resolution={doc.resolution} save={session.save} onBusyChange={setExportBusy} onComplete={openLearning} claimPaidOffer={claimWorkspaceOffer} />} />
     {doc && !thumbnailOpen && <SlidesImportNotice key={projectId} projectId={projectId} frame={frame} busy={session.busy} read={nativeSession.readCurrent} accept={nativeSession.accept} />}
     {connection.transportError && <div className="native-notice native-connection-notice" role="status"><span>{connection.transportError}{doc && autoSave && !agent.autoSavePaused && !connection.needsReview ? ' 接続が戻るまで自動保存を待機しています。' : ''}</span></div>}
     {!!unavailableReferences.length&&<div className="native-notice native-reference-notice" role="alert">
@@ -1127,8 +1135,13 @@ export function NativeWorkspace({ projectId, navigation, onReload }: { projectId
     {settingsOpen && <NativeSettings prefs={prefs} onPrefs={setPrefs} themePreference={theme.preference} onTheme={theme.setPreference} onOpenShortcuts={() => setShortcutsOpen(true)} onOpenHelp={() => setHelpOpen(true)} onClose={() => setSettingsOpen(false)}
       panelLayout={mode==='review'?null:panelLayouts[mode as 'edit'|'finish']}
       onPanelLayout={next=>{setPanelLayouts(previous=>({...previous,[mode]:next}));savePanelLayout(mode as 'edit'|'finish',next);}} />}
-    {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} onRestartTutorial={() => { setHelpOpen(false); tutorial.start(); }} />}
-    {notificationsOpen && <NativeNotifications projectId={projectId} history={notifications.history} storageError={notifications.storageError} onClear={notifications.clear} onClose={()=>{notifications.markRead();setNotificationsOpen(false);}}/>}
+    {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} onRestartTutorial={() => { setHelpOpen(false); tutorial.start(); }} onFeedback={()=>{setHelpOpen(false);feedback.launch(thumbnailOpen?'other':exportBusy?'export':'edit');}} />}
+    {feedback.card}
+    {notificationsOpen && <NativeNotifications projectId={projectId} history={notifications.history} storageError={notifications.storageError} onClear={notifications.clear} onClose={()=>{notifications.markRead();setNotificationsOpen(false);}}
+      onReport={record=>{
+        notifications.markRead();setNotificationsOpen(false);
+        feedback.launch(record.source.includes('書き出し')?'export':thumbnailOpen?'other':'edit',record.message,doc?.name);
+      }}/>}
     <NativeLearningReview learning={learning} />
     {activityOpen && <AgentActivityDialog externalHistory projectId={projectId} credentials={connection.credentials} connection={connection.connection}
       connectionError={connection.error??connection.transportError} onClose={()=>setActivityOpen(false)} />}

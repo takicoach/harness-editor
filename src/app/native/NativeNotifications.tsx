@@ -1,9 +1,9 @@
 import {useRef} from 'react';
 import {useDialogEscape} from '../useDialogEscape';
 import {useFocusTrap} from '../useFocusTrap';
-import type {NotificationHistory} from './notificationHistory';
+import type {EditorNotification,NotificationHistory} from './notificationHistory';
 
-export function NativeNotifications({projectId,history,storageError,onClear,onClose}:{projectId:string;history:NotificationHistory;storageError:string;onClear():void;onClose():void}){
+export function NativeNotifications({projectId,history,storageError,onClear,onClose,onReport}:{projectId:string;history:NotificationHistory;storageError:string;onClear():void;onClose():void;onReport?(record:EditorNotification):void}){
   const root=useRef<HTMLDivElement>(null);useDialogEscape(onClose);useFocusTrap(root);
   const download=()=>{
     const data={format:'harness-editor-feedback',version:1,projectId,exportedAt:new Date().toISOString(),browser:navigator.userAgent,notifications:history.records};
@@ -24,6 +24,7 @@ export function NativeNotifications({projectId,history,storageError,onClear,onCl
         <strong>{{error:'エラー',warning:'警告',info:'お知らせ'}[record.severity]} · {record.source}</strong>
         <p style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{record.message}</p>
         <small>{new Date(record.lastAt).toLocaleString()} · {record.count}回{record.revision!==undefined?` · 編集版 ${record.revision}`:''}{record.frame!==undefined?` · ${record.frame}フレーム`:''}</small>
+        {record.severity==='error'&&onReport&&<button type="button" className="btn-secondary" onClick={()=>onReport(record)}>報告する</button>}
       </section>)}
     </div>
   </div></div>;

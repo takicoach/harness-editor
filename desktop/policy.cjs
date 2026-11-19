@@ -3,8 +3,28 @@ exports.isEditorURL = (value, origin) => {
   try { const url = new URL(value); return url.origin === origin && url.username === '' && url.password === ''; }
   catch { return false; }
 };
-exports.isExternalURL = value => {
-  try { return ['https:', 'http:'].includes(new URL(value).protocol); } catch { return false; }
+exports.isExternalURL = (value, feedbackEmail = '') => {
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' || url.protocol === 'http:') return true;
+    if (url.protocol !== 'mailto:' || !feedbackEmail || value.includes('#') || value.length > 8000
+      || url.pathname !== feedbackEmail || !/^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$/.test(url.pathname)) return false;
+    return [...url.searchParams.keys()].every(key => key === 'subject' || key === 'body')
+      && url.searchParams.getAll('subject').length <= 1 && url.searchParams.getAll('body').length <= 1
+      && !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(url.searchParams.get('subject') ?? '');
+  } catch { return false; }
+};
+
+exports.installNavigationGuards = (contents, origin, openExternal, feedbackEmail) => {
+  contents.setWindowOpenHandler(({url})=>{
+    if(exports.isExternalURL(url, feedbackEmail))openExternal(url);
+    return {action:'deny'};
+  });
+  contents.on('will-navigate',(event,url)=>{
+    if(exports.isEditorURL(url,origin))return;
+    event.preventDefault();
+    if(exports.isExternalURL(url, feedbackEmail))openExternal(url);
+  });
 };
 exports.validateProjectRoot = (value, appRoot) => {
   if (!isAbsolute(value)) throw new Error('保存先には絶対パスを指定してください');

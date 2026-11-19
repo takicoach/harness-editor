@@ -1,4 +1,5 @@
 /** @vitest-environment jsdom */
+import { readFileSync } from 'node:fs';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TutorialOverlay } from './TutorialOverlay';
@@ -112,5 +113,12 @@ describe('新画面の追加指定', () => {
     const hole = view.container.querySelector<HTMLElement>('.tut-hole')!;
     expect(hole.classList.contains('tut-hole--full')).toBe(false);
     expect(hole.style.left).toBe('94px');
+  });
+});
+
+describe('吹き出しの中のリンク', () => {
+  it('ブラウザ既定の青のままにせず、本文と同じ系統の色で下線を引く（ダークで読めなくなる）', () => {
+    const css = readFileSync('src/app/styles.css', 'utf8');
+    expect(css).toMatch(/\.tut-text a\s*\{[^}]*color:\s*var\(--fg-/);
   });
 });

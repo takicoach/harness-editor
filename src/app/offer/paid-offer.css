@@ -1,0 +1,16 @@
+.paid-offer-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.paid-offer-band a { color: var(--fg-1); text-decoration: underline; }
+.paid-offer-band button { flex: none; }

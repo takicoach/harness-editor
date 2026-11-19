@@ -1,3 +1,5 @@
+import type { AppEdition } from '../../shared/paidOffer';
+
 /**
  * 初回チュートリアル「はじめての1本」のステップ定義（純データ）。
  * 進行ロジックは tutorialMachine.ts、描画は TutorialOverlay.tsx が担う。
@@ -5,6 +7,8 @@
 
 /** ステップの表示・前進判定に使う実状態のスナップショット。 */
 export interface TutorialCtx {
+  edition?: AppEdition;
+  paidOfferEnabled?: boolean;
   /** ホーム（プロジェクト未選択）表示中か。 */
   home: boolean;
   /** プロジェクトが1件以上あるか。 */
@@ -37,6 +41,7 @@ export interface TutorialStep {
   target: string | null | ((ctx: TutorialCtx) => string | null);
   /** 吹き出し本文。\n で改行。 */
   text: string | ((ctx: TutorialCtx) => string);
+  offerUrl?: (ctx: TutorialCtx) => string | undefined;
   /** このステップを表示する条件。省略時は常に表示。 */
   when?: (ctx: TutorialCtx) => boolean;
   /** 自動前進の条件（実操作の完了検知）。 */

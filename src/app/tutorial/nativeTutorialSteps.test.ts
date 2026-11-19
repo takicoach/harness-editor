@@ -111,3 +111,14 @@ describe('新画面の手順表（設計書の表どおり）', () => {
     expect(resolveText(finish, ctx({ editorReady: false }))).toContain('「もう一度最初から見る」');
   });
 });
+
+it('adds the approved line and the published link to the last free-edition step only', () => {
+  const finish = step('finish');
+  const free = ctx({edition:'free',paidOfferEnabled:true});
+  expect(resolveText(finish,free)).toContain('有料プラグインを追加すると');
+  expect(finish.offerUrl?.(free)).toBe('https://video-harness.app/plugin/');
+  expect(finish.offerUrl?.(ctx({edition:'paid',paidOfferEnabled:true}))).toBeUndefined();
+  expect(resolveText(finish,ctx({edition:'paid',paidOfferEnabled:true}))).not.toContain('有料プラグインを追加すると');
+  expect(resolveText(finish,ctx({edition:'free',paidOfferEnabled:false}))).not.toContain('有料プラグインを追加すると');
+  expect(finish.nextLabel).toBe('おわる');
+});

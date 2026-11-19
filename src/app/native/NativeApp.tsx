@@ -1,3 +1,4 @@
+import { useFeedbackBox } from '../feedback/FeedbackCard';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { HomeDashboardWithAgentBoard, type CreateManyResult, type CreateSource } from '../panels/HomeDashboard';
 import { useTheme } from '../layout/useTheme';
@@ -25,13 +26,19 @@ import { SlidesHomeSection } from './slides/SlidesHomeSection';
 export function NativeApp() {
   const navigation = useNativeNavigation(), {projectId} = navigation;
   const [workspaceVersion, setWorkspaceVersion] = useState(0);
+  const paidOfferShown = useRef(false);
+  const claimPaidOffer = () => {
+    if (paidOfferShown.current) return false;
+    paidOfferShown.current = true;
+    return true;
+  };
   useEventBusProjectId(projectId ?? '');
   useEffect(() => {
     const prevent = (event: DragEvent) => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault(); };
     window.addEventListener('dragover', prevent); window.addEventListener('drop', prevent);
     return () => { window.removeEventListener('dragover', prevent); window.removeEventListener('drop', prevent); };
   }, []);
-  return projectId ? <NativeWorkspace key={`${projectId}:${workspaceVersion}`} projectId={projectId} navigation={navigation} onReload={()=>setWorkspaceVersion(value=>value+1)} /> : <NativeHome navigate={id=>void navigation.navigate(id)} />;
+  return projectId ? <NativeWorkspace key={`${projectId}:${workspaceVersion}`} projectId={projectId} navigation={navigation} claimPaidOffer={claimPaidOffer} onReload={()=>setWorkspaceVersion(value=>value+1)} /> : <NativeHome navigate={id=>void navigation.navigate(id)} claimPaidOffer={claimPaidOffer} />;
 }
 
 /** 編集画面へ全ページ遷移する（テストでは NativeHome の navigate で差し替える）。 */
@@ -39,7 +46,7 @@ export function navigateToProject(id: string): void {
   location.assign(`/?${new URLSearchParams({ project: id })}`);
 }
 
-export function NativeHome({ navigate = navigateToProject }: { navigate?: (id: string) => void }) {
+export function NativeHome({ navigate = navigateToProject, claimPaidOffer }: { navigate?: (id: string) => void; claimPaidOffer?: () => boolean }) {
   const fileReference=useNativeFileReference();
   const theme = useTheme();
   const [projects, setProjects] = useState<ProjectListEntry[]>([]), [loading, setLoading] = useState(true);
@@ -63,8 +70,9 @@ export function NativeHome({ navigate = navigateToProject }: { navigate?: (id: s
   useProjectsWatch(true, (id, patch) => setProjects(previous => applyStatusPatch(previous, id, patch)), () => void refresh());
   const tutorial = useNativeTutorial({
     scene: 'home', projectId: null, documentId: null, hasProjects: projects.length > 0,
-    ready: !loading, loadFailed: false, dirty: false,
+    ready: !loading, loadFailed: false, dirty: false, claimPaidOffer,
   });
+  const feedback = useFeedbackBox(tutorial.feedbackEnvironment);
   /** 編集画面へ移る（作品カード・作成成功）。案内の表示中なら、遷移の直前に続きの手順を残す。 */
   const pick = (id: string) => { tutorial.beforeNavigate(id); navigate(id); };
   const setStage = (id: string, stage: ProjectStage) => {
@@ -143,7 +151,8 @@ export function NativeHome({ navigate = navigateToProject }: { navigate?: (id: s
     <HomeDashboardWithAgentBoard managedMedia projects={projects} error={projects.length ? null : error} notice={notice} loading={loading} onPick={pick} onSetStage={setStage}
       onCreate={create} onProjectsChanged={() => void refresh()} extraSection={<SlidesHomeSection />} />
     {fileReference.picker}
-    {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} onRestartTutorial={() => { setHelpOpen(false); tutorial.start(); }} />}
+    {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} onRestartTutorial={() => { setHelpOpen(false); tutorial.start(); }} onFeedback={()=>{setHelpOpen(false);feedback.launch('home');}} />}
+    {feedback.card}
     <TutorialOverlay tutorial={tutorial} options={tutorial.overlayOptions} />
   </main>;
 }

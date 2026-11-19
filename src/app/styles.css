@@ -3288,6 +3288,7 @@ button, [role="tab"], .tl-head h2, .tx-head h2, .fb-section-title {
 }
 .tut-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .tut-text { margin: 0; padding-right: 16px; font-size: 13px; line-height: 1.8; color: var(--fg-0); white-space: pre-line; }
+.tut-text a { color: var(--fg-1); text-decoration: underline; }
 /* 新画面: 作成ダイアログ表示中の1行案内帯。ダイアログ（z-index 1200）より前面・クリック透過で、ダイアログの操作を妨げない。 */
 .tut-band {
   position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1300;

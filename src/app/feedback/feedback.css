@@ -1,0 +1,41 @@
+.feedback-card {
+  position: fixed;
+  z-index: 180;
+  inset-inline-end: 16px;
+  inset-block-end: 16px;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  color: var(--fg-0);
+  font-size: 12px;
+  box-shadow: var(--panel-shadow);
+}
+.feedback-card header, .feedback-card footer { display: flex; align-items: center; gap: 6px; }
+.feedback-card header { justify-content: space-between; }
+.feedback-card footer { flex-wrap: wrap; }
+.feedback-card h2 { font-size: 16px; margin: 0; }
+.feedback-card label { display: grid; gap: 4px; }
+.feedback-card input, .feedback-card textarea {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  font: inherit;
+}
+.feedback-card textarea { resize: vertical; }
+.feedback-card p { margin: 0; }
+
+.help-feedback-footer {
+  flex: none;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+}
+.help-feedback-footer button { font-size: 12px; }
